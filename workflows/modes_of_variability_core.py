@@ -30,6 +30,7 @@ from esp_lab import data_access_cesm_smyle as smyle_access
 from esp_lab import data_access_e3sm as e3sm_access
 from esp_lab import data_access_obs as obs_access
 from esp_lab import stats
+from esp_lab.paths import CESM_SMYLE_DIAG_DIR
 from esp_lab.utils import calendar_utils as cal
 from esp_lab.utils import regrid_utils as regrid
 
@@ -226,7 +227,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--e3sm-grid", default="180x360_aave")
     parser.add_argument(
         "--smyle-benchmark-dir",
-        default="/global/cfs/cdirs/e3sm/S2S2D/s2d_diag/CESM-SMYLE",
+        default=str(CESM_SMYLE_DIAG_DIR),
     )
     parser.add_argument("--smyle-nens", type=int, default=20)
     parser.add_argument(

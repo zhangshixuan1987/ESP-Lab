@@ -34,6 +34,7 @@ from esp_lab import data_access_e3sm as data_access
 from esp_lab import data_access_obs as obs_access
 from esp_lab import data_access_cesm_smyle as smyle_access
 from esp_lab import stats
+from esp_lab.paths import CESM_SMYLE_DIAG_DIR, E3SMLE_DIAG_DIR
 from esp_lab.utils import spatial_utils as spatial
 from esp_lab.utils import calendar_utils as cal
 from esp_lab.diagnostics import S2DDiagnostics, S2DConfig
@@ -65,13 +66,13 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--outdir",
-        default="/global/cfs/cdirs/e3sm/S2S2D/s2d_diag/E3SMLE",
-        help="Output directory for E3SM and obs. Default: /global/cfs/cdirs/e3sm/S2S2D/s2d_diag/E3SMLE",
+        default=str(E3SMLE_DIAG_DIR),
+        help=f"Output directory for E3SM and obs. Default: {E3SMLE_DIAG_DIR}",
     )
     p.add_argument(
         "--smyle-outdir",
-        default="/global/cfs/cdirs/e3sm/S2S2D/s2d_diag/CESM-SMYLE",
-        help="Output directory for CESM-SMYLE. Default: /global/cfs/cdirs/e3sm/S2S2D/s2d_diag/CESM-SMYLE",
+        default=str(CESM_SMYLE_DIAG_DIR),
+        help=f"Output directory for CESM-SMYLE. Default: {CESM_SMYLE_DIAG_DIR}",
     )
     p.add_argument(
         "--init-months",
@@ -587,7 +588,7 @@ def process_obs(args: argparse.Namespace) -> None:
 
 def process_smyle(args: argparse.Namespace) -> None:
     LOG.info("Processing CESM-SMYLE regional SST Indices...")
-    SMYLE_BENCHMARK_DIR = "/global/cfs/cdirs/e3sm/S2S2D/s2d_diag/CESM-SMYLE"
+    SMYLE_BENCHMARK_DIR = str(CESM_SMYLE_DIAG_DIR)
     smyle_outdir = Path(args.smyle_outdir)
 
     smyle_chunks = {

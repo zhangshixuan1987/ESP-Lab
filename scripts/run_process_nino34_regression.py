@@ -9,16 +9,18 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
+from esp_lab.paths import E3SMLE_DIAG_DIR
+
 
 DEFAULT_SST_FILE = (
     "/global/cfs/cdirs/e3sm/e3sm_diags/obs_for_e3sm_diags/time-series/"
     "HadISST2/sst_186901_202212.nc"
 )
-DEFAULT_DIAG_FILE = (
-    "/global/cfs/cdirs/e3sm/S2S2D/s2d_diag/E3SMLE/"
-    "tc_lead_track_density_WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_JRA55_FOSIRL_set2_1980_2018.nc"
+DEFAULT_DIAG_FILE = str(
+    E3SMLE_DIAG_DIR
+    / "tc_lead_track_density_WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_JRA55_FOSIRL_set2_1980_2018.nc"
 )
-DEFAULT_OUTDIR = "/global/cfs/cdirs/e3sm/S2S2D/s2d_diag/E3SMLE"
+DEFAULT_OUTDIR = str(E3SMLE_DIAG_DIR)
 
 NINO34_LONLAT = (190.0, 240.0, -5.0, 5.0)
 SEASON_NAMES = ("NH_JJASON", "SH_DJFMAM")

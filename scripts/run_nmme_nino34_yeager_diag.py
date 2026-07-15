@@ -22,6 +22,7 @@ import numpy as np
 import xarray as xr
 
 from esp_lab import stats
+from esp_lab.paths import NMME_DIAG_DIR
 from esp_lab.utils import calendar_utils as cal
 
 
@@ -30,7 +31,7 @@ DEFAULT_OBS_FILE = Path(
     "/global/cfs/cdirs/e3sm/diagnostics/observations/Atm/time-series/"
     "HadISST2/sst_186901_202212.nc"
 )
-DEFAULT_OUTDIR = Path("/global/cfs/cdirs/e3sm/S2S2D/s2d_diag/NMME")
+DEFAULT_OUTDIR = NMME_DIAG_DIR
 DEFAULT_FIGDIR = Path("/global/cfs/cdirs/e3sm/www/zhan391/esp-lab_diag")
 YEAGER_F03_MODELS = [
     "CMC1-CanCM3",

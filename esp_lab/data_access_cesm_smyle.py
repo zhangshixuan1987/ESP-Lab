@@ -79,6 +79,8 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from esp_lab.paths import CESM_SMYLE_DIAG_DIR
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers (shared with data_access_e3sm but kept local to avoid
@@ -720,7 +722,7 @@ def get_monthly_data(
 # Benchmark helpers
 # ---------------------------------------------------------------------------
 
-BENCHMARK_OUTDIR_DEFAULT = "/global/cfs/cdirs/e3sm/S2S2D/s2d_diag/CESM-SMYLE"
+BENCHMARK_OUTDIR_DEFAULT = str(CESM_SMYLE_DIAG_DIR)
 
 
 def benchmark_filename(
@@ -779,7 +781,7 @@ def load_benchmark(
         Initialization month (2, 5, 8, or 11 for this archive).
     benchmark_dir : str, optional
         Directory containing benchmark files.
-        Default: '/global/cfs/cdirs/e3sm/S2S2D/s2d_diag/CESM-SMYLE'.
+        Default: ``esp_lab.paths.CESM_SMYLE_DIAG_DIR``.
     nens : int, optional
         Number of ensemble members encoded in the filename (default 20).
     nlead : int, optional
