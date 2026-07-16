@@ -70,6 +70,26 @@ def parse_args() -> argparse.Namespace:
         help=f"Output directory for E3SM and obs. Default: {E3SMLE_DIAG_DIR}",
     )
     p.add_argument(
+        "--e3sm-data-dir",
+        default="/global/cfs/cdirs/e3sm/S2S2D/post_process",
+        help="Root directory containing post-processed E3SM hindcast case directories.",
+    )
+    p.add_argument(
+        "--e3sm-case-prefix",
+        default="WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_JRA55_FOSIRL",
+        help="E3SM case prefix before the initialization timestamp.",
+    )
+    p.add_argument(
+        "--e3sm-cache-tag",
+        default=None,
+        help="Optional E3SM case tag used as a subdirectory under --outdir.",
+    )
+    p.add_argument(
+        "--e3sm-display-name",
+        default=None,
+        help="Optional display name stored in E3SM output attributes.",
+    )
+    p.add_argument(
         "--smyle-outdir",
         default=str(CESM_SMYLE_DIAG_DIR),
         help=f"Output directory for CESM-SMYLE. Default: {CESM_SMYLE_DIAG_DIR}",
@@ -315,8 +335,11 @@ def derive_indices(computed_vals: Dict[str, xr.DataArray], time_coords: xr.DataA
 
 
 def process_e3sm(args: argparse.Namespace) -> None:
-    LOG.info("Processing E3SM regional SST Indices...")
+    case_label = args.e3sm_display_name or args.e3sm_cache_tag or args.e3sm_case_prefix
+    LOG.info(f"Processing E3SM regional SST Indices for {case_label}...")
     outdir = Path(args.outdir)
+    if args.e3sm_cache_tag:
+        outdir = outdir / args.e3sm_cache_tag
     fixed_dir = outdir / "fixed"
     fixed_dir.mkdir(parents=True, exist_ok=True)
     landmask_file = fixed_dir / "sftlf.E3SM.nc"
@@ -329,8 +352,8 @@ def process_e3sm(args: argparse.Namespace) -> None:
 
     cfg = S2DConfig(
         field="TS",
-        data_dir="/global/cfs/cdirs/e3sm/S2S2D/post_process",
-        case_prefix="WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_JRA55_FOSIRL",
+        data_dir=args.e3sm_data_dir,
+        case_prefix=args.e3sm_case_prefix,
         members=members,
         nlead=args.nlead,
         init_months=args.init_months,
@@ -418,6 +441,11 @@ def process_e3sm(args: argparse.Namespace) -> None:
             if not outfile_mon.exists() or args.force:
                 ds_out_mon = all_mon[r].rename("sst").to_dataset()
                 ds_out_mon["time"] = time_mon
+                ds_out_mon.attrs.update({
+                    "case_prefix": args.e3sm_case_prefix,
+                    "cache_tag": args.e3sm_cache_tag or "",
+                    "display_name": args.e3sm_display_name or "",
+                })
                 if "long_name" not in ds_out_mon["sst"].attrs:
                     ds_out_mon["sst"].attrs.update({
                         "long_name": f"{r} regional mean SST",
@@ -433,6 +461,11 @@ def process_e3sm(args: argparse.Namespace) -> None:
             if not outfile_seas.exists() or args.force:
                 ds_out_seas = all_seas[r].rename("sst").to_dataset()
                 ds_out_seas["time"] = time_seas
+                ds_out_seas.attrs.update({
+                    "case_prefix": args.e3sm_case_prefix,
+                    "cache_tag": args.e3sm_cache_tag or "",
+                    "display_name": args.e3sm_display_name or "",
+                })
                 if "long_name" not in ds_out_seas["sst"].attrs:
                     ds_out_seas["sst"].attrs.update({
                         "long_name": f"{r} regional mean SST",
