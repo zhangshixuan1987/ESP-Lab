@@ -588,6 +588,7 @@ def get_monthly_data(
     verify_field_name: bool = True,
     verify_coverage: bool = False,
     engine: str = "netcdf4",
+    open_parallel: bool = True,
 ) -> xr.Dataset:
     """
     Return a dask-backed xarray dataset arranged as (Y, L, M, lat, lon).
@@ -621,6 +622,9 @@ def get_monthly_data(
         See :func:`nested_file_list_by_init`.
     engine : str, optional
         xarray backend engine (default 'netcdf4').
+    open_parallel : bool, optional
+        Passed to :func:`xarray.open_mfdataset`.  Set to ``False`` on
+        filesystems where parallel netCDF metadata opens are noisy or unstable.
 
     Returns
     -------
@@ -693,20 +697,28 @@ def get_monthly_data(
         chunks=open_chunks,
     )
 
-    try:
-        ds = xr.open_mfdataset(file_list, parallel=True, **open_kwargs)
-    except Exception as e:
-        if any(tok in str(e) for tok in (
-            "HDF error", "Unable to open file",
-            "Unknown file format", "errno = -"
-        )):
-            warnings.warn(
-                f"open_mfdataset parallel=True failed ({e}). "
-                "Retrying with parallel=False."
-            )
-            ds = xr.open_mfdataset(file_list, parallel=False, **open_kwargs)
-        else:
-            raise
+    if open_parallel:
+        try:
+            ds = xr.open_mfdataset(file_list, parallel=True, **open_kwargs)
+        except Exception as e:
+            if any(tok in str(e) for tok in (
+                "HDF error",
+                "Unable to open file",
+                "Unknown file format",
+                "NetCDF: Not a valid ID",
+                "errno = -",
+            )):
+                warnings.warn(
+                    f"open_mfdataset parallel=True failed ({e}). "
+                    "Retrying with parallel=False."
+                )
+                # NetCDF4 metadata opens on CFS can fail intermittently when many
+                # files are opened in parallel; the serial path is slower but safer.
+                ds = xr.open_mfdataset(file_list, parallel=False, **open_kwargs)
+            else:
+                raise
+    else:
+        ds = xr.open_mfdataset(file_list, parallel=False, **open_kwargs)
 
     ds = ds.assign_coords(Y=("Y", valid_inits))
     n_loaded = ds.sizes["M"]
@@ -780,7 +792,8 @@ def load_benchmark(
     init_month : int
         Initialization month (2, 5, 8, or 11 for this archive).
     benchmark_dir : str, optional
-        Directory containing benchmark files.
+        CESM-SMYLE diagnostic directory or direct directory containing benchmark
+        files.
         Default: ``esp_lab.paths.CESM_SMYLE_DIAG_DIR``.
     nens : int, optional
         Number of ensemble members encoded in the filename (default 20).
@@ -809,10 +822,17 @@ def load_benchmark(
     >>> print(ds)
     """
     fname = benchmark_filename(field, init_month, nens=nens, nlead=nlead, freq=freq)
-    fpath = Path(benchmark_dir) / fname
+    benchmark_root = Path(benchmark_dir)
+    candidates = [
+        benchmark_root / "leadtime_acc" / "inputs" / field / fname,
+        benchmark_root / fname,
+    ]
+    fpath = next((path for path in candidates if path.exists()), candidates[0])
     if not fpath.exists():
         raise FileNotFoundError(
-            f"Benchmark file not found: {fpath}\n"
+            "Benchmark file not found. Checked:\n"
+            + "\n".join(f"  {path}" for path in candidates)
+            + "\n"
             "Run scripts/run_process_cesm_smyle_benchmark.py to generate it."
         )
     if chunks is None:

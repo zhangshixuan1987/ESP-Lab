@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from esp_lab.paths import E3SMLE_DIAG_DIR
+from esp_lab.paths import HADISST2_DIAG_DIR, S2D_DIAG_ROOT
 
 
 DEFAULT_SST_FILE = (
@@ -17,10 +17,13 @@ DEFAULT_SST_FILE = (
     "HadISST2/sst_186901_202212.nc"
 )
 DEFAULT_DIAG_FILE = str(
-    E3SMLE_DIAG_DIR
+    S2D_DIAG_ROOT
+    / "JRA55_FOSIRL"
+    / "tc_track"
     / "tc_lead_track_density_WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_JRA55_FOSIRL_set2_1980_2018.nc"
 )
-DEFAULT_OUTDIR = str(E3SMLE_DIAG_DIR)
+DEFAULT_OUTDIR = str(S2D_DIAG_ROOT / "JRA55_FOSIRL" / "tc_track")
+DEFAULT_NINO_OUTDIR = HADISST2_DIAG_DIR / "sst_index" / "timeseries"
 
 NINO34_LONLAT = (190.0, 240.0, -5.0, 5.0)
 SEASON_NAMES = ("NH_JJASON", "SH_DJFMAM")
@@ -249,8 +252,10 @@ def build_regression_dataset(
 def main() -> None:
     args = parse_args()
     outdir = Path(args.outdir)
-    nino_out = Path(args.nino_out) if args.nino_out else outdir / (
-        f"nino34_hadisst2_monthly_anom_clim{args.clim_start}_{args.clim_end}.nc"
+    nino_out = (
+        Path(args.nino_out)
+        if args.nino_out
+        else DEFAULT_NINO_OUTDIR / f"nino34_hadisst2_monthly_anom_clim{args.clim_start}_{args.clim_end}.nc"
     )
     if args.reg_out:
         reg_out = Path(args.reg_out)

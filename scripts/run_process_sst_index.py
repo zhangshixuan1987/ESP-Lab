@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate and save 13 regional SST indices for E3SM, CESM-SMYLE, and observations."""
+"""Generate and save regional SST indices for E3SM, CESM-SMYLE, and observations."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ from esp_lab import data_access_e3sm as data_access
 from esp_lab import data_access_obs as obs_access
 from esp_lab import data_access_cesm_smyle as smyle_access
 from esp_lab import stats
-from esp_lab.paths import CESM_SMYLE_DIAG_DIR, E3SMLE_DIAG_DIR
+from esp_lab.paths import CESM_SMYLE_DIAG_DIR, E3SMLE_DIAG_DIR, HADISST2_DIAG_DIR
 from esp_lab.utils import spatial_utils as spatial
 from esp_lab.utils import calendar_utils as cal
 from esp_lab.diagnostics import S2DDiagnostics, S2DConfig
@@ -43,7 +43,12 @@ from esp_lab.diagnostics.regional import build_landmask, compute_weights, comput
 LOG = logging.getLogger(__name__)
 
 REGIONS = {}
-VALID_REGIONS = ["IOD", "TNI", "ONI", "RONI"]
+VALID_REGIONS = ["IOD", "TNI", "ONI", "RONI", "ELI"]
+ELI_LAT_MIN = -5.0
+ELI_LAT_MAX = 5.0
+ELI_LON_MIN = 120.0
+ELI_LON_MAX = 290.0
+TC_LAT_HALF = 5.0
 
 
 def parse_args() -> argparse.Namespace:
@@ -67,7 +72,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--outdir",
         default=str(E3SMLE_DIAG_DIR),
-        help=f"Output directory for E3SM and obs. Default: {E3SMLE_DIAG_DIR}",
+        help=f"Output root for E3SM case outputs. Default: {E3SMLE_DIAG_DIR}",
     )
     p.add_argument(
         "--e3sm-data-dir",
@@ -93,6 +98,11 @@ def parse_args() -> argparse.Namespace:
         "--smyle-outdir",
         default=str(CESM_SMYLE_DIAG_DIR),
         help=f"Output directory for CESM-SMYLE. Default: {CESM_SMYLE_DIAG_DIR}",
+    )
+    p.add_argument(
+        "--obs-outdir",
+        default=str(HADISST2_DIAG_DIR / "sst_index" / "timeseries"),
+        help="Output directory for HadISST2 SST index files.",
     )
     p.add_argument(
         "--init-months",
@@ -204,9 +214,86 @@ def get_required_base_regions(regions_list: List[str]) -> List[str]:
         elif r == "RONI":
             req.add("Nino3.4")
             req.add("TropicalMean")
+        elif r == "ELI":
+            continue
         elif r in REGIONS:
             req.add(r)
     return list(req)
+
+
+def _latlon_mask(lat_coord: xr.DataArray, lon_coord: xr.DataArray, lat_min: float, lat_max: float, lon_min: float, lon_max: float) -> xr.DataArray:
+    lat_dim = lat_coord.dims[0]
+    lon_dim = lon_coord.dims[0]
+    lat_da = xr.DataArray(lat_coord.values, dims=(lat_dim,), coords={lat_dim: lat_coord.values})
+    lon_da = xr.DataArray(np.mod(lon_coord.values, 360.0), dims=(lon_dim,), coords={lon_dim: lon_coord.values})
+    lon2d, lat2d = xr.broadcast(lon_da, lat_da)
+    mask = (lat2d >= lat_min) & (lat2d <= lat_max) & (lon2d >= lon_min) & (lon2d <= lon_max)
+    return mask.transpose(lat_dim, lon_dim)
+
+
+def _lon2d(lat_coord: xr.DataArray, lon_coord: xr.DataArray) -> xr.DataArray:
+    lat_dim = lat_coord.dims[0]
+    lon_dim = lon_coord.dims[0]
+    lon_da = xr.DataArray(np.mod(lon_coord.values, 360.0), dims=(lon_dim,), coords={lon_dim: lon_coord.values})
+    lon2d, _ = xr.broadcast(lon_da, lat_coord)
+    return lon2d.transpose(lat_dim, lon_dim)
+
+
+def compute_eli_latlon_sst(
+    sst: xr.DataArray,
+    *,
+    lat_name: str = "lat",
+    lon_name: str = "lon",
+    oceanmask: xr.DataArray | None = None,
+) -> xr.DataArray:
+    """Compute ELI from a regridded lat/lon SST field."""
+    lat_coord = sst[lat_name]
+    lon_coord = sst[lon_name]
+    lat_dim = lat_coord.dims[0]
+    lon_dim = lon_coord.dims[0]
+
+    eq_mask = _latlon_mask(lat_coord, lon_coord, ELI_LAT_MIN, ELI_LAT_MAX, ELI_LON_MIN, ELI_LON_MAX)
+    tropics_mask = _latlon_mask(lat_coord, lon_coord, -TC_LAT_HALF, TC_LAT_HALF, 0.0, 360.0)
+    if oceanmask is not None:
+        oceanmask = oceanmask.transpose(lat_dim, lon_dim)
+        eq_mask = eq_mask & oceanmask
+        tropics_mask = tropics_mask & oceanmask
+
+    weights = xr.DataArray(
+        np.cos(np.deg2rad(lat_coord.values)),
+        dims=(lat_dim,),
+        coords={lat_dim: lat_coord.values},
+    )
+    weights2d, _ = xr.broadcast(weights, sst[lon_name])
+    weights2d = weights2d.transpose(lat_dim, lon_dim)
+    lon2d = _lon2d(lat_coord, lon_coord)
+
+    tropics_weights = weights2d.where(tropics_mask, 0.0)
+    tc = sst.weighted(tropics_weights).mean((lat_dim, lon_dim), skipna=True)
+
+    warm_weights = weights2d.where(eq_mask & (sst > tc), 0.0)
+    den = warm_weights.sum((lat_dim, lon_dim), skipna=True)
+    num = (warm_weights * lon2d).sum((lat_dim, lon_dim), skipna=True)
+    eli = (num / den).astype("float32").where(den > 0).rename("eli")
+    eli.attrs.update(
+        {
+            "long_name": "Equatorial Longitude Index",
+            "units": "degrees_east",
+            "region": "ELI",
+            "description": (
+                "Area-weighted centroid longitude of warm SST cells "
+                "(SST > tropical-mean SST) in the equatorial Pacific "
+                f"(lat {ELI_LAT_MIN}-{ELI_LAT_MAX} deg, lon {ELI_LON_MIN}-{ELI_LON_MAX} deg)."
+            ),
+            "eli_input_grid": "regridded_latlon",
+            "eli_lat_min": ELI_LAT_MIN,
+            "eli_lat_max": ELI_LAT_MAX,
+            "eli_lon_min": ELI_LON_MIN,
+            "eli_lon_max": ELI_LON_MAX,
+            "tc_lat_half": TC_LAT_HALF,
+        }
+    )
+    return eli
 
 
 def compute_model_anom(da: xr.DataArray, da_time: xr.DataArray, climy0: int, climy1: int) -> xr.DataArray:
@@ -337,11 +424,13 @@ def derive_indices(computed_vals: Dict[str, xr.DataArray], time_coords: xr.DataA
 def process_e3sm(args: argparse.Namespace) -> None:
     case_label = args.e3sm_display_name or args.e3sm_cache_tag or args.e3sm_case_prefix
     LOG.info(f"Processing E3SM regional SST Indices for {case_label}...")
-    outdir = Path(args.outdir)
+    case_outdir = Path(args.outdir)
     if args.e3sm_cache_tag:
-        outdir = outdir / args.e3sm_cache_tag
-    fixed_dir = outdir / "fixed"
+        case_outdir = case_outdir / args.e3sm_cache_tag
+    outdir = case_outdir / "sst_index" / "timeseries"
+    fixed_dir = case_outdir / "fixed"
     fixed_dir.mkdir(parents=True, exist_ok=True)
+    outdir.mkdir(parents=True, exist_ok=True)
     landmask_file = fixed_dir / "sftlf.E3SM.nc"
 
     members = [f"EN{i:02d}" for i in range(args.e3sm_nens)]
@@ -362,7 +451,7 @@ def process_e3sm(args: argparse.Namespace) -> None:
         region_name="Global",
         climy0=args.climy0,
         climy1=args.climy1,
-        outdir=str(outdir),
+        outdir=str(case_outdir),
         force_rewrite=args.force,
         realm="atm",
         grid="180x360_aave",
@@ -418,6 +507,10 @@ def process_e3sm(args: argparse.Namespace) -> None:
             dask_dict[f"{r}_mon"] = compute_regional_mean(ds["TS"], weights)
             dask_dict[f"{r}_seas"] = compute_regional_mean(ds_seas["TS"], weights)
             
+        if "ELI" in args.regions:
+            dask_dict["ELI_mon"] = compute_eli_latlon_sst(ds["TS"], oceanmask=oceanmask)
+            dask_dict["ELI_seas"] = compute_eli_latlon_sst(ds_seas["TS"], oceanmask=oceanmask)
+
         LOG.info(f"Computing base indices for month {m}...")
         computed_vals = dask.compute(dask_dict)[0]
         
@@ -433,10 +526,41 @@ def process_e3sm(args: argparse.Namespace) -> None:
         
         all_mon = {**base_vals_mon, **derived_mon}
         all_seas = {**base_vals_seas, **derived_seas}
+        if "ELI" in args.regions:
+            all_mon["ELI"] = computed_vals["ELI_mon"]
+            all_seas["ELI"] = computed_vals["ELI_seas"]
         
         # Write only the requested regions to disk
         index_encoding = {"sst": {"zlib": True, "complevel": 1}}
         for r in args.regions:
+            if r == "ELI":
+                outfile_mon = outdir / f"E3SMLE{m:02d}_ELI_N{args.e3sm_nens:02d}_M{args.nlead:02d}.nc"
+                if not outfile_mon.exists() or args.force:
+                    ds_out_mon = all_mon[r].to_dataset()
+                    ds_out_mon["time"] = time_mon
+                    ds_out_mon.attrs.update({
+                        "case_prefix": args.e3sm_case_prefix,
+                        "cache_tag": args.e3sm_cache_tag or "",
+                        "display_name": args.e3sm_display_name or "",
+                        "source_grid": "regridded 180x360_aave TS",
+                    })
+                    _safe_to_netcdf(ds_out_mon, outfile_mon, encoding={"eli": {"zlib": True, "complevel": 1, "dtype": "float32"}})
+                    LOG.info(f"Saved E3SM monthly ELI: {outfile_mon}")
+
+                outfile_seas = outdir / f"E3SMLE{m:02d}_ELI_N{args.e3sm_nens:02d}_M{args.nlead:02d}_seas.nc"
+                if not outfile_seas.exists() or args.force:
+                    ds_out_seas = all_seas[r].to_dataset()
+                    ds_out_seas["time"] = time_seas
+                    ds_out_seas.attrs.update({
+                        "case_prefix": args.e3sm_case_prefix,
+                        "cache_tag": args.e3sm_cache_tag or "",
+                        "display_name": args.e3sm_display_name or "",
+                        "source_grid": "regridded 180x360_aave TS",
+                    })
+                    _safe_to_netcdf(ds_out_seas, outfile_seas, encoding={"eli": {"zlib": True, "complevel": 1, "dtype": "float32"}})
+                    LOG.info(f"Saved E3SM seasonal ELI: {outfile_seas}")
+                continue
+
             outfile_mon = outdir / f"E3SMLE{m:02d}_TS_N{args.e3sm_nens:02d}_M{args.nlead:02d}_{r}SST_mon.nc"
             if not outfile_mon.exists() or args.force:
                 ds_out_mon = all_mon[r].rename("sst").to_dataset()
@@ -480,8 +604,8 @@ def process_e3sm(args: argparse.Namespace) -> None:
 
 def process_obs(args: argparse.Namespace) -> None:
     LOG.info("Processing Observations (HadISST2) regional SST Indices...")
-    outdir = Path(args.outdir)
-    fixed_dir = outdir / "fixed"
+    outdir = Path(args.obs_outdir)
+    fixed_dir = HADISST2_DIAG_DIR / "fixed"
     fixed_dir.mkdir(parents=True, exist_ok=True)
 
     obs_dir = "/global/cfs/cdirs/e3sm/e3sm_diags/obs_for_e3sm_diags/time-series"
@@ -570,6 +694,9 @@ def process_obs(args: argparse.Namespace) -> None:
         )
         obs_dask[f"{r}_mon"] = obs_mon_da.weighted(obs_reg_ocean_area_mon).mean(("lat", "lon"))
         obs_dask[f"{r}_seas"] = obs_seas_da.weighted(obs_reg_ocean_area_seas).mean(("lat", "lon"))
+    if "ELI" in args.regions:
+        obs_dask["ELI_mon"] = compute_eli_latlon_sst(obs_mon_da, oceanmask=oceanmasko)
+        obs_dask["ELI_seas"] = compute_eli_latlon_sst(obs_seas_da, oceanmask=oceanmasko)
 
     LOG.info("Computing Observations base indices...")
     computed_vals = dask.compute(obs_dask)[0]
@@ -586,8 +713,29 @@ def process_obs(args: argparse.Namespace) -> None:
 
     all_mon = {**base_vals_mon, **derived_mon}
     all_seas = {**base_vals_seas, **derived_seas}
+    if "ELI" in args.regions:
+        all_mon["ELI"] = computed_vals["ELI_mon"]
+        all_seas["ELI"] = computed_vals["ELI_seas"]
 
     for r in args.regions:
+        if r == "ELI":
+            outfile_seas = outdir / "HadISST2_sst_ELI_seas.nc"
+            if not outfile_seas.exists() or args.force:
+                ds_seas = all_seas[r].to_dataset()
+                ds_seas["time"] = time_seas
+                ds_seas.attrs["source_grid"] = "HadISST2 lat/lon"
+                _safe_to_netcdf(ds_seas, outfile_seas, encoding={"eli": {"zlib": True, "complevel": 1, "dtype": "float32"}})
+                LOG.info(f"Saved Obs seasonal ELI: {outfile_seas}")
+
+            outfile_mon = outdir / "HadISST2_sst_ELI_mon.nc"
+            if not outfile_mon.exists() or args.force:
+                ds_mon = all_mon[r].to_dataset()
+                ds_mon["time"] = time_mon
+                ds_mon.attrs["source_grid"] = "HadISST2 lat/lon"
+                _safe_to_netcdf(ds_mon, outfile_mon, encoding={"eli": {"zlib": True, "complevel": 1, "dtype": "float32"}})
+                LOG.info(f"Saved Obs monthly ELI: {outfile_mon}")
+            continue
+
         outfile_seas = outdir / f"HadISST2_sst_{r}SST_seas.nc"
         if not outfile_seas.exists() or args.force:
             ds_seas = all_seas[r].rename("sst").to_dataset()
@@ -622,7 +770,8 @@ def process_obs(args: argparse.Namespace) -> None:
 def process_smyle(args: argparse.Namespace) -> None:
     LOG.info("Processing CESM-SMYLE regional SST Indices...")
     SMYLE_BENCHMARK_DIR = str(CESM_SMYLE_DIAG_DIR)
-    smyle_outdir = Path(args.smyle_outdir)
+    smyle_outdir = Path(args.smyle_outdir) / "sst_index" / "timeseries"
+    smyle_outdir.mkdir(parents=True, exist_ok=True)
 
     smyle_chunks = {
         "Y": 3,
@@ -700,6 +849,19 @@ def process_smyle(args: argparse.Namespace) -> None:
             )
             smyle_dask[f"{r}_mon"] = smyle_da_mon.weighted(smyle_reg_ocean_area_mon).mean((lat_name, lon_name))
             smyle_dask[f"{r}_seas"] = smyle_da_seas.weighted(smyle_reg_ocean_area_seas).mean((lat_name, lon_name))
+        if "ELI" in args.regions:
+            smyle_dask["ELI_mon"] = compute_eli_latlon_sst(
+                smyle_da_mon,
+                lat_name=lat_name,
+                lon_name=lon_name,
+                oceanmask=smyle_oceanmask,
+            )
+            smyle_dask["ELI_seas"] = compute_eli_latlon_sst(
+                smyle_da_seas,
+                lat_name=lat_name,
+                lon_name=lon_name,
+                oceanmask=smyle_oceanmask,
+            )
 
         LOG.info(f"Computing CESM-SMYLE base indices for month {m}...")
         computed_vals = dask.compute(smyle_dask)[0]
@@ -716,12 +878,30 @@ def process_smyle(args: argparse.Namespace) -> None:
 
         all_mon = {**base_vals_mon, **derived_mon}
         all_seas = {**base_vals_seas, **derived_seas}
+        if "ELI" in args.regions:
+            all_mon["ELI"] = computed_vals["ELI_mon"]
+            all_seas["ELI"] = computed_vals["ELI_seas"]
 
         for r in args.regions:
-            r_dir = smyle_outdir / r
-            r_dir.mkdir(parents=True, exist_ok=True)
-            
-            outfile_seas = r_dir / f"BSMYLE{m:02d}_TS_N{args.smyle_nens:02d}_M{args.nlead:02d}_{r}SST_seas.nc"
+            if r == "ELI":
+                outfile_mon = smyle_outdir / f"BSMYLE{m:02d}_ELI_N{args.smyle_nens:02d}_M{args.nlead:02d}.nc"
+                if not outfile_mon.exists() or args.force:
+                    ds_idx_mon = all_mon[r].to_dataset()
+                    ds_idx_mon["time"] = time_mon
+                    ds_idx_mon.attrs["source_grid"] = "CESM-SMYLE regridded TS benchmark"
+                    _safe_to_netcdf(ds_idx_mon, outfile_mon, encoding={"eli": {"zlib": True, "complevel": 1, "dtype": "float32"}})
+                    LOG.info(f"Saved CESM-SMYLE monthly ELI: {outfile_mon}")
+
+                outfile_seas = smyle_outdir / f"BSMYLE{m:02d}_ELI_N{args.smyle_nens:02d}_M{args.nlead:02d}_seas.nc"
+                if not outfile_seas.exists() or args.force:
+                    ds_idx = all_seas[r].to_dataset()
+                    ds_idx["time"] = time_seas
+                    ds_idx.attrs["source_grid"] = "CESM-SMYLE regridded TS benchmark"
+                    _safe_to_netcdf(ds_idx, outfile_seas, encoding={"eli": {"zlib": True, "complevel": 1, "dtype": "float32"}})
+                    LOG.info(f"Saved CESM-SMYLE seasonal ELI: {outfile_seas}")
+                continue
+
+            outfile_seas = smyle_outdir / f"BSMYLE{m:02d}_TS_N{args.smyle_nens:02d}_M{args.nlead:02d}_{r}SST_seas.nc"
             if not outfile_seas.exists() or args.force:
                 ds_idx = all_seas[r].rename("sst").to_dataset()
                 ds_idx["time"] = time_seas
@@ -736,7 +916,7 @@ def process_smyle(args: argparse.Namespace) -> None:
                 _safe_to_netcdf(ds_idx, outfile_seas, encoding=smyle_index_encoding)
                 LOG.info(f"Saved CESM-SMYLE seasonal index for {r}: {outfile_seas}")
 
-            outfile_mon = r_dir / f"BSMYLE{m:02d}_TS_N{args.smyle_nens:02d}_M{args.nlead:02d}_{r}SST_mon.nc"
+            outfile_mon = smyle_outdir / f"BSMYLE{m:02d}_TS_N{args.smyle_nens:02d}_M{args.nlead:02d}_{r}SST_mon.nc"
             if not outfile_mon.exists() or args.force:
                 ds_idx_mon = all_mon[r].rename("sst").to_dataset()
                 ds_idx_mon["time"] = time_mon

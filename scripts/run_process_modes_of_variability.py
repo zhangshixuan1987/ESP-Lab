@@ -297,16 +297,26 @@ def process_one(
     force_field: bool = False,
 ) -> tuple[dict[str, str], dict[int, dict[str, object]] | None]:
     mode = str(settings["mode"])
+    output_source = (
+        str(getattr(args, "e3sm_cache_tag", "e3sm"))
+        if source == "e3sm"
+        else source
+    )
     field_path, index_path = core.product_paths(
         Path(args.outdir),
         mode,
-        source,
+        output_source,
         init_month,
         core.grid_token(args.target_dlat, args.target_dlon),
         settings,
         args.legacy_nao_layout,
     )
-    source_label = str(settings["obs_product"]) if source == "obs" else source.upper()
+    if source == "obs":
+        source_label = str(settings["obs_product"])
+    elif source == "e3sm":
+        source_label = str(getattr(args, "e3sm_display_name", "E3SM"))
+    else:
+        source_label = source.upper()
     label = source_label if init_month is None else f"{source_label} init {init_month:02d}"
     field_signature = configuration_signature(
         source, settings, args, include_mode=False
@@ -649,8 +659,13 @@ def main() -> None:
                 if source not in args.sources:
                     continue
                 for init_month in args.init_months:
+                    output_source = (
+                        str(getattr(args, "e3sm_cache_tag", "e3sm"))
+                        if source == "e3sm"
+                        else source
+                    )
                     field_path, _ = core.product_paths(
-                        Path(args.outdir), mode, source, init_month,
+                        Path(args.outdir), mode, output_source, init_month,
                         core.grid_token(args.target_dlat, args.target_dlon),
                         settings, args.legacy_nao_layout,
                     )
@@ -661,9 +676,9 @@ def main() -> None:
                     )
                     materialized_fields.add(str(field_path))
                     key = (
-                        f"{source}_init{init_month:02d}"
+                        f"{output_source}_init{init_month:02d}"
                         if args.legacy_nao_layout
-                        else f"{mode}:{source}_init{init_month:02d}"
+                        else f"{mode}:{output_source}_init{init_month:02d}"
                     )
                     products[key] = product
 

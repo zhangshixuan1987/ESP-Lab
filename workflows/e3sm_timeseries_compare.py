@@ -718,7 +718,7 @@ def plot_timeseries_comparison(
     
     if colors is None:
         colors = {
-            'BruteForce': '#10b981',       # Vibrant Emerald Green
+            'Reanalysis': '#10b981',       # Vibrant Emerald Green
             'JRA55_FOSIRL': '#f59e0b',     # Amber Yellow
             '4DEnVar_branch': '#3b82f6',   # Bright Blue
             '4DEnVar_hybrid': '#ef4444'    # Bright Red
@@ -876,7 +876,7 @@ def main():
     args = parser.parse_args()
     
     simulations = {
-        'BruteForce': {'run_name': 'WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_BruteForce_1980050100', 'ens': 10},
+        'Reanalysis': {'run_name': 'WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_BruteForce_1980050100', 'ens': 10},
         'JRA55_FOSIRL': {'run_name': 'WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_JRA55_FOSIRL_1980050100', 'ens': 10},
         '4DEnVar_branch': {'run_name': 'test_WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_4DEnVar_branch', 'ens': 1},
         '4DEnVar_hybrid': {'run_name': 'test_WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_4DEnVar_hybrid', 'ens': 1},

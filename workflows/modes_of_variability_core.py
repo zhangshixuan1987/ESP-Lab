@@ -222,6 +222,8 @@ def parse_args() -> argparse.Namespace:
         "--e3sm-case-prefix",
         default="WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_JRA55_FOSIRL",
     )
+    parser.add_argument("--e3sm-cache-tag", default="e3sm")
+    parser.add_argument("--e3sm-display-name", default="E3SM")
     parser.add_argument("--e3sm-nens", type=int, default=10)
     parser.add_argument("--e3sm-engine", default="netcdf4")
     parser.add_argument("--e3sm-grid", default="180x360_aave")
@@ -1547,18 +1549,27 @@ def product_paths(
     legacy: bool,
 ) -> tuple[Path, Path]:
     init_token = "" if init_month is None else f"_init{init_month:02d}"
-    source_name = str(settings["obs_product"]).lower() if source == "obs" else source
+    if source == "obs":
+        source_dir = str(settings["obs_product"])
+        source_name = source_dir.lower()
+    elif source == "smyle":
+        source_dir = "CESM-SMYLE"
+        source_name = "smyle"
+    else:
+        source_dir = source
+        source_name = source
+    source_root = outdir / source_dir / "modes_variability"
     field_name = f"{source_name}{init_token}_{str(settings['field']).lower()}_{settings['frequency']}_{grid_name}.nc"
-    field_path = outdir / "fields" / field_name
+    field_path = source_root / "fields" / field_name
     if legacy:
         index_name = "era5_nao_reference.nc" if source == "obs" else f"{source}{init_token}_nao.nc"
-        return field_path, outdir / "indices" / index_name
+        return field_path, source_root / "indices" / index_name
     index_name = (
         f"{source_name}_{mode.lower()}_reference.nc"
         if source == "obs"
         else f"{source}{init_token}_{mode.lower()}.nc"
     )
-    return field_path, outdir / "modes" / mode.lower() / "indices" / index_name
+    return field_path, source_root / "modes" / mode.lower() / "indices" / index_name
 
 
 def model_field_dataset(

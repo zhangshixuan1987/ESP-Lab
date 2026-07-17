@@ -56,7 +56,7 @@ def _validate_path_arg(name: str, value: str) -> None:
     Validate that a path-related argument is a string.
 
     This mainly guards against accidental tuple creation from notebook code like:
-        product = "HadISST",
+        product = "HadISST2",
     """
     if not isinstance(value, str):
         raise TypeError(f"{name} must be a string, got {type(value).__name__}: {value!r}")

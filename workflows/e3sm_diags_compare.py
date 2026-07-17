@@ -388,7 +388,7 @@ def main():
     simulations = {
         '4DEnVar_branch': 'test_WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_4DEnVar_branch',
         '4DEnVar_hybrid': 'test_WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_4DEnVar_hybrid',
-        'BruteForce': 'WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_BruteForce_1980050100',
+        'Reanalysis': 'WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_BruteForce_1980050100',
         'JRA55_FOSIRL': 'WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_JRA55_FOSIRL_1980050100'
     }
 
