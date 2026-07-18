@@ -49,6 +49,26 @@ def _climatology_mean_by_year(da, time_name, climy0, climy1):
     return da.where((years >= y0) & (years <= y1), drop=True).mean(time_name)
 
 
+def _deduplicate_index(da, dim):
+    """Collapse duplicate coordinate labels along dim before xarray alignment."""
+    if dim not in da.dims or dim not in da.coords:
+        return da
+    index = da.get_index(dim)
+    if index.is_unique:
+        return da
+    return da.groupby(dim).mean(dim)
+
+
+def _single_chunk_core_dim(da, dim):
+    """Ensure Dask-backed xarray objects have one chunk along a core dim."""
+    if dim not in da.dims or da.chunks is None:
+        return da
+    axis = da.get_axis_num(dim)
+    if len(da.chunks[axis]) <= 1:
+        return da
+    return da.chunk({dim: -1})
+
+
 def cor_ci_bootyears(ts1, ts2, seed=None, nboots=1000, conf=95):
     """
     Determine confidence intervals for correlation scores.
@@ -177,6 +197,8 @@ def leadtime_skill_seas(mod_da, mod_time, obs_da, detrend=False):
         obs_ts = obs_da.sel(season=seasons[ens_time_month]).rename({'year': 'time'})
         ens_ts = ens_ts.assign_coords(time=("time", ens_time_year))
         a, b = xr.align(ens_ts, obs_ts)
+        a = _single_chunk_core_dim(a, 'time')
+        b = _single_chunk_core_dim(b, 'time')
         # perform linear detrending if detrend is set to True
         if detrend:
             a = detrend_linear(a, 'time')
@@ -269,6 +291,8 @@ def leadtime_skill_seas_resamp(mod_da, mod_time, obs_da, sampsize, N, detrend=Fa
             obs_ts = obs_da.sel(season=seasons[ens_time_month]).rename({'year': 'time'})
             ens_ts = ens_ts.assign_coords(time=("time", ens_time_year))
             a, b = xr.align(ens_ts, obs_ts)
+            a = _single_chunk_core_dim(a, 'time')
+            b = _single_chunk_core_dim(b, 'time')
             # perform linear detrending if detrend is set to True
             if detrend:
                 a = detrend_linear(a, 'time')
@@ -391,6 +415,8 @@ def compute_skill_annual(mod_da,mod_time,obs_da,nleadavg=1,nleads=1,resamp=0,det
         ens_time_year = mod_time.isel(L=leadisel).mean('L')
         ens_ts = ens_ts.assign_coords(time=("time",ens_time_year.data))
         a,b = xr.align(ens_ts,obs_ts)
+        a = _single_chunk_core_dim(a,'time')
+        b = _single_chunk_core_dim(b,'time')
         b = b - b.mean('time')
         if detrend:
                 a = detrend_linear(a,'time')
@@ -481,6 +507,7 @@ def compute_skill_seasonal(mod_da,mod_time,obs_da,climy0=None,climy1=None,nleada
         ens_time_year = mod_time.isel(L=leadisel).mean('L').dt.year
         ens_time_month = mod_time.isel(L=leadisel).mean('L').dt.month.data[0]
         ens_ts = ens_ts.assign_coords(time=("time",ens_time_year.data))
+        ens_ts = _deduplicate_index(ens_ts, 'time')
         obsisel = obs_da.time.dt.month==ens_time_month
         obs_seas = obs_da.isel(time=obsisel)
         if not is_anomaly:
@@ -488,9 +515,12 @@ def compute_skill_seasonal(mod_da,mod_time,obs_da,climy0=None,climy1=None,nleada
                 raise ValueError("climy0 and climy1 must be provided if is_anomaly=False")
             obs_seas = obs_seas - _climatology_mean_by_year(obs_seas, 'time', climy0, climy1)
         obs_seas = obs_seas.assign_coords(time=("time",obs_seas.time.dt.year.data))
+        obs_seas = _deduplicate_index(obs_seas, 'time')
         if (nleadavg>1):
             obs_seas = obs_seas.rolling(time=nleadavg,min_periods=nleadavg, center=True).mean().dropna('time',how='all')
         a,b = xr.align(ens_ts,obs_seas)
+        a = _single_chunk_core_dim(a,'time')
+        b = _single_chunk_core_dim(b,'time')
         if detrend:
                 a = detrend_linear(a,'time')
                 b = detrend_linear(b,'time')
@@ -580,6 +610,7 @@ def compute_skill_seasonal_batch(
         ens_time_year = mod_time.isel(L=leadisel).mean('L').dt.year
         ens_time_month = mod_time.isel(L=leadisel).mean('L').dt.month.data[0]
         ens_ts = ens_ts.assign_coords(time=("time",ens_time_year.data))
+        ens_ts = _deduplicate_index(ens_ts, 'time')
         obsisel = obs_da.time.dt.month==ens_time_month
         obs_seas = obs_da.isel(time=obsisel)
         if not is_anomaly:
@@ -587,9 +618,12 @@ def compute_skill_seasonal_batch(
                 raise ValueError("climy0 and climy1 must be provided if is_anomaly=False")
             obs_seas = obs_seas - _climatology_mean_by_year(obs_seas, 'time', climy0, climy1)
         obs_seas = obs_seas.assign_coords(time=("time",obs_seas.time.dt.year.data))
+        obs_seas = _deduplicate_index(obs_seas, 'time')
         if (nleadavg>1):
             obs_seas = obs_seas.rolling(time=nleadavg,min_periods=nleadavg, center=True).mean().dropna('time',how='all')
         a,b = xr.align(ens_ts,obs_seas)
+        a = _single_chunk_core_dim(a,'time')
+        b = _single_chunk_core_dim(b,'time')
         if detrend:
             a = detrend_linear(a,'time')
             b = detrend_linear(b,'time')
@@ -667,6 +701,7 @@ def prepare_skill_seasonal_lead(
     ens_ts = mod_da.isel(L=lead_index).rename({"Y": "time"})
     ens_time = mod_time.isel(L=lead_index)
     ens_ts = ens_ts.assign_coords(time=("time", ens_time.dt.year.data))
+    ens_ts = _deduplicate_index(ens_ts, "time")
 
     verification_month = ens_time.dt.month.data[0]
     obs_seas = obs_da.isel(time=obs_da.time.dt.month == verification_month)
@@ -681,8 +716,11 @@ def prepare_skill_seasonal_lead(
     obs_seas = obs_seas.assign_coords(
         time=("time", obs_seas.time.dt.year.data)
     )
+    obs_seas = _deduplicate_index(obs_seas, "time")
 
     model_aligned, obs_aligned = xr.align(ens_ts, obs_seas)
+    model_aligned = _single_chunk_core_dim(model_aligned, "time")
+    obs_aligned = _single_chunk_core_dim(obs_aligned, "time")
     if detrend:
         model_aligned = detrend_linear(model_aligned, "time")
         obs_aligned = detrend_linear(obs_aligned, "time")
@@ -797,6 +835,8 @@ def compute_resampskill_annual(mod_da,mod_time,obs_da,nleadavg=1,nleads=1,detren
             ens_time_year = mod_time.isel(L=lvals+i).mean('L').data
             ens_ts = ens_ts.assign_coords(time=("time",ens_time_year))
             a,b = xr.align(ens_ts,obs_ts)
+            a = _single_chunk_core_dim(a,'time')
+            b = _single_chunk_core_dim(b,'time')
             b = b - b.mean('time')
             if detrend:
                 a = detrend_linear(a,'time')
@@ -898,6 +938,7 @@ def compute_resampskill_seasonal(mod_da,mod_time,obs_da,climy0=None,climy1=None,
             ens_time_year = mod_time.isel(L=leadisel).mean('L').dt.year
             ens_time_month = mod_time.isel(L=leadisel).mean('L').dt.month.data[0]
             ens_ts = ens_ts.assign_coords(time=("time",ens_time_year.data))
+            ens_ts = _deduplicate_index(ens_ts, 'time')
             obsisel = obs_da.time.dt.month==ens_time_month
             obs_seas = obs_da.isel(time=obsisel)
             if not is_anomaly:
@@ -905,9 +946,12 @@ def compute_resampskill_seasonal(mod_da,mod_time,obs_da,climy0=None,climy1=None,
                     raise ValueError("climy0 and climy1 must be provided if is_anomaly=False")
                 obs_seas = obs_seas - _climatology_mean_by_year(obs_seas, 'time', climy0, climy1)
             obs_seas = obs_seas.assign_coords(time=("time",obs_seas.time.dt.year.data))
+            obs_seas = _deduplicate_index(obs_seas, 'time')
             if (nleadavg>1):
                 obs_seas = obs_seas.rolling(time=nleadavg,min_periods=nleadavg, center=True).mean().dropna('time',how='all')
             a,b = xr.align(ens_ts,obs_seas)
+            a = _single_chunk_core_dim(a,'time')
+            b = _single_chunk_core_dim(b,'time')
             if detrend:
                 a = detrend_linear(a,'time')
                 b = detrend_linear(b,'time')

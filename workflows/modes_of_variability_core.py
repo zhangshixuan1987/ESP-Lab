@@ -12,12 +12,24 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _prefix = Path(sys.prefix)
-os.environ.setdefault("GDAL_DATA", str(_prefix / "share" / "gdal"))
-os.environ.setdefault("PROJ_DATA", str(_prefix / "share" / "proj"))
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib-codex")
+
+
+def _ensure_native_data_path(env_name: str, path: Path, sentinel: str) -> None:
+    current = Path(os.environ.get(env_name, ""))
+    if not (current / sentinel).is_file() and (path / sentinel).is_file():
+        os.environ[env_name] = str(path)
+
+
+_gdal_data = _prefix / "share" / "gdal"
+_proj_data = _prefix / "share" / "proj"
+_ensure_native_data_path("GDAL_DATA", _gdal_data, "header.dxf")
+_ensure_native_data_path("PROJ_DATA", _proj_data, "proj.db")
+_ensure_native_data_path("PROJ_LIB", _proj_data, "proj.db")
 
 import numpy as np
 import xarray as xr
+import cftime
 
 from pcmdi_metrics.io import load_regions_specs
 from pcmdi_metrics.utils import calculate_area_weights, calculate_grid_area
@@ -28,6 +40,7 @@ from pcmdi_metrics.variability_mode.lib import (
 
 from esp_lab import data_access_cesm_smyle as smyle_access
 from esp_lab import data_access_e3sm as e3sm_access
+from esp_lab import data_access_nmme as nmme_access
 from esp_lab import data_access_obs as obs_access
 from esp_lab import stats
 from esp_lab.paths import CESM_SMYLE_DIAG_DIR
@@ -86,7 +99,7 @@ def eof_analysis_with_svd_fallback(*args, **kwargs):
         LOG.warning("NumPy SVD did not converge; retrying with LAPACK gesvd.")
         with robust_svd_retry():
             return eof_analysis_get_variance_mode(*args, **kwargs)
-MODEL_SOURCES = ("e3sm", "smyle")
+MODEL_SOURCES = ("e3sm", "smyle", "nmme")
 SUPPORTED_MODES = (
     "NAM", "NAO", "SAM", "PSA1", "PSA2", "PNA", "NPO",
     "EA", "SCA", "PDO", "NPGO", "AMO",
@@ -125,7 +138,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--sources",
         nargs="+",
-        choices=("e3sm", "smyle", "obs", "era5"),
+        choices=("e3sm", "smyle", "nmme", "obs", "era5"),
         default=["e3sm", "smyle", "obs"],
     )
     parser.add_argument("--init-months", nargs="+", type=int, default=[5, 11])
@@ -233,6 +246,32 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--smyle-nens", type=int, default=20)
     parser.add_argument(
+        "--nmme-root",
+        default="/global/cfs/cdirs/e3sm/S2S2D/NMME/data_hindcast_by_member",
+    )
+    parser.add_argument(
+        "--nmme-models",
+        nargs="+",
+        default=[],
+        help=(
+            "NMME model directory names to include. Required when --sources "
+            "includes nmme."
+        ),
+    )
+    parser.add_argument(
+        "--nmme-field",
+        default="auto",
+        help="Raw NMME variable to read: 'auto', 'sst', or 'prmsl'.",
+    )
+    parser.add_argument(
+        "--nmme-chunks",
+        default="",
+        help=(
+            "Comma-separated chunks for raw NMME member files, e.g. "
+            "'S:12,L:-1,Y:181,X:360'. Empty uses the archive/native chunks."
+        ),
+    )
+    parser.add_argument(
         "--obs-dir",
         default="/global/cfs/cdirs/e3sm/e3sm_diags/obs_for_e3sm_diags/time-series",
     )
@@ -334,6 +373,162 @@ def drop_empty_leads(
     if not valid_leads.size:
         raise ValueError(f"{variable.name or 'Field'} has no valid lead times.")
     return dataset.sel(L=valid_leads), variable.sel(L=valid_leads)
+
+
+def parse_chunk_spec(spec: str | None) -> dict[str, int]:
+    """Parse a compact xarray chunk spec such as ``"Y:45,X:90"``."""
+    if not spec:
+        return {}
+    chunks: dict[str, int] = {}
+    for raw_part in str(spec).split(","):
+        part = raw_part.strip()
+        if not part:
+            continue
+        if ":" not in part:
+            raise ValueError(f"Invalid chunk spec {part!r}; expected NAME:SIZE.")
+        name, value = (item.strip() for item in part.split(":", 1))
+        if not name:
+            raise ValueError(f"Invalid chunk spec {part!r}; empty dimension name.")
+        chunks[name] = int(value)
+    return chunks
+
+
+def add_months_noleap(year: int, month: int, offset: int) -> cftime.DatetimeNoLeap:
+    month_index = month - 1 + offset
+    return cftime.DatetimeNoLeap(year + month_index // 12, month_index % 12 + 1, 15)
+
+
+def nmme_member_dataset(
+    member_dir: Path,
+    *,
+    model: str,
+    member: str,
+    field: str,
+    chunks: dict[str, int],
+) -> xr.Dataset:
+    files = sorted(member_dir.glob(f"{field}_{model}_{member}_S*.nc"))
+    if not files:
+        raise FileNotFoundError(f"No NMME {field!r} files found under {member_dir}")
+    dataset = xr.open_mfdataset(
+        [str(path) for path in files],
+        combine="by_coords",
+        decode_times=False,
+        chunks=chunks,
+    )
+    if "S" not in dataset:
+        raise ValueError(f"NMME member dataset lacks forecast-start coordinate S: {member_dir}")
+    dataset = dataset.drop_vars("M", errors="ignore")
+    dataset = nmme_access.decode_cf_time(dataset, time_var="S")
+    dataset = dataset.expand_dims(M=[f"{model}:{member}"])
+    return dataset
+
+
+def nmme_field_dataset(
+    init_month: int,
+    settings: dict[str, object],
+    args: argparse.Namespace,
+) -> xr.Dataset:
+    """Load gridded NMME hindcasts into the common Y/L/M/lat/lon layout."""
+    field = str(settings["field"])
+    requested_field = str(getattr(args, "nmme_field", "auto")).lower()
+    if requested_field == "auto":
+        archive_field = "prmsl" if field == "PSL" else "sst"
+    else:
+        archive_field = requested_field
+    expected_archive_field = "prmsl" if field == "PSL" else "sst"
+    if archive_field != expected_archive_field:
+        raise ValueError(
+            f"NMME source for {field} modes requires {expected_archive_field!r}, "
+            f"got --nmme-field={archive_field!r}."
+        )
+
+    models = [str(model).strip() for model in getattr(args, "nmme_models", []) if str(model).strip()]
+    if not models:
+        raise ValueError("--nmme-models is required when --sources includes nmme.")
+
+    nmme_root = Path(args.nmme_root)
+    chunks = parse_chunk_spec(getattr(args, "nmme_chunks", ""))
+    member_datasets: list[xr.Dataset] = []
+    failures: list[str] = []
+
+    for model in models:
+        field_dir = nmme_root / model / archive_field
+        if not field_dir.is_dir():
+            failures.append(f"{model}: missing {field_dir}")
+            continue
+        member_dirs = sorted(path for path in field_dir.glob("M*") if path.is_dir())
+        if not member_dirs:
+            failures.append(f"{model}: no member directories under {field_dir}")
+            continue
+        for member_dir in member_dirs:
+            try:
+                member_datasets.append(
+                    nmme_member_dataset(
+                        member_dir,
+                        model=model,
+                        member=member_dir.name,
+                        field=archive_field,
+                        chunks=chunks,
+                    )
+                )
+            except Exception as error:
+                failures.append(f"{model}/{member_dir.name}: {error}")
+
+    if not member_datasets:
+        raise ValueError("No NMME member datasets could be loaded: " + "; ".join(failures))
+    if failures:
+        LOG.warning("Some NMME members were skipped: %s", "; ".join(failures[:20]))
+
+    dataset = xr.concat(
+        member_datasets,
+        dim="M",
+        join="outer",
+        combine_attrs="drop_conflicts",
+    )
+    rename = {}
+    if "Y" in dataset.dims or "Y" in dataset.coords:
+        rename["Y"] = "lat"
+    if "X" in dataset.dims or "X" in dataset.coords:
+        rename["X"] = "lon"
+    dataset = dataset.rename(rename)
+    if "lat" not in dataset.coords or "lon" not in dataset.coords:
+        raise ValueError("NMME dataset must provide Y/X or lat/lon coordinates.")
+    if dataset["lat"][0] > dataset["lat"][-1]:
+        dataset = dataset.reindex(lat=dataset.lat[::-1])
+    dataset = dataset.assign_coords(lon=(dataset.lon % 360)).sortby("lon")
+
+    init_times = dataset["S"].where(dataset["S"].dt.month == init_month, drop=True)
+    if init_times.size == 0:
+        raise ValueError(f"No NMME initialization times found for month {init_month:02d}.")
+    dataset = dataset.sel(S=init_times)
+    years = dataset["S"].dt.year.astype(int).data
+    dataset = dataset.rename({"S": "Y"}).assign_coords(Y=years)
+    dataset = dataset.assign_coords(L=np.arange(dataset.sizes["L"]) + 1)
+    if dataset.sizes["L"] > args.monthly_nlead:
+        dataset = dataset.isel(L=slice(0, args.monthly_nlead))
+
+    years_array = dataset["Y"].values.astype(int)
+    leads = dataset["L"].values.astype(int)
+    valid_time = xr.DataArray(
+        np.array(
+            [
+                [add_months_noleap(int(year), init_month, int(lead) - 1) for lead in leads]
+                for year in years_array
+            ],
+            dtype=object,
+        ),
+        dims=("Y", "L"),
+        coords={"Y": dataset["Y"], "L": dataset["L"]},
+        name="time",
+    )
+    dataset = dataset.rename({archive_field: field})
+    dataset["time"] = valid_time
+    dataset[field].attrs.setdefault("units", "Pa" if field == "PSL" else "degC")
+    dataset[field].attrs.setdefault(
+        "long_name",
+        "NMME sea level pressure" if field == "PSL" else "NMME sea surface temperature",
+    )
+    return dataset
 
 
 def mode_settings(mode: str) -> dict[str, object]:
@@ -1600,7 +1795,7 @@ def model_field_dataset(
             engine=args.e3sm_engine,
         )
         processed = cal.mon_to_seas_dask(raw) if settings["frequency"] == "seasonal" else raw
-    else:
+    elif source == "smyle":
         processed = smyle_access.load_benchmark(
             field=archive_field,
             init_month=init_month,
@@ -1610,6 +1805,11 @@ def model_field_dataset(
             freq="seas" if settings["frequency"] == "seasonal" else "mon",
             chunks={"Y": 3, "L": -1, "M": 2, "lat": 96, "lon": 144},
         )
+    elif source == "nmme":
+        raw = nmme_field_dataset(init_month, settings, args)
+        processed = cal.mon_to_seas_dask(raw) if settings["frequency"] == "seasonal" else raw
+    else:
+        raise ValueError(f"Unsupported model source: {source}")
     selected = select_field(processed, field)
     processed, selected = drop_empty_leads(processed, selected)
     data = convert_units(selected, field).rename(field)

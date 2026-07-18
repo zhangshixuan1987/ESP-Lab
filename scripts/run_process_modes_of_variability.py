@@ -75,6 +75,13 @@ def configuration_signature(
                 benchmark_dir=str(Path(args.smyle_benchmark_dir).resolve()),
                 ensemble_size=args.smyle_nens,
             )
+        elif source == "nmme":
+            signature.update(
+                nmme_root=str(Path(args.nmme_root).resolve()),
+                nmme_models=list(args.nmme_models),
+                nmme_field=str(args.nmme_field),
+                nmme_chunks=str(args.nmme_chunks),
+            )
     if include_mode:
         signature["mode"] = str(settings["mode"])
         signature["eof_number"] = int(settings["eof_number"])
@@ -315,6 +322,8 @@ def process_one(
         source_label = str(settings["obs_product"])
     elif source == "e3sm":
         source_label = str(getattr(args, "e3sm_display_name", "E3SM"))
+    elif source == "nmme":
+        source_label = "NMME"
     else:
         source_label = source.upper()
     label = source_label if init_month is None else f"{source_label} init {init_month:02d}"
@@ -564,6 +573,11 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--dask-workers must be positive.")
     if args.e3sm_nens < 1 or args.smyle_nens < 1:
         raise ValueError("Ensemble sizes must be positive.")
+    if "nmme" in args.sources:
+        if not Path(args.nmme_root).is_dir():
+            raise FileNotFoundError(f"--nmme-root does not exist: {args.nmme_root}")
+        if not args.nmme_models:
+            raise ValueError("--nmme-models is required when --sources includes nmme.")
     if args.eof_bootstrap_iterations < 0:
         raise ValueError("--eof-bootstrap-iterations must be nonnegative.")
     if not 0 < args.eof_bootstrap_confidence < 1:

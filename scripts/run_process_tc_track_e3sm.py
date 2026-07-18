@@ -56,6 +56,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from netCDF4 import Dataset
+
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
@@ -580,6 +582,28 @@ def build_file_list(
             fh.write(f"{f};{zsfil}\n")
 
 
+def _time_record_count(path: Path) -> int | None:
+    """Return the time dimension length, or None when the file has no time dim."""
+    with Dataset(path, "r") as ds:
+        dim = ds.dimensions.get("time")
+        if dim is None:
+            return None
+        return len(dim)
+
+
+def filter_time_bearing_files(files: list[Path]) -> tuple[list[Path], list[Path]]:
+    """Split stream files into usable files and files with zero time records."""
+    usable: list[Path] = []
+    empty: list[Path] = []
+    for path in files:
+        ntime = _time_record_count(path)
+        if ntime == 0:
+            empty.append(path)
+        else:
+            usable.append(path)
+    return usable, empty
+
+
 def detect_rank_files(detect_out: Path) -> list[Path]:
     """Return MPI rank-suffixed DetectNodes outputs for detect_out."""
     pattern = re.compile(rf"^{re.escape(detect_out.name)}\d{{6}}\.dat$")
@@ -765,6 +789,21 @@ def process_member(
         log.warning("  No %s files found for %s/%s", args.stream_tag, case, member)
         return "no_data"
     log.info("  Found %d %s files", len(h2_files), args.stream_tag)
+    try:
+        h2_files, empty_time_files = filter_time_bearing_files(h2_files)
+    except Exception as exc:
+        log.error("  Failed to inspect %s time dimensions: %s", args.stream_tag, exc)
+        return "failed"
+    if empty_time_files:
+        log.warning(
+            "  Skipping %d %s files with zero time records: %s",
+            len(empty_time_files),
+            args.stream_tag,
+            ", ".join(p.name for p in empty_time_files),
+        )
+    if not h2_files:
+        log.error("  No %s files with time records remain for %s/%s", args.stream_tag, case, member)
+        return "no_data"
 
     if args.dry_run:
         log.info("  [dry-run] Would process %d files", len(h2_files))
