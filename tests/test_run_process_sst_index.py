@@ -119,6 +119,23 @@ def test_output_cache_tracks_sst_preprocessing_and_land_mask(tmp_path):
     assert not MODULE._output_is_current(path, SimpleNamespace(sst_land_mask=False))
 
 
+def test_output_cache_rejects_all_missing_roni(tmp_path):
+    path = tmp_path / "HadISST2_sst_RONISST_mon.nc"
+    dataset = xr.Dataset(
+        {
+            "sst": xr.DataArray(
+                [[np.nan, np.nan]], dims=("Y", "L")
+            ),
+            "time": xr.DataArray([[1, 2]], dims=("Y", "L")),
+        }
+    )
+    MODULE._safe_to_netcdf(dataset, path, sst_land_mask=True)
+
+    assert not MODULE._output_is_current(
+        path, SimpleNamespace(sst_land_mask=True)
+    )
+
+
 def test_smyle_fixed_mask_is_model_level(tmp_path):
     timeseries, mask = MODULE._smyle_output_paths(tmp_path / "CESM-SMYLE")
 

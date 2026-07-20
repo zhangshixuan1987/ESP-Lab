@@ -65,3 +65,17 @@ def test_get_monthly_data_can_preserve_native_obs_variable_name(tmp_path):
 
     assert list(ds.data_vars) == ["PRECT"]
     assert ds["PRECT"].sizes == {"time": 12, "lat": 2, "lon": 3}
+
+
+def test_obs_region_mask_treats_zero_to_360_as_full_longitude():
+    da = xr.DataArray(
+        np.ones((3, 4)),
+        dims=("lat", "lon"),
+        coords={"lat": [-30.0, 0.0, 30.0], "lon": [0.0, 90.0, 180.0, 270.0]},
+    )
+
+    mask = obs_access.obs_region_mask(da, [0.0, 360.0, -20.0, 20.0])
+
+    assert mask.sel(lat=0.0).all()
+    assert not mask.sel(lat=-30.0).any()
+    assert not mask.sel(lat=30.0).any()

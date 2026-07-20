@@ -216,12 +216,19 @@ def _output_is_current(path: Path, args: argparse.Namespace) -> bool:
         return False
     try:
         with xr.open_dataset(path, decode_times=False) as dataset:
-            return (
+            metadata_current = (
                 dataset.attrs.get("sst_index_output_version")
                 == SST_INDEX_OUTPUT_VERSION
                 and dataset.attrs.get("sst_land_mask")
                 == str(bool(args.sst_land_mask)).lower()
             )
+            if not metadata_current:
+                return False
+            # RONI depends on the full-longitude TropicalMean region. Reject
+            # caches produced by the former 0-to-360 zero-width-mask bug.
+            if "RONI" in path.name:
+                return "sst" in dataset and bool(dataset["sst"].notnull().any())
+            return True
     except Exception:
         return False
 

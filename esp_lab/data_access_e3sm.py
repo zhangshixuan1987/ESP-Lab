@@ -1039,7 +1039,11 @@ def e3sm_region_mask(da, lonlat, lat_name="lat", lon_name="lon"):
 
     lat_mask = (lat2d >= lat_s) & (lat2d <= lat_n)
     
-    if lon_w_360 <= lon_e_360:
+    # A full-longitude region such as [0, 360] has coincident normalized
+    # endpoints. Treat it as the full circle rather than a zero-width strip.
+    if abs(lon_e - lon_w) >= 360:
+        lon_mask = xr.ones_like(lon2d, dtype=bool)
+    elif lon_w_360 <= lon_e_360:
         lon_mask = (lon2d >= lon_w_360) & (lon2d <= lon_e_360)
     else:
         # Handles regions crossing the prime meridian (0 degrees) when using [0, 360) representation

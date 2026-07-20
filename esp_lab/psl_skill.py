@@ -120,6 +120,14 @@ def seasonal_centered_mean(
     min_periods: int | None = None,
 ) -> xr.DataArray:
     """Return centered seasonal means at DJF/MAM/JJA/SON center months."""
+    if "time" not in da.dims:
+        raise ValueError("Seasonal averaging requires a 'time' dimension.")
+    if not bool(da.notnull().any()):
+        source = da.encoding.get("source", da.name or "input")
+        raise ValueError(
+            f"Cannot compute seasonal means: {source} contains no finite values. "
+            "Regenerate the upstream SST-index product."
+        )
     if min_periods is None:
         min_periods = window
 

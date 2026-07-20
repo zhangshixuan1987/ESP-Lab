@@ -37,6 +37,14 @@ def test_seasonal_centered_mean_keeps_season_center_months():
     np.testing.assert_allclose(out.values, [3.0, 6.0, 9.0])
 
 
+def test_seasonal_centered_mean_rejects_all_missing_input():
+    time = [cftime.DatetimeNoLeap(2000, month, 15) for month in range(1, 13)]
+    da = xr.DataArray(np.full(12, np.nan), dims="time", coords={"time": time})
+
+    with pytest.raises(ValueError, match="contains no finite values"):
+        psl_skill.seasonal_centered_mean(da)
+
+
 def test_observation_agreement_removes_local_monthly_climatology():
     time = [
         cftime.DatetimeNoLeap(year, month, 15)
