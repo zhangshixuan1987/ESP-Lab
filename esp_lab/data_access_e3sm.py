@@ -514,6 +514,44 @@ def preprocessor_monthly(ds0: xr.Dataset, nlead: int, field: str) -> xr.Dataset:
     d0 = d0.chunk({"L": min(12, d0.sizes["L"])}) 
     return d0
 
+
+def _verification_time_from_init_tags(
+    init_tags: Iterable[object],
+    leads: Iterable[object],
+) -> xr.DataArray:
+    """Construct deterministic no-leap verification dates for E3SM hindcasts."""
+    init_values = [str(value) for value in init_tags]
+    lead_values = [int(value) for value in leads]
+    values = []
+    for init_tag in init_values:
+        if len(init_tag) < 6 or not init_tag[:6].isdigit():
+            raise ValueError(f"Invalid E3SM initialization tag: {init_tag!r}")
+        init_year = int(init_tag[:4])
+        init_month = int(init_tag[4:6])
+        row = []
+        for lead in lead_values:
+            if lead < 1:
+                raise ValueError(f"E3SM lead values must be >= 1, got {lead}")
+            month_index = init_month - 1 + lead - 1
+            row.append(
+                cftime.DatetimeNoLeap(
+                    init_year + month_index // 12,
+                    month_index % 12 + 1,
+                    15,
+                )
+            )
+        values.append(row)
+    return xr.DataArray(
+        np.asarray(values, dtype=object),
+        dims=("Y", "L"),
+        coords={"Y": init_values, "L": lead_values},
+        name="time",
+        attrs={
+            "long_name": "forecast verification time",
+            "construction": "init_tag_plus_lead_v1",
+        },
+    )
+
 # Backward-compatible alias
 preprocessor = preprocessor_monthly
 
@@ -945,6 +983,12 @@ def get_monthly_data(
         )
     ds = ds.assign_coords(M=("M", members[:n_members_loaded]))
     ds = ds.transpose("Y", "L", "M", ...)
+    # Y and L are authoritative.  Reconstruct time after multi-file concat so
+    # a lazily combined source time variable cannot become detached from its
+    # initialization year (the failure previously seen in SMYLE benchmarks).
+    valid_time = _verification_time_from_init_tags(ds.Y.values, ds.L.values)
+    ds["time"] = valid_time.assign_coords(Y=ds.Y, L=ds.L)
+    ds.attrs["verification_time_construction"] = "init_tag_plus_lead_v1"
     if post_chunks:
         ds = ds.chunk(post_chunks)
 

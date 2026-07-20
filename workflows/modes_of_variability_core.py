@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import contextlib
 import logging
 import os
@@ -29,6 +30,11 @@ _ensure_native_data_path("PROJ_LIB", _proj_data, "proj.db")
 
 import numpy as np
 import xarray as xr
+
+from esp_lab.diagnostics import (
+    DEFAULT_CLIMATOLOGY_END_YEAR,
+    DEFAULT_CLIMATOLOGY_START_YEAR,
+)
 import cftime
 
 from pcmdi_metrics.io import load_regions_specs
@@ -43,9 +49,10 @@ from esp_lab import data_access_e3sm as e3sm_access
 from esp_lab import data_access_nmme as nmme_access
 from esp_lab import data_access_obs as obs_access
 from esp_lab import stats
-from esp_lab.paths import CESM_SMYLE_DIAG_DIR
+from esp_lab.paths import CESM_SMYLE_DIAG_DIR, NMME_FIXED_DIR
 from esp_lab.utils import calendar_utils as cal
 from esp_lab.utils import regrid_utils as regrid
+from esp_lab.utils import sst_utils
 
 
 LOG = logging.getLogger(__name__)
@@ -144,8 +151,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--init-months", nargs="+", type=int, default=[5, 11])
     parser.add_argument("--start-year", type=int, default=1980)
     parser.add_argument("--end-year", type=int, default=2018)
-    parser.add_argument("--clim-start", type=int, default=1980)
-    parser.add_argument("--clim-end", type=int, default=2010)
+    parser.add_argument(
+        "--clim-start", type=int, default=DEFAULT_CLIMATOLOGY_START_YEAR
+    )
+    parser.add_argument("--clim-end", type=int, default=DEFAULT_CLIMATOLOGY_END_YEAR)
     parser.add_argument("--monthly-nlead", type=int, default=24)
     parser.add_argument("--target-dlat", type=float, default=2.5)
     parser.add_argument("--target-dlon", type=float, default=2.5)
@@ -227,7 +236,16 @@ def parse_args() -> argparse.Namespace:
         "--sst_ocean_mask_resolution",
         choices=("110m", "50m", "10m"),
         default="110m",
-    )    
+    )
+    parser.add_argument(
+        "--model-sst-land-mask",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Apply a reusable source-grid land mask before regridding E3SM/SMYLE "
+            "SST (default: enabled). Pressure fields are unaffected."
+        ),
+    )
     parser.add_argument(
         "--e3sm-data-dir", default="/global/cfs/cdirs/e3sm/S2S2D/post_process"
     )
@@ -270,6 +288,21 @@ def parse_args() -> argparse.Namespace:
             "Comma-separated chunks for raw NMME member files, e.g. "
             "'S:12,L:-1,Y:181,X:360'. Empty uses the archive/native chunks."
         ),
+    )
+    parser.add_argument(
+        "--nmme-sst-land-mask",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Apply the Natural Earth land mask to NMME SST immediately after "
+            "reading (default: enabled)."
+        ),
+    )
+    parser.add_argument(
+        "--nmme-fixed-dir",
+        type=Path,
+        default=NMME_FIXED_DIR,
+        help="Directory for reusable per-model NMME fixed fields.",
     )
     parser.add_argument(
         "--obs-dir",
@@ -405,6 +438,8 @@ def nmme_member_dataset(
     member: str,
     field: str,
     chunks: dict[str, int],
+    apply_sst_land_mask: bool = True,
+    fixed_dir: Path = NMME_FIXED_DIR,
 ) -> xr.Dataset:
     files = sorted(member_dir.glob(f"{field}_{model}_{member}_S*.nc"))
     if not files:
@@ -419,6 +454,15 @@ def nmme_member_dataset(
         raise ValueError(f"NMME member dataset lacks forecast-start coordinate S: {member_dir}")
     dataset = dataset.drop_vars("M", errors="ignore")
     dataset = nmme_access.decode_cf_time(dataset, time_var="S")
+    if field == "sst":
+        dataset[field] = nmme_access.mask_invalid_sst(
+            dataset[field],
+            apply_land_mask=apply_sst_land_mask,
+            lon_name="X",
+            lat_name="Y",
+            model=model,
+            fixed_dir=fixed_dir,
+        )
     dataset = dataset.expand_dims(M=[f"{model}:{member}"])
     return dataset
 
@@ -469,6 +513,8 @@ def nmme_field_dataset(
                         member=member_dir.name,
                         field=archive_field,
                         chunks=chunks,
+                        apply_sst_land_mask=bool(args.nmme_sst_land_mask),
+                        fixed_dir=Path(args.nmme_fixed_dir),
                     )
                 )
             except Exception as error:
@@ -498,8 +544,16 @@ def nmme_field_dataset(
     dataset = dataset.assign_coords(lon=(dataset.lon % 360)).sortby("lon")
 
     init_times = dataset["S"].where(dataset["S"].dt.month == init_month, drop=True)
+    init_times = init_times.where(
+        (init_times.dt.year >= args.start_year)
+        & (init_times.dt.year <= args.end_year),
+        drop=True,
+    )
     if init_times.size == 0:
-        raise ValueError(f"No NMME initialization times found for month {init_month:02d}.")
+        raise ValueError(
+            f"No NMME initialization times found for month {init_month:02d} "
+            f"during {args.start_year}-{args.end_year}."
+        )
     dataset = dataset.sel(S=init_times)
     years = dataset["S"].dt.year.astype(int).data
     dataset = dataset.rename({"S": "Y"}).assign_coords(Y=years)
@@ -1040,18 +1094,16 @@ def generate_reference_ocean_mask(
 
     obs_ocean = valid_fraction >= min_valid_fraction
 
-    land_lookup = {
-        "110m": regionmask.defined_regions.natural_earth_v5_0_0.land_110,
-        "50m": regionmask.defined_regions.natural_earth_v5_0_0.land_50,
-        "10m": regionmask.defined_regions.natural_earth_v5_0_0.land_10,
-    }
-
-    if natural_earth_resolution not in land_lookup:
+    if natural_earth_resolution not in {"110m", "50m", "10m"}:
         raise ValueError(
             "natural_earth_resolution must be one of '110m', '50m', or '10m'."
         )
-
-    land = land_lookup[natural_earth_resolution]
+    # v5.0.0 is already available in the analysis environment.  Resolve only
+    # the requested layer so a 110m run does not eagerly instantiate land_50
+    # and emit its unrelated polar-coverage warning.
+    natural_earth = regionmask.defined_regions.natural_earth_v5_0_0
+    resolution_token = natural_earth_resolution.removesuffix("m")
+    land = getattr(natural_earth, f"land_{resolution_token}")
     land_mask = land.mask(data[lon_name], data[lat_name])
     geometry_ocean = land_mask.isnull()
 
@@ -1750,6 +1802,9 @@ def product_paths(
     elif source == "smyle":
         source_dir = "CESM-SMYLE"
         source_name = "smyle"
+    elif source == "nmme":
+        source_dir = "NMME"
+        source_name = "nmme"
     else:
         source_dir = source
         source_name = source
@@ -1776,6 +1831,119 @@ def model_field_dataset(
 ) -> xr.Dataset:
     years = list(range(args.start_year, args.end_year + 1))
     archive_field, field = str(settings["archive_field"]), str(settings["field"])
+    if source == "nmme":
+        model_fields: list[xr.DataArray] = []
+        model_failures: list[str] = []
+        valid_time = None
+        models = [
+            str(model).strip()
+            for model in getattr(args, "nmme_models", [])
+            if str(model).strip()
+        ]
+        for model_number, model in enumerate(models, start=1):
+            LOG.info(
+                "NMME init %02d: loading model %d/%d: %s",
+                init_month,
+                model_number,
+                len(models),
+                model,
+            )
+            model_args = copy.copy(args)
+            model_args.nmme_models = [model]
+            processed = None
+            try:
+                processed = nmme_field_dataset(init_month, settings, model_args)
+                if settings["frequency"] == "seasonal":
+                    processed_for_field = cal.mon_to_seas_dask(processed)
+                else:
+                    processed_for_field = processed
+                selected = select_field(processed_for_field, field)
+                processed_for_field, selected = drop_empty_leads(
+                    processed_for_field,
+                    selected,
+                )
+                data = convert_units(selected, field).rename(field)
+                source_dataset = data.to_dataset()
+                regridder = regrid.make_regridder(
+                    source_dataset,
+                    destination_grid,
+                    method=args.regrid_method,
+                    periodic=not args.no_periodic,
+                )
+                model_regridded = regridder(source_dataset)[field]
+                model_regridded.attrs.update(data.attrs)
+                model_regridded = common_year_subset(
+                    model_regridded,
+                    years,
+                ).astype("float32")
+                LOG.info(
+                    "NMME init %02d: materializing %s on the target grid",
+                    init_month,
+                    model,
+                )
+                model_regridded = model_regridded.compute().chunk(
+                    {
+                        "Y": min(5, model_regridded.sizes.get("Y", 1)),
+                        "L": -1,
+                        "M": 1,
+                        "lat": min(36, model_regridded.sizes.get("lat", 1)),
+                        "lon": min(72, model_regridded.sizes.get("lon", 1)),
+                    }
+                )
+                if valid_time is None:
+                    valid_time = common_year_subset(
+                        processed_for_field["time"],
+                        years,
+                    ).load()
+                model_fields.append(model_regridded)
+            except Exception as error:
+                model_failures.append(f"{model}: {error}")
+                LOG.warning(
+                    "NMME init %02d: skipping %s after processing failure: %s",
+                    init_month,
+                    model,
+                    error,
+                )
+            finally:
+                if processed is not None:
+                    processed.close()
+
+        if not model_fields or valid_time is None:
+            raise ValueError(
+                "No NMME model fields could be prepared: "
+                + "; ".join(model_failures)
+            )
+        if model_failures:
+            LOG.warning(
+                "NMME init %02d completed with %d skipped model(s): %s",
+                init_month,
+                len(model_failures),
+                "; ".join(model_failures),
+            )
+        data = xr.concat(
+            model_fields,
+            dim="M",
+            join="outer",
+            combine_attrs="drop_conflicts",
+        )
+        data.attrs.update(model_fields[0].attrs)
+        anomalies, climatology = stats.remove_drift(
+            data,
+            valid_time,
+            args.clim_start,
+            args.clim_end,
+        )
+        return xr.Dataset(
+            {
+                field: data,
+                f"{field}_anom": anomalies.rename(f"{field}_anom"),
+                f"{field}_drift_climatology": climatology.rename(
+                    f"{field}_drift_climatology"
+                ),
+                "valid_time": valid_time,
+            }
+        )
+
     if source == "e3sm":
         raw = e3sm_access.get_monthly_data(
             data_dir=args.e3sm_data_dir,
@@ -1805,14 +1973,36 @@ def model_field_dataset(
             freq="seas" if settings["frequency"] == "seasonal" else "mon",
             chunks={"Y": 3, "L": -1, "M": 2, "lat": 96, "lon": 144},
         )
-    elif source == "nmme":
-        raw = nmme_field_dataset(init_month, settings, args)
-        processed = cal.mon_to_seas_dask(raw) if settings["frequency"] == "seasonal" else raw
     else:
         raise ValueError(f"Unsupported model source: {source}")
     selected = select_field(processed, field)
     processed, selected = drop_empty_leads(processed, selected)
-    data = convert_units(selected, field).rename(field)
+    if field == "SST" and source in {"e3sm", "smyle"}:
+        if source == "e3sm":
+            source_id = f"E3SM:{args.e3sm_cache_tag or args.e3sm_case_prefix}"
+            land_mask_path = (
+                Path(args.outdir)
+                / str(args.e3sm_cache_tag or "e3sm")
+                / "fixed"
+                / "sftlf.E3SM.nc"
+            )
+        else:
+            source_id = "CESM-SMYLE"
+            land_mask_path = (
+                Path(args.outdir)
+                / "CESM-SMYLE"
+                / "fixed"
+                / "sftlf.CESM-SMYLE.nc"
+            )
+        data, _ = sst_utils.prepare_sst(
+            selected,
+            apply_land_mask=bool(args.model_sst_land_mask),
+            land_mask_path=land_mask_path,
+            source=source_id,
+        )
+        data = data.rename(field)
+    else:
+        data = convert_units(selected, field).rename(field)
     source_dataset = data.to_dataset()
     regridder = regrid.make_regridder(
         source_dataset,

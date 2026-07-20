@@ -3,6 +3,8 @@ from typing import Dict, Any, Optional, Tuple
 import dask
 import xarray as xr
 
+from esp_lab.utils.sst_utils import normalize_sst_to_degc
+
 from .regional import build_landmask, compute_weights, compute_regional_mean
 from .drift import remove_model_drift
 from .skill import compute_skill
@@ -176,8 +178,7 @@ class S2DDiagnostics:
         ds = ds.copy()
 
         if self.cfg.field == "TS" and self.convert_ts_to_degC:
-            ds[self.cfg.field] = ds[self.cfg.field] - 273.15
-            ds[self.cfg.field].attrs["units"] = "degC"
+            ds[self.cfg.field] = normalize_sst_to_degc(ds[self.cfg.field])
 
         return ds
 

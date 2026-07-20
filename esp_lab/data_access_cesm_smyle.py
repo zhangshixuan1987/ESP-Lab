@@ -284,6 +284,97 @@ def build_init_tags(
     return tags
 
 
+VERIFICATION_TIME_VERSION = "init_tag_plus_lead_v1"
+
+
+def expected_verification_time(
+    init_tags: Iterable[object],
+    leads: Iterable[object],
+) -> xr.DataArray:
+    """Build deterministic mid-month verification dates from init tags and leads."""
+    init_values = [str(value) for value in init_tags]
+    lead_values = [int(value) for value in leads]
+    values = []
+    for init_tag in init_values:
+        if len(init_tag) < 6 or not init_tag[:6].isdigit():
+            raise ValueError(f"Invalid CESM-SMYLE initialization tag: {init_tag!r}")
+        init_year = int(init_tag[:4])
+        init_month = int(init_tag[4:6])
+        row = []
+        for lead in lead_values:
+            if lead < 1:
+                raise ValueError(f"CESM-SMYLE lead values must be >= 1, got {lead}")
+            month_index = init_month - 1 + lead - 1
+            row.append(
+                cftime.DatetimeNoLeap(
+                    init_year + month_index // 12,
+                    month_index % 12 + 1,
+                    15,
+                )
+            )
+        values.append(row)
+    return xr.DataArray(
+        np.asarray(values, dtype=object),
+        dims=("Y", "L"),
+        coords={"Y": init_values, "L": lead_values},
+        name="time",
+        attrs={
+            "long_name": "forecast verification time",
+            "construction": VERIFICATION_TIME_VERSION,
+        },
+    )
+
+
+def verification_time_mismatch_count(
+    ds: xr.Dataset,
+    *,
+    init_month: Optional[int] = None,
+) -> int:
+    """Count dates inconsistent with the dataset's initialization tags and leads."""
+    if "Y" not in ds.coords or "L" not in ds.coords:
+        raise ValueError("CESM-SMYLE dataset must have Y and L coordinates.")
+    if init_month is not None:
+        bad_init = [str(value) for value in ds.Y.values if int(str(value)[4:6]) != init_month]
+        if bad_init:
+            raise ValueError(
+                f"Dataset contains initialization tags inconsistent with month {init_month:02d}: "
+                f"{bad_init[:3]}"
+            )
+    expected = expected_verification_time(ds.Y.values, ds.L.values)
+    if "time" not in ds or ds["time"].dims != ("Y", "L"):
+        return expected.size
+    actual = ds["time"]
+    mismatch = (
+        (actual.dt.year != expected.dt.year)
+        | (actual.dt.month != expected.dt.month)
+        | (actual.dt.day != expected.dt.day)
+    )
+    return int(mismatch.sum().compute())
+
+
+def ensure_verification_time(
+    ds: xr.Dataset,
+    *,
+    init_month: Optional[int] = None,
+    warn_on_repair: bool = True,
+) -> xr.Dataset:
+    """Return *ds* with a valid deterministic ``time(Y, L)`` coordinate."""
+    mismatch_count = verification_time_mismatch_count(ds, init_month=init_month)
+    if mismatch_count and warn_on_repair:
+        warnings.warn(
+            f"Repairing {mismatch_count} inconsistent CESM-SMYLE verification "
+            "timestamp(s) from initialization tags and lead values.",
+            stacklevel=2,
+        )
+    expected = expected_verification_time(ds.Y.values, ds.L.values)
+    expected = expected.assign_coords(Y=ds.Y, L=ds.L)
+    out = ds.copy()
+    out["time"] = expected
+    out.attrs["verification_time_construction"] = VERIFICATION_TIME_VERSION
+    out.attrs["verification_time_repaired_count"] = mismatch_count
+    return out
+
+
 def expected_yyyymm_range(init_tag: str, nlead: int) -> Tuple[str, str]:
     """
     Return expected (start_yyyymm, end_yyyymm) for a given init tag and nlead.
@@ -724,6 +815,11 @@ def get_monthly_data(
     n_loaded = ds.sizes["M"]
     ds = ds.assign_coords(M=("M", members[:n_loaded]))
     ds = ds.transpose("Y", "L", "M", ...)
+    # Do not trust a lazily concatenated source ``time`` variable here.  Older
+    # benchmark files demonstrated that it can become detached from Y during
+    # multi-file combination even while the field data remain correctly
+    # ordered.  Y and L fully determine verification time for this archive.
+    ds = ensure_verification_time(ds, warn_on_repair=False)
     if post_chunks:
         ds = ds.chunk(post_chunks)
 
@@ -838,4 +934,5 @@ def load_benchmark(
     if chunks is None:
         # f09_g17 grid is 192 lat × 288 lon; chunk at half-grid
         chunks = {"Y": 3, "L": -1, "M": 2, "lat": 96, "lon": 144}
-    return xr.open_dataset(str(fpath), chunks=chunks)
+    ds = xr.open_dataset(str(fpath), chunks=chunks)
+    return ensure_verification_time(ds, init_month=init_month)

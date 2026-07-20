@@ -2,6 +2,14 @@ from dataclasses import dataclass, field as dc_field
 from typing import Optional, Sequence, Dict, Union
 
 
+DEFAULT_CLIMATOLOGY_START_YEAR = 1981
+DEFAULT_CLIMATOLOGY_END_YEAR = 2010
+DEFAULT_CLIMATOLOGY_YEARS = (
+    DEFAULT_CLIMATOLOGY_START_YEAR,
+    DEFAULT_CLIMATOLOGY_END_YEAR,
+)
+
+
 @dataclass
 class S2DConfig:
     # -----------------------------
@@ -31,8 +39,8 @@ class S2DConfig:
     # -----------------------------
     # Climatology (drift / skill)
     # -----------------------------
-    climy0: int = 1980
-    climy1: int = 1983
+    climy0: int = DEFAULT_CLIMATOLOGY_START_YEAR
+    climy1: int = DEFAULT_CLIMATOLOGY_END_YEAR
 
     # -----------------------------
     # Output

@@ -80,8 +80,22 @@ def configuration_signature(
                 nmme_root=str(Path(args.nmme_root).resolve()),
                 nmme_models=list(args.nmme_models),
                 nmme_field=str(args.nmme_field),
-                nmme_chunks=str(args.nmme_chunks),
             )
+            if str(settings["field"]) == "SST":
+                signature["nmme_sst_mask_version"] = (
+                    core.nmme_access.NMME_SST_MASK_VERSION
+                )
+                signature["nmme_sst_land_mask"] = bool(
+                    args.nmme_sst_land_mask
+                )
+                signature["nmme_fixed_dir"] = str(
+                    Path(args.nmme_fixed_dir).resolve()
+                )
+        if source in {"e3sm", "smyle"} and str(settings["field"]) == "SST":
+            signature["model_sst_preprocessing_version"] = (
+                core.sst_utils.SST_PREPROCESSING_VERSION
+            )
+            signature["model_sst_land_mask"] = bool(args.model_sst_land_mask)
     if include_mode:
         signature["mode"] = str(settings["mode"])
         signature["eof_number"] = int(settings["eof_number"])
@@ -113,7 +127,22 @@ def cached_product_matches(path: Path, attribute: str, expected: str) -> bool:
     except Exception as error:
         LOG.warning("Cannot read cached product %s: %s", path, error)
         return False
-    if actual != expected:
+    def normalized(value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        try:
+            payload = json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return value
+        if isinstance(payload, dict):
+            # Dask chunking changes execution cost, not scientific content.
+            # Ignore this legacy signature field so products written before
+            # chunking was made operational remain reusable.
+            payload.pop("nmme_chunks", None)
+            return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return value
+
+    if normalized(actual) != normalized(expected):
         LOG.info("%s has an incompatible or missing %s", path, attribute)
         return False
     return True
@@ -431,8 +460,10 @@ def write_manifest(
     products: dict[str, dict[str, str]],
     station_definition: core.StationNaoDefinition,
 ) -> Path:
-    name = "nao_manifest.json" if args.legacy_nao_layout else "modes_manifest.json"
-    path = Path(args.outdir) / name
+    if args.legacy_nao_layout:
+        path = Path(args.outdir) / "nao_manifest.json"
+    else:
+        path = Path(args.outdir) / "_manifests" / "modes_manifest.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "schema_version": PRODUCT_CONFIGURATION_SCHEMA,

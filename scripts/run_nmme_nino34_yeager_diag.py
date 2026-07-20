@@ -24,8 +24,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 
+from esp_lab import data_access_nmme as nmme_access
 from esp_lab import stats
-from esp_lab.paths import NMME_DIAG_DIR
+from esp_lab.diagnostics import (
+    DEFAULT_CLIMATOLOGY_END_YEAR,
+    DEFAULT_CLIMATOLOGY_START_YEAR,
+)
+from esp_lab.paths import NMME_DIAG_DIR, NMME_FIXED_DIR
 from esp_lab.utils import calendar_utils as cal
 
 
@@ -81,6 +86,7 @@ SEASON_LABELS_BY_MONTH = {
     11: ["DJF", "MAM", "JJA", "SON", "DJF", "MAM", "JJA"],
 }
 _S_CHUNK_RE = re.compile(r"_S(\d+)-(\d+)\.nc$")
+ELI_ALGORITHM_VERSION = 2
 
 
 def _date_slice_start(year: int) -> str:
@@ -233,6 +239,9 @@ def _open_member_sst(
     model: str,
     data_start: int,
     data_end: int,
+    *,
+    apply_land_mask: bool,
+    fixed_dir: Path,
 ) -> xr.Dataset:
     files = sorted(member_dir.glob(f"sst_{model}_{member_dir.name}_S*.nc"))
     if not files:
@@ -246,6 +255,14 @@ def _open_member_sst(
     )
     ds = _decode_cf_time(ds, "S")
     ds = ds.sel(S=slice(_date_slice_start(data_start), _date_slice_end(data_end)))
+    ds["sst"] = nmme_access.mask_invalid_sst(
+        ds["sst"],
+        apply_land_mask=apply_land_mask,
+        lon_name="X",
+        lat_name="Y",
+        model=model,
+        fixed_dir=fixed_dir,
+    )
     return ds
 
 
@@ -278,6 +295,8 @@ def _with_lon_0_360(da: xr.DataArray, lon_name: str) -> xr.DataArray:
 def _eli_from_sst(sst: xr.DataArray, lon_name: str, lat_name: str) -> xr.DataArray:
     """Compute the equatorial longitude index from a regular SST grid."""
     sst = _with_lon_0_360(sst, lon_name)
+    sst = sst.where(np.isfinite(sst))
+
     lat_slice = slice(-5.0, 5.0)
     tropical = sst.sel({lat_name: lat_slice})
     pacific = sst.sel({lat_name: lat_slice, lon_name: slice(120.0, 290.0)})
@@ -303,16 +322,32 @@ def _model_eli(ds: xr.Dataset) -> xr.DataArray:
     return _eli_from_sst(ds["sst"], "X", "Y")
 
 
-def _remove_init_month_climatology(regsst: xr.DataArray, model: str) -> xr.DataArray:
+def _remove_init_month_climatology(
+    regsst: xr.DataArray,
+    model: str,
+    clim_start: int,
+    clim_end: int,
+) -> xr.DataArray:
+    def remove_period_climatology(part: xr.DataArray) -> xr.DataArray:
+        in_climatology = (part["S"].dt.year >= clim_start) & (part["S"].dt.year <= clim_end)
+        climatology = part.where(in_climatology, drop=True)
+        if climatology.sizes.get("S", 0) == 0:
+            raise ValueError(
+                f"{model} has no initialization dates in the "
+                f"{clim_start}-{clim_end} climatology window"
+            )
+        monthly_mean = climatology.groupby("S.month").mean(("S", "M"), skipna=True)
+        return part.groupby("S.month") - monthly_mean
+
     if model in SPLIT_CLIMO_MODELS:
         parts = []
         for start, end in [(None, "1998-12-30"), ("1999-01-01", None)]:
             part = regsst.sel(S=slice(start, end))
             if part.sizes.get("S", 0) > 0:
-                parts.append(part.groupby("S.month") - part.groupby("S.month").mean(("S", "M")))
+                parts.append(remove_period_climatology(part))
         if parts:
             return xr.concat(parts, dim="S").sortby("S")
-    return regsst.groupby("S.month") - regsst.groupby("S.month").mean(("S", "M"))
+    return remove_period_climatology(regsst)
 
 
 def _standardize_model_index(da: xr.DataArray, clim_start: int, clim_end: int) -> xr.DataArray:
@@ -332,9 +367,13 @@ def _derive_model_indices(
     derived: dict[str, xr.DataArray] = {}
     if "IOD" in regions and {"IOD_West", "IOD_East"}.issubset(base):
         derived["IOD"] = (base["IOD_West"] - base["IOD_East"]).assign_attrs(
-            long_name="Indian Ocean Dipole regional mean SST",
+            long_name="Dipole Mode Index (IOD West SST anomaly minus IOD East SST anomaly)",
             region="IOD",
             units="degC",
+            index_name="DMI",
+            definition="anomaly(IOD_West SST) - anomaly(IOD_East SST)",
+            climatology_start_year=clim_start,
+            climatology_end_year=clim_end,
         )
     if "ONI" in regions and "Nino3.4" in base:
         derived["ONI"] = base["Nino3.4"].rolling(L=3, center=True, min_periods=1).mean().assign_attrs(
@@ -378,13 +417,33 @@ def load_or_compute_model_regsst(
     clim_end: int,
     *,
     force: bool = False,
+    apply_land_mask: bool = True,
+    fixed_dir: Path = NMME_FIXED_DIR,
 ) -> xr.DataArray:
     period = _period_tag(data_start, data_end)
     label = _index_file_label(region)
-    cache_suffix = f"{label}_mon_{period}.nc" if region == "ELI" else f"{label}_mon_anom_{period}.nc"
+    cache_suffix = (
+        f"{label}_mon_{period}.nc"
+        if region == "ELI"
+        else f"{label}_mon_anom_{period}_clim{clim_start}-{clim_end}.nc"
+    )
     cache_file = _region_dir(outdir, region, "processed") / f"NMME_{model}_{cache_suffix}"
     if cache_file.exists() and not force:
-        return xr.open_dataset(cache_file)["sst"]
+        cached_dataset = xr.open_dataset(cache_file)
+        cached = cached_dataset["sst"]
+        cache_is_current = (
+            cached.attrs.get("nmme_sst_mask_version")
+            == nmme_access.NMME_SST_MASK_VERSION
+            and cached.attrs.get("nmme_sst_land_mask")
+            == str(bool(apply_land_mask))
+        )
+        if region == "ELI":
+            cache_is_current = cache_is_current and (
+                cached.attrs.get("eli_algorithm_version") == ELI_ALGORITHM_VERSION
+            )
+        if cache_is_current:
+            return cached
+        cached_dataset.close()
 
     model_dir = root / model
     if not model_dir.is_dir():
@@ -397,7 +456,14 @@ def load_or_compute_model_regsst(
     for member_dir in _sorted_member_dirs(model_dir):
         member_id = _member_number(member_dir)
         print(f"[NMME] {model} {member_dir.name}")
-        with _open_member_sst(member_dir, model, data_start, data_end) as ds:
+        with _open_member_sst(
+            member_dir,
+            model,
+            data_start,
+            data_end,
+            apply_land_mask=apply_land_mask,
+            fixed_dir=fixed_dir,
+        ) as ds:
             if region == "ELI":
                 eli_members.append(_model_eli(ds).load())
             else:
@@ -417,12 +483,22 @@ def load_or_compute_model_regsst(
         for base_region, members in members_by_region.items():
             regsst = xr.concat(members, dim=member_coord)
             regsst = regsst.assign_coords(L=np.arange(regsst.sizes["L"]) + 1)
-            base_anom[base_region] = _remove_init_month_climatology(regsst, model)
+            base_anom[base_region] = _remove_init_month_climatology(
+                regsst,
+                model,
+                clim_start,
+                clim_end,
+            )
         all_indices = {**base_anom, **_derive_model_indices(base_anom, [region], clim_start, clim_end)}
         if region not in all_indices:
             raise ValueError(f"Could not compute requested NMME region {region!r}")
         regsst = all_indices[region]
-    long_name = f"{model} NMME Equatorial Longitude Index" if region == "ELI" else f"{model} NMME {region} SST anomaly"
+    if region == "ELI":
+        long_name = f"{model} NMME Equatorial Longitude Index"
+    elif region == "IOD":
+        long_name = f"{model} NMME Dipole Mode Index anomaly"
+    else:
+        long_name = f"{model} NMME {region} SST anomaly"
     regsst.attrs.update(
         {
             "long_name": long_name,
@@ -434,10 +510,28 @@ def load_or_compute_model_regsst(
             "climatology": (
                 "raw longitude centroid; drift correction is applied downstream"
                 if region == "ELI"
-                else "init-month climatology removed before drift correction"
+                else f"{clim_start}-{clim_end} init-month climatology removed before drift correction"
+            ),
+            **(
+                {}
+                if region == "ELI"
+                else {
+                    "climatology_start_year": clim_start,
+                    "climatology_end_year": clim_end,
+                }
+            ),
+            "nmme_sst_mask_version": nmme_access.NMME_SST_MASK_VERSION,
+            "nmme_sst_land_mask": str(bool(apply_land_mask)),
+            "valid_sst_mask": (
+                "unit-aware physical SST bounds using archive scale_min when "
+                "available"
             ),
         }
     )
+    if region == "ELI":
+        regsst.attrs.update(
+            eli_algorithm_version=ELI_ALGORITHM_VERSION,
+        )
 
     cache_file.parent.mkdir(parents=True, exist_ok=True)
     _write_netcdf_replace(
@@ -535,10 +629,16 @@ def _derive_obs_indices(
 ) -> dict[str, xr.DataArray]:
     derived: dict[str, xr.DataArray] = {}
     if "IOD" in regions and {"IOD_West", "IOD_East"}.issubset(base):
-        derived["IOD"] = (base["IOD_West"] - base["IOD_East"]).assign_attrs(
-            long_name="Indian Ocean Dipole regional mean SST",
+        west_anom = _obs_anom(base["IOD_West"], clim_start, clim_end)
+        east_anom = _obs_anom(base["IOD_East"], clim_start, clim_end)
+        derived["IOD"] = (west_anom - east_anom).assign_attrs(
+            long_name="Dipole Mode Index (IOD West SST anomaly minus IOD East SST anomaly)",
             region="IOD",
             units="degC",
+            index_name="DMI",
+            definition="anomaly(IOD_West SST) - anomaly(IOD_East SST)",
+            climatology_start_year=clim_start,
+            climatology_end_year=clim_end,
         )
     if "ONI" in regions and "Nino3.4" in base:
         derived["ONI"] = _obs_anom(base["Nino3.4"], clim_start, clim_end).rolling(
@@ -607,6 +707,8 @@ def process_nmme(
     clim_end: int,
     *,
     force: bool = False,
+    apply_land_mask: bool = True,
+    fixed_dir: Path = NMME_FIXED_DIR,
 ) -> dict[str, dict[int, xr.DataArray] | xr.DataArray]:
     reg_models = []
     loaded_models = []
@@ -622,6 +724,8 @@ def process_nmme(
                 clim_start,
                 clim_end,
                 force=force,
+                apply_land_mask=apply_land_mask,
+                fixed_dir=fixed_dir,
             )
         except Exception as exc:
             warnings.warn(f"[NMME] skipping {model}: {exc}", stacklevel=2)
@@ -679,6 +783,8 @@ def process_nmme(
         "seasonal_drift": seasonal_drift,
         "data_start": data_start,
         "data_end": data_end,
+        "climatology_start": clim_start,
+        "climatology_end": clim_end,
         "region": region,
     }
 
@@ -758,8 +864,23 @@ def save_timeseries_outputs(
     period = _period_tag(processed["data_start"], processed["data_end"])
     region = str(processed["region"])
     label = _index_file_label(region)
+    clim_start = int(processed["climatology_start"])
+    clim_end = int(processed["climatology_end"])
     timeseries_dir = _region_dir(outdir, region, "timeseries")
     timeseries_dir.mkdir(parents=True, exist_ok=True)
+
+    output_attrs = {
+        "region": region,
+        "climatology_start_year": clim_start,
+        "climatology_end_year": clim_end,
+    }
+    if region == "IOD":
+        output_attrs.update(
+            {
+                "index_name": "DMI",
+                "definition": "anomaly(IOD_West SST) - anomaly(IOD_East SST)",
+            }
+        )
 
     for init_month in INIT_MONTHS:
         ds_mon = xr.Dataset(
@@ -768,6 +889,8 @@ def save_timeseries_outputs(
                 "time": processed["monthly_time"][init_month],
             }
         )
+        ds_mon.attrs.update(output_attrs)
+        ds_mon["sst"].attrs.update(output_attrs)
         _write_netcdf_replace(ds_mon, timeseries_dir / f"NMME{init_month:02d}_{label}_mon_dd_{period}.nc")
 
         ds_seas = xr.Dataset(
@@ -776,6 +899,8 @@ def save_timeseries_outputs(
                 "time": processed["seasonal_time"][init_month],
             }
         )
+        ds_seas.attrs.update(output_attrs)
+        ds_seas["sst"].attrs.update(output_attrs)
         _write_netcdf_replace(ds_seas, timeseries_dir / f"NMME{init_month:02d}_{label}_seas_dd_{period}.nc")
     return timeseries_dir
 
@@ -932,6 +1057,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nmme-root", type=Path, default=DEFAULT_NMME_ROOT)
     parser.add_argument("--outdir", type=Path, default=DEFAULT_OUTDIR)
     parser.add_argument(
+        "--nmme-fixed-dir",
+        type=Path,
+        default=NMME_FIXED_DIR,
+        help="Directory for reusable per-model NMME fixed fields.",
+    )
+    parser.add_argument(
         "--regions",
         nargs="+",
         default=VALID_REGIONS,
@@ -958,8 +1089,10 @@ def parse_args() -> argparse.Namespace:
         default="all",
         help="Named model set to use when --models is omitted.",
     )
-    parser.add_argument("--clim-start", type=int, default=1982)
-    parser.add_argument("--clim-end", type=int, default=2016)
+    parser.add_argument(
+        "--clim-start", type=int, default=DEFAULT_CLIMATOLOGY_START_YEAR
+    )
+    parser.add_argument("--clim-end", type=int, default=DEFAULT_CLIMATOLOGY_END_YEAR)
     parser.add_argument(
         "--data-start",
         default="1982",
@@ -971,6 +1104,15 @@ def parse_args() -> argparse.Namespace:
         help="Last initialization year to process, or 'auto' for the latest selected-model data year.",
     )
     parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--nmme-sst-land-mask",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Apply the Natural Earth land mask to NMME SST immediately after "
+            "reading (default: enabled)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -1009,6 +1151,8 @@ def main() -> None:
             args.clim_start,
             args.clim_end,
             force=args.force,
+            apply_land_mask=args.nmme_sst_land_mask,
+            fixed_dir=args.nmme_fixed_dir,
         )
         timeseries_dir = save_timeseries_outputs(args.outdir, processed)
         print(f"Saved NMME SST-index time series under: {timeseries_dir}")

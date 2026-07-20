@@ -519,6 +519,13 @@ def validate_monthly_dataset(
             f"expected {len(members)}."
         )
 
+    mismatch_count = smyle_access.verification_time_mismatch_count(ds)
+    if mismatch_count:
+        raise ValueError(
+            f"Loaded {field!r} has {mismatch_count} verification timestamp(s) "
+            "that disagree with its Y initialization tags and L lead values."
+        )
+
 
 def load_monthly_benchmark_dataset(
     *,
@@ -616,13 +623,30 @@ def process_one(
         for freq in freqs
     }
 
-    # Skip if all requested output files already exist and --force is not set.
+    # Skip only when all existing products also have internally consistent
+    # verification dates.  This automatically invalidates legacy benchmarks
+    # whose time(Y,L) coordinate became detached during multi-file concat.
     if all(path.exists() for path in outfiles.values()) and not force:
-        log.info(
-            "  [SKIP]   %s (already exists)",
-            ", ".join(path.name for path in outfiles.values())
+        bad_time_files = []
+        for path in outfiles.values():
+            with xr.open_dataset(path) as existing:
+                mismatch_count = smyle_access.verification_time_mismatch_count(
+                    existing,
+                    init_month=init_month,
+                )
+            if mismatch_count:
+                bad_time_files.append(f"{path.name} ({mismatch_count} bad dates)")
+        if not bad_time_files:
+            log.info(
+                "  [SKIP]   %s (already exists)",
+                ", ".join(path.name for path in outfiles.values())
+            )
+            return "skipped"
+        log.warning(
+            "  [REBUILD] invalid verification time: %s",
+            ", ".join(bad_time_files),
         )
-        return "skipped"
+        force = True
 
     if dry_run:
         log.info(

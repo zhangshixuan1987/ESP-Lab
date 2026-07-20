@@ -20,17 +20,234 @@ Notes
   climatology is applied: 1982–1998 and 1999–2016.
 """
 
+import fcntl
+import os
 import warnings
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from uuid import uuid4
 
 import numpy as np
 import xarray as xr
+
+from esp_lab.paths import NMME_FIXED_DIR
 
 _SPLIT_CLIMO_MODELS = {"COLA-RSMAS-CCSM4", "NCEP-CFSv2"}
 _SPLIT_PERIOD_1 = ("1982-01-01", "1998-12-01")
 _SPLIT_PERIOD_2 = ("1999-01-01", "2016-12-01")
 _DEFAULT_INIT_MONTHS = [2, 5, 8, 11]
+NMME_SST_MASK_VERSION = 3
+NMME_LAND_MASK_VERSION = 1
+
+_KELVIN_UNITS = {"k", "kelvin", "kelvin_scale", "degree_k", "degrees_k"}
+_CELSIUS_UNITS = {
+    "c",
+    "degc",
+    "degree_c",
+    "degrees_c",
+    "celsius",
+    "degree_celsius",
+    "degrees_celsius",
+}
+
+
+@lru_cache(maxsize=8)
+def _natural_earth_ocean_mask_values(
+    longitude: tuple[float, ...], latitude: tuple[float, ...]
+) -> np.ndarray:
+    """Return a cached Natural Earth ocean mask for a regular grid."""
+    import regionmask
+
+    lon_2d, lat_2d = np.meshgrid(
+        np.asarray(longitude),
+        np.asarray(latitude),
+    )
+    land = regionmask.defined_regions.natural_earth_v5_0_0.land_110
+    return np.asarray(
+        land.mask(lon_2d, lat=lat_2d, wrap_lon=360).isnull(),
+        dtype=bool,
+    )
+
+
+def _natural_earth_ocean_mask(
+    sst: xr.DataArray, lon_name: str, lat_name: str
+) -> xr.DataArray:
+    lon = tuple(np.asarray(sst[lon_name], dtype=float).tolist())
+    lat = tuple(np.asarray(sst[lat_name], dtype=float).tolist())
+    values = _natural_earth_ocean_mask_values(lon, lat)
+    return xr.DataArray(
+        values,
+        dims=(lat_name, lon_name),
+        coords={lat_name: sst[lat_name], lon_name: sst[lon_name]},
+        name="ocean_mask",
+    )
+
+
+def nmme_land_mask_path(model: str, fixed_dir: str | Path = NMME_FIXED_DIR) -> Path:
+    """Return the fixed-field path for one model's NMME land mask."""
+    safe_model = model.replace("/", "_")
+    return Path(fixed_dir) / f"sftlf.NMME.{safe_model}.nc"
+
+
+def _cached_land_mask_matches_grid(
+    dataset: xr.Dataset,
+    sst: xr.DataArray,
+    lon_name: str,
+    lat_name: str,
+    model: str,
+) -> bool:
+    if "sftlf" not in dataset:
+        return False
+    if dataset.attrs.get("nmme_land_mask_version") != NMME_LAND_MASK_VERSION:
+        return False
+    if dataset.attrs.get("model") != model:
+        return False
+    for name in (lon_name, lat_name):
+        if name not in dataset.coords or dataset[name].shape != sst[name].shape:
+            return False
+        if not np.allclose(dataset[name], sst[name], rtol=0.0, atol=1.0e-10):
+            return False
+    return True
+
+
+def load_or_create_nmme_land_mask(
+    sst: xr.DataArray,
+    *,
+    model: str,
+    fixed_dir: str | Path = NMME_FIXED_DIR,
+    lon_name: str,
+    lat_name: str,
+) -> tuple[xr.DataArray, Path]:
+    """Load or atomically create a grid-validated land mask for one model."""
+    path = nmme_land_mask_path(model, fixed_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_suffix(path.suffix + ".lock")
+
+    with lock_path.open("w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        if path.exists():
+            try:
+                with xr.open_dataset(path) as cached:
+                    if _cached_land_mask_matches_grid(
+                        cached, sst, lon_name, lat_name, model
+                    ):
+                        return cached["sftlf"].load().astype(bool), path
+            except Exception:
+                pass
+
+        ocean_mask = _natural_earth_ocean_mask(sst, lon_name, lat_name)
+        land_mask = (~ocean_mask).astype("int8").rename("sftlf")
+        land_mask.attrs.update(
+            long_name="Natural Earth land mask on the native NMME model grid",
+            units="1",
+            flag_values=np.asarray([0, 1], dtype="int8"),
+            flag_meanings="ocean land",
+        )
+        output = land_mask.to_dataset()
+        output.attrs.update(
+            model=model,
+            source="Natural Earth v5.0.0 land_110",
+            nmme_land_mask_version=NMME_LAND_MASK_VERSION,
+        )
+        temporary = path.with_name(f".{path.name}.tmp.{uuid4().hex}")
+        try:
+            output.to_netcdf(temporary)
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return land_mask.astype(bool), path
+
+
+def mask_invalid_sst(
+    sst: xr.DataArray,
+    *,
+    apply_land_mask: bool = True,
+    lon_name: str | None = None,
+    lat_name: str | None = None,
+    model: str | None = None,
+    fixed_dir: str | Path | None = None,
+) -> xr.DataArray:
+    """Mask nonphysical finite fill values in NMME SST data.
+
+    Some member archives encode land as 0 K instead of a missing value.  This
+    normalization belongs at the data-access boundary so every downstream SST
+    diagnostic sees the same valid field.
+    """
+    valid = np.isfinite(sst)
+    units = str(sst.attrs.get("units", "")).strip().lower()
+    scale_min = sst.attrs.get("scale_min")
+    try:
+        scale_min_value = float(scale_min)
+    except (TypeError, ValueError):
+        scale_min_value = np.nan
+
+    if units in _KELVIN_UNITS:
+        lower = scale_min_value if np.isfinite(scale_min_value) else 260.0
+        if lower < 100.0:
+            lower += 273.15
+        upper = 330.0
+        sanity_description = f"{lower:g} <= SST <= {upper:g} K"
+    elif units in _CELSIUS_UNITS:
+        lower = scale_min_value if np.isfinite(scale_min_value) else -13.15
+        if lower > 100.0:
+            lower -= 273.15
+        upper = 56.85
+        sanity_description = f"{lower:g} <= SST <= {upper:g} degC"
+    elif np.isfinite(scale_min_value):
+        lower = scale_min_value
+        upper = None
+        sanity_description = f"SST >= archive scale_min ({lower:g})"
+    else:
+        lower = None
+        upper = None
+        sanity_description = "finite SST"
+
+    if lower is not None:
+        valid = valid & (sst >= lower)
+    if upper is not None:
+        valid = valid & (sst <= upper)
+
+    if apply_land_mask:
+        lon_name = lon_name or next(
+            (name for name in ("X", "lon", "longitude") if name in sst.coords),
+            None,
+        )
+        lat_name = lat_name or next(
+            (name for name in ("Y", "lat", "latitude") if name in sst.coords),
+            None,
+        )
+        if lon_name is None or lat_name is None:
+            raise ValueError(
+                "Could not identify longitude/latitude coordinates for the "
+                "NMME SST land mask."
+            )
+        land_mask_file = None
+        if model is not None and fixed_dir is not None:
+            land_mask, land_mask_file = load_or_create_nmme_land_mask(
+                sst,
+                model=model,
+                fixed_dir=fixed_dir,
+                lon_name=lon_name,
+                lat_name=lat_name,
+            )
+            ocean_mask = ~land_mask
+        else:
+            ocean_mask = _natural_earth_ocean_mask(sst, lon_name, lat_name)
+        valid = valid & ocean_mask
+    else:
+        land_mask_file = None
+
+    masked = sst.where(valid)
+    masked.attrs.update(sst.attrs)
+    masked.attrs.update(
+        valid_sst_mask=sanity_description,
+        nmme_sst_land_mask=str(bool(apply_land_mask)),
+        nmme_sst_mask_version=NMME_SST_MASK_VERSION,
+    )
+    if land_mask_file is not None:
+        masked.attrs["nmme_sst_land_mask_file"] = str(land_mask_file)
+    return masked
 
 
 def decode_cf_time(ds: xr.Dataset, time_var: str = "S") -> xr.Dataset:
@@ -79,6 +296,8 @@ def open_nmme_model(
     field: str = "sst",
     s_slice: Optional[Tuple[Any, Any]] = ("264", "684"),
     time_var: str = "S",
+    apply_sst_land_mask: bool = True,
+    fixed_dir: str | Path = NMME_FIXED_DIR,
 ) -> xr.Dataset:
     """
     Open one NMME model file and decode its time coordinate.
@@ -96,6 +315,10 @@ def open_nmme_model(
         Set to None to skip subsetting.
     time_var : str, optional
         Name of the initialization time coordinate, default 'S'.
+    apply_sst_land_mask : bool, optional
+        Apply the Natural Earth land mask when ``field='sst'``, default True.
+    fixed_dir : path-like, optional
+        Directory containing reusable per-model NMME land masks.
 
     Returns
     -------
@@ -139,6 +362,13 @@ def open_nmme_model(
             )
 
     ds = decode_cf_time(ds, time_var=time_var)
+    if field.lower() == "sst" and field in ds:
+        ds[field] = mask_invalid_sst(
+            ds[field],
+            apply_land_mask=apply_sst_land_mask,
+            model=modelname,
+            fixed_dir=fixed_dir,
+        )
     return ds
 
 

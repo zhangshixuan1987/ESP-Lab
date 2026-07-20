@@ -8,6 +8,8 @@ in notebooks.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import xarray as xr
 
@@ -15,11 +17,20 @@ import xarray as xr
 DIRECT_RMSE_LEADS = (3, 6, 9, 12, 15, 18, 21, 24)
 LEGACY_DIRECT_RMSE_LEADS = (1, 4, 7, 10, 13, 16, 19, 22)
 SEASON_NAMES = ("DJF", "MAM", "JJA", "SON")
+OBS_ALIGNMENT_VERSION = "exact_year_month_nan_boundary_v2"
 
 
 def safe_model_name(model):
     """Return a model name suitable for cache and figure filenames."""
     return str(model).replace(" ", "_").replace("/", "_")
+
+
+def compact_year_tag(year_values):
+    """Return a short, deterministic tag such as ``1980-2018_ny39``."""
+    years = np.unique(np.asarray(year_values, dtype=int).reshape(-1))
+    if years.size == 0:
+        raise ValueError("year_values must contain at least one year")
+    return f"{int(years.min())}-{int(years.max())}_ny{years.size}"
 
 
 def normalize_direct_rmse_leads(
@@ -151,17 +162,51 @@ def get_ensemble_mean(da):
     return da
 
 
-def _select_obs_at_time(obs_da, target_time):
-    """Select the nearest observed seasonal mean for a model verification time."""
-    try:
-        return obs_da.sel(time=target_time, method="nearest")
-    except Exception:
-        if hasattr(target_time, "year"):
-            target_np = np.datetime64(
-                f"{target_time.year:04d}-{target_time.month:02d}-{min(target_time.day, 28):02d}"
-            )
-            return obs_da.sel(time=target_np, method="nearest")
-        raise
+def _empty_obs_slice(obs_da):
+    """Return one spatial observation slice filled with NaN."""
+    if obs_da.sizes.get("time", 0) == 0:
+        raise ValueError("Cannot construct a missing observation from an empty time series")
+    return xr.full_like(obs_da.isel(time=0, drop=True), np.nan, dtype=float)
+
+
+def _select_obs_year_month(obs_da, target_year, target_month, allow_missing=False):
+    """Select exactly one observed season by year/month."""
+    target = obs_da.sel(
+        time=(
+            (obs_da["time"].dt.year == int(target_year))
+            & (obs_da["time"].dt.month == int(target_month))
+        )
+    )
+    count = target.sizes["time"]
+    if count == 0 and allow_missing:
+        return _empty_obs_slice(obs_da)
+    if count != 1:
+        raise ValueError(
+            f"Expected exactly one obs time for target="
+            f"{int(target_year):04d}-{int(target_month):02d}; got {count}"
+        )
+    return target.isel(time=0, drop=True)
+
+
+def _select_obs_at_time(obs_da, target_time, allow_missing=False):
+    """Select an exact observed seasonal mean for a model verification time."""
+    if hasattr(target_time, "year") and hasattr(target_time, "month"):
+        target_year = int(target_time.year)
+        target_month = int(target_time.month)
+    else:
+        target_month_value = np.datetime64(target_time, "M")
+        if np.isnat(target_month_value):
+            if allow_missing:
+                return _empty_obs_slice(obs_da)
+            raise ValueError("Model verification time is NaT")
+        target_text = np.datetime_as_string(target_month_value, unit="M")
+        target_year, target_month = (int(part) for part in target_text.split("-"))
+    return _select_obs_year_month(
+        obs_da,
+        target_year,
+        target_month,
+        allow_missing=allow_missing,
+    )
 
 
 def make_obs_like_model_time(obs_da, model_time, common_years, obs_chunks=None):
@@ -177,9 +222,7 @@ def make_obs_like_model_time(obs_da, model_time, common_years, obs_chunks=None):
         obs_by_l = []
         for lead in l_labels:
             target_time = model_time.sel(Y=y, L=lead).item()
-            obs_sel = _select_obs_at_time(obs_da, target_time)
-            if "time" in obs_sel.coords and "time" not in obs_sel.dims:
-                obs_sel = obs_sel.reset_coords("time", drop=True)
+            obs_sel = _select_obs_at_time(obs_da, target_time, allow_missing=True)
             obs_by_l.append(obs_sel)
 
         obs_by_y.append(xr.concat(obs_by_l, dim=xr.IndexVariable("L", l_labels)))
@@ -191,7 +234,7 @@ def make_obs_like_model_time(obs_da, model_time, common_years, obs_chunks=None):
 
 
 def make_obs_like_model_leads(obs_da, template_da, init_month, years, leads):
-    """Build Y,L observations by initialization month/year and lead labels."""
+    """Build Y,L observations, retaining unavailable boundary seasons as NaN."""
     if "time" not in obs_da.coords:
         raise KeyError(
             f"obs_da must have a time coordinate. dims={obs_da.dims}, coords={list(obs_da.coords)}"
@@ -210,20 +253,13 @@ def make_obs_like_model_leads(obs_da, template_da, init_month, years, leads):
             target_year = year + (total_month - 1) // 12
             target_month = ((total_month - 1) % 12) + 1
 
-            target = obs_da.sel(
-                time=(
-                    (obs_da["time"].dt.year == target_year)
-                    & (obs_da["time"].dt.month == target_month)
-                )
+            target = _select_obs_year_month(
+                obs_da,
+                target_year,
+                target_month,
+                allow_missing=True,
             )
-            if target.sizes["time"] != 1:
-                raise ValueError(
-                    f"Expected exactly one obs time for init_month={init_month}, "
-                    f"year={year}, L={lead}, target={target_year}-{target_month:02d}; "
-                    f"got {target.sizes['time']}"
-                )
-
-            pieces_by_year.append(target.isel(time=0, drop=True).expand_dims(Y=[year]))
+            pieces_by_year.append(target.expand_dims(Y=[year]))
 
         pieces_by_lead.append(xr.concat(pieces_by_year, dim="Y").expand_dims(L=[lead]))
 
@@ -353,7 +389,30 @@ def prepare_member_error(model_da, obs_da, common_years):
 
 def _nanmean_sq(arr):
     """Mean of squared errors over year/member axes, preserving lat/lon."""
-    return np.nanmean(arr * arr, axis=(0, 1), dtype=np.float64)
+    return _nanmean_preserve_missing(arr * arr, axis=(0, 1), dtype=np.float64)
+
+
+def _nanmean_preserve_missing(arr, axis=None, dtype=None):
+    """Compute nanmean while allowing intentionally all-missing slices."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Mean of empty slice", category=RuntimeWarning)
+        return np.nanmean(arr, axis=axis, dtype=dtype)
+
+
+def _finite_comparison_probability(left, right, axis=0):
+    """Return P(left < right) using only finite paired comparisons."""
+    left, right = np.broadcast_arrays(left, right)
+    valid = np.isfinite(left) & np.isfinite(right)
+    valid_count = valid.sum(axis=axis)
+    win_count = ((left < right) & valid).sum(axis=axis)
+    probability = np.full(np.shape(valid_count), np.nan, dtype="float32")
+    np.divide(
+        win_count,
+        valid_count,
+        out=probability,
+        where=valid_count > 0,
+    )
+    return probability
 
 
 def bootstrap_rmse_diff_member_level_memorysafe(
@@ -399,7 +458,7 @@ def bootstrap_rmse_diff_member_level_memorysafe(
         rmse_e_obs = np.sqrt(_nanmean_sq(e)).astype("float32")
         rmse_s_obs = np.sqrt(_nanmean_sq(s)).astype("float32")
         rmse_diff_obs = (rmse_e_obs - rmse_s_obs).astype("float32")
-        count_e3sm_better = np.zeros(rmse_diff_obs.shape, dtype=np.int32)
+        bootstrap_diffs = []
 
         for _ in range(nboot):
             y_index = rng.integers(0, n_year, size=n_year)
@@ -408,12 +467,17 @@ def bootstrap_rmse_diff_member_level_memorysafe(
             e_sample = e[np.ix_(y_index, m_index_e3sm)]
             s_sample = s[np.ix_(y_index, m_index_smyle)]
             boot_diff = np.sqrt(_nanmean_sq(e_sample)) - np.sqrt(_nanmean_sq(s_sample))
-            count_e3sm_better += boot_diff < 0
+            bootstrap_diffs.append(boot_diff)
 
-        prob = (count_e3sm_better.astype("float32") / float(nboot)).astype("float32")
+        bootstrap_diffs = np.asarray(bootstrap_diffs)
+        prob = _finite_comparison_probability(
+            bootstrap_diffs,
+            np.zeros_like(bootstrap_diffs),
+        )
         p_two = (2.0 * np.minimum(prob, 1.0 - prob)).clip(0, 1).astype("float32")
-        sig_better = (prob > (1.0 - alpha / 2.0)).astype("int8")
-        sig_worse = (prob < (alpha / 2.0)).astype("int8")
+        valid_prob = np.isfinite(prob)
+        sig_better = np.where(valid_prob, prob > (1.0 - alpha / 2.0), np.nan).astype("float32")
+        sig_worse = np.where(valid_prob, prob < (alpha / 2.0), np.nan).astype("float32")
 
         coords = {"lat": lat, "lon": lon}
         out_rmse_e3sm.append(xr.DataArray(rmse_e_obs, dims=("lat", "lon"), coords=coords).expand_dims(L=[lead]))
@@ -424,7 +488,7 @@ def bootstrap_rmse_diff_member_level_memorysafe(
         out_sig_better.append(xr.DataArray(sig_better, dims=("lat", "lon"), coords=coords).expand_dims(L=[lead]))
         out_sig_worse.append(xr.DataArray(sig_worse, dims=("lat", "lon"), coords=coords).expand_dims(L=[lead]))
 
-        del e, s, count_e3sm_better
+        del e, s, bootstrap_diffs
 
     ds_out = xr.Dataset(
         {
@@ -433,8 +497,8 @@ def bootstrap_rmse_diff_member_level_memorysafe(
             "rmse_smyle": xr.concat(out_rmse_smyle, dim="L").astype("float32"),
             "prob_e3sm_lower_rmse": xr.concat(out_prob, dim="L").astype("float32"),
             "p_two_sided_bootstrap": xr.concat(out_p, dim="L").astype("float32"),
-            "significant_e3sm_better": xr.concat(out_sig_better, dim="L").astype("int8"),
-            "significant_e3sm_worse": xr.concat(out_sig_worse, dim="L").astype("int8"),
+            "significant_e3sm_better": xr.concat(out_sig_better, dim="L").astype("float32"),
+            "significant_e3sm_worse": xr.concat(out_sig_worse, dim="L").astype("float32"),
         }
     )
     ds_out["rmse_diff"].attrs["description"] = "E3SM RMSE minus CESM-SMYLE RMSE; negative means E3SM lower RMSE"
@@ -497,10 +561,10 @@ def bootstrap_rmse_diff_matched_ensemble_memorysafe(
 
         n_year = left.shape[0]
         matched_nmem = min(left.shape[1], right.shape[1])
-        left_obs = np.sqrt(np.nanmean(np.nanmean(left, axis=1) ** 2, axis=0))
-        right_obs = np.sqrt(np.nanmean(np.nanmean(right, axis=1) ** 2, axis=0))
+        left_obs = np.sqrt(_nanmean_preserve_missing(_nanmean_preserve_missing(left, axis=1) ** 2, axis=0))
+        right_obs = np.sqrt(_nanmean_preserve_missing(_nanmean_preserve_missing(right, axis=1) ** 2, axis=0))
         diff_obs = (left_obs - right_obs).astype("float32")
-        count_left_better = np.zeros(diff_obs.shape, dtype=np.int32)
+        bootstrap_diffs = []
 
         for _ in range(nboot):
             year_index = rng.integers(0, n_year, size=n_year)
@@ -510,15 +574,20 @@ def bootstrap_rmse_diff_matched_ensemble_memorysafe(
             left_mean = left[np.ix_(year_index, left_members)].mean(axis=1)
             right_mean = right[np.ix_(year_index, right_members)].mean(axis=1)
             boot_diff = (
-                np.sqrt(np.nanmean(left_mean ** 2, axis=0))
-                - np.sqrt(np.nanmean(right_mean ** 2, axis=0))
+                np.sqrt(_nanmean_preserve_missing(left_mean ** 2, axis=0))
+                - np.sqrt(_nanmean_preserve_missing(right_mean ** 2, axis=0))
             )
-            count_left_better += boot_diff < 0
+            bootstrap_diffs.append(boot_diff)
 
-        prob = count_left_better.astype("float32") / float(nboot)
+        bootstrap_diffs = np.asarray(bootstrap_diffs)
+        prob = _finite_comparison_probability(
+            bootstrap_diffs,
+            np.zeros_like(bootstrap_diffs),
+        )
         p_two = (2.0 * np.minimum(prob, 1.0 - prob)).clip(0, 1).astype("float32")
-        left_better = (prob >= 1.0 - alpha).astype("int8")
-        right_better = (prob <= alpha).astype("int8")
+        valid_prob = np.isfinite(prob)
+        left_better = np.where(valid_prob, prob >= 1.0 - alpha, np.nan).astype("float32")
+        right_better = np.where(valid_prob, prob <= alpha, np.nan).astype("float32")
         coords = {"lat": lat, "lon": lon}
 
         def as_lead(data):
@@ -532,15 +601,15 @@ def bootstrap_rmse_diff_matched_ensemble_memorysafe(
         out_left_better.append(as_lead(left_better))
         out_right_better.append(as_lead(right_better))
 
-        del left, right, count_left_better
+        del left, right, bootstrap_diffs
 
     ds_out = xr.Dataset(
         {
             "rmse_diff": xr.concat(out_diff, dim="L").astype("float32"),
             "prob_left_lower_rmse": xr.concat(out_prob, dim="L").astype("float32"),
             "p_two_sided_bootstrap": xr.concat(out_p, dim="L").astype("float32"),
-            "left_better": xr.concat(out_left_better, dim="L").astype("int8"),
-            "right_better": xr.concat(out_right_better, dim="L").astype("int8"),
+            "left_better": xr.concat(out_left_better, dim="L").astype("float32"),
+            "right_better": xr.concat(out_right_better, dim="L").astype("float32"),
         }
     )
     ds_out.attrs.update(
@@ -613,27 +682,32 @@ def finite_ensemble_rmse_comparison_memorysafe(
 
         fixed = left if larger_side == "right" else right
         larger = right if larger_side == "right" else left
-        fixed_rmse = np.sqrt(np.nanmean(np.nanmean(fixed, axis=1) ** 2, axis=0))
+        fixed_rmse = np.sqrt(
+            _nanmean_preserve_missing(
+                _nanmean_preserve_missing(fixed, axis=1) ** 2,
+                axis=0,
+            )
+        )
 
         sampled_rmse = []
         for _ in range(n_iterations):
             members = rng.choice(larger.shape[1], matched_nmem, replace=False)
             sampled_mean = larger[:, members].mean(axis=1)
             sampled_rmse.append(
-                np.sqrt(np.nanmean(sampled_mean ** 2, axis=0))
+                np.sqrt(_nanmean_preserve_missing(sampled_mean ** 2, axis=0))
             )
         sampled_rmse = np.asarray(sampled_rmse)
 
         if larger_side == "right":
             left_rmse = fixed_rmse
             right_rmse = sampled_rmse
-            prob_left_lower = np.mean(left_rmse < right_rmse, axis=0)
-            diff = left_rmse - np.mean(right_rmse, axis=0)
+            prob_left_lower = _finite_comparison_probability(left_rmse, right_rmse)
+            diff = left_rmse - _nanmean_preserve_missing(right_rmse, axis=0)
         else:
             left_rmse = sampled_rmse
             right_rmse = fixed_rmse
-            prob_left_lower = np.mean(left_rmse < right_rmse, axis=0)
-            diff = np.mean(left_rmse, axis=0) - right_rmse
+            prob_left_lower = _finite_comparison_probability(left_rmse, right_rmse)
+            diff = _nanmean_preserve_missing(left_rmse, axis=0) - right_rmse
 
         p_two = (2.0 * np.minimum(prob_left_lower, 1.0 - prob_left_lower)).clip(0, 1)
         coords = {"lat": left_err["lat"].values, "lon": left_err["lon"].values}
@@ -646,16 +720,17 @@ def finite_ensemble_rmse_comparison_memorysafe(
         out_diff.append(as_lead(diff))
         out_prob.append(as_lead(prob_left_lower))
         out_p.append(as_lead(p_two))
-        out_left_better.append(as_lead(prob_left_lower >= 1.0 - alpha))
-        out_right_better.append(as_lead(prob_left_lower <= alpha))
+        valid_prob = np.isfinite(prob_left_lower)
+        out_left_better.append(as_lead(np.where(valid_prob, prob_left_lower >= 1.0 - alpha, np.nan)))
+        out_right_better.append(as_lead(np.where(valid_prob, prob_left_lower <= alpha, np.nan)))
 
     ds_out = xr.Dataset(
         {
             "rmse_diff": xr.concat(out_diff, dim="L").astype("float32"),
             "prob_left_lower_rmse": xr.concat(out_prob, dim="L").astype("float32"),
             "p_two_sided_resampling": xr.concat(out_p, dim="L").astype("float32"),
-            "left_better": xr.concat(out_left_better, dim="L").astype("int8"),
-            "right_better": xr.concat(out_right_better, dim="L").astype("int8"),
+            "left_better": xr.concat(out_left_better, dim="L").astype("float32"),
+            "right_better": xr.concat(out_right_better, dim="L").astype("float32"),
         }
     )
     ds_out.attrs.update(
