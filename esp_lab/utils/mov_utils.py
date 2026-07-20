@@ -28,13 +28,16 @@ DEFAULT_PROJECTION_BY_MODE = {
     "NAO": "atlantic",
     "EA": "atlantic",
     "SCA": "atlantic",
-    "PNA": "north_polar",
+    "PNA": "north_pacific",
     "PSA1": "south_polar",
     "PSA2": "south_polar",
     "NPO": "north_pacific",
     "PDO": "north_pacific",
     "NPGO": "north_pacific",
-    "AMO": "atlantic",
+    # AMO spans the tropical through subpolar Atlantic.  An Albers map with a
+    # rectangular geographic extent clips the northwest corner of this tall
+    # domain, which can hide physically important EOF lobes near 40N, 70W.
+    "AMO": "platecarree",
 }
 
 
@@ -133,6 +136,8 @@ def mode_extent(mode, pattern):
         return [-180, 180, max(20, lat_min), 90]
     if mode in {"SAM", "PSA1", "PSA2"}:
         return [-180, 180, -90, min(-20, lat_max)]
+    if mode == "PNA":
+        return [120, 240, 15, min(85, lat_max)]
     if mode in {"NPO", "PDO", "NPGO"}:
         return [120, 240, 15, 75]
     return [lon_min, lon_max, lat_min, lat_max]
@@ -267,7 +272,7 @@ def add_polar_longitude_labels(
                 0.5 + float(axes_radius) * np.cos(angle),
                 0.5 + float(axes_radius) * np.sin(angle),
                 format_longitude_label(lon),
-                transform=ax.transAxes,
+                transform=data_projection,
                 ha="center",
                 va="center",
                 fontsize=fontsize,
@@ -328,7 +333,7 @@ def add_polar_latitude_labels(
                 x_position,
                 y,
                 label,
-                transform=ax.transAxes,
+                transform=data_projection,
                 ha="left",
                 va="center",
                 fontsize=fontsize,
@@ -457,7 +462,7 @@ def _draw_manual_lonlat_labels(
                 x_position,
                 y,
                 label,
-                transform=data_projection,
+                transform=ax.transAxes,
                 ha="right",
                 va="center",
                 fontsize=label_fontsize,
@@ -479,7 +484,7 @@ def _draw_manual_lonlat_labels(
                 x,
                 y_position,
                 label,
-                transform=data_projection,
+                transform=ax.transAxes,
                 ha="center",
                 va="top",
                 fontsize=label_fontsize,

@@ -123,6 +123,7 @@ PRESSURE_MODES = {
     "NAM", "NAO", "SAM", "PSA1", "PSA2", "PNA", "NPO", "EA", "SCA",
 }
 TEMPERATURE_MODES = {"PDO", "NPGO", "AMO"}
+FIXED_BASIS_PROJECTION_MASK_VERSION = "reference_ocean_zero_anomaly_v1"
 WRITE_GLOBAL_TELECONNECTIONS_IN_INDEX_PRODUCTS = False
 
 
@@ -730,6 +731,57 @@ def eof_ready_dataset(dataset: xr.Dataset, variable: str) -> xr.Dataset:
     result = dataset.copy()
     result[variable] = field.where(valid_mask)
     return result
+
+
+def fixed_basis_projection_field(
+    field: xr.DataArray,
+    reference_mask: xr.DataArray,
+    *,
+    mode: str,
+    lead: int,
+) -> xr.DataArray:
+    """Return a field with the exact spatial mask required by a reference EOF.
+
+    SST products can disagree at a small number of coastal or seasonally
+    ice-covered cells.  The ``eofs`` projection requires the projected field
+    and reference EOF to have identical missing-value locations.  Preserve the
+    observed reference-ocean mask and assign zero anomaly only where the model
+    is missing inside that mask; points outside the reference mask remain NaN.
+    """
+    aligned_mask = align_spatial_mask(
+        reference_mask,
+        field,
+        mask_name="reference_projection_mask",
+    )
+    aligned_mask = _as_bool_mask(aligned_mask, "reference_projection_mask")
+    masked = field.where(aligned_mask)
+    missing_inside_reference = aligned_mask & masked.isnull()
+    missing_values = int(missing_inside_reference.sum().compute())
+    affected_points = int(missing_inside_reference.any("time").sum().compute())
+
+    projection = masked.fillna(0.0).where(aligned_mask)
+    projection_mask = projection.notnull().all("time")
+    if not bool((projection_mask == aligned_mask).all().compute()):
+        raise ValueError(
+            f"{mode} lead {lead}: failed to match the observed EOF projection mask."
+        )
+
+    if affected_points:
+        LOG.info(
+            "%s lead %s: assigned zero anomaly to %s missing values at %s "
+            "reference-ocean grid cells for fixed-basis projection.",
+            mode,
+            lead,
+            missing_values,
+            affected_points,
+        )
+    projection.attrs.update(field.attrs)
+    projection.attrs.update(
+        projection_mask_version=FIXED_BASIS_PROJECTION_MASK_VERSION,
+        projection_missing_values_filled=missing_values,
+        projection_grid_points_filled=affected_points,
+    )
+    return projection
 
 
 def north_eigenvalue_diagnostics(solver, eof_number: int) -> xr.Dataset:
@@ -1448,6 +1500,7 @@ def regression_pattern_from_projected_pc(
 
     field = field.sel(time=pc.time.where(finite_time, drop=True))
     pc = pc.sel(time=field.time)
+    spatially_valid = field.notnull().any("time")
     n = int(pc.sizes["time"])
     pc_anom = pc - pc.mean("time")
     pc_var = (pc_anom**2).sum("time")
@@ -1471,7 +1524,9 @@ def regression_pattern_from_projected_pc(
     field_var = (field_anom**2).sum("time", skipna=True)
     covariance = (field_anom * pc_anom).sum("time", skipna=True)
     r = covariance / np.sqrt(field_var * pc_var)
-    r = r.clip(min=-1.0, max=1.0)
+    r = r.clip(min=-1.0, max=1.0).where(spatially_valid)
+    slope = slope.where(spatially_valid)
+    intercept = intercept.where(spatially_valid)
 
     def _pvalue_from_r(r_values):
         from scipy import stats as scipy_stats
@@ -1566,18 +1621,26 @@ def pcmdi_mode_model(
             if ocean_mask is not None:
                 valid_mask = valid_mask & ocean_mask
 
-        prepared = eof_ready_dataset(
-            prepare_domain(
-                sample,
-                settings,
-                args.remove_domain_mean,
-                valid_mask=valid_mask,
-            ),
-            "mode_field",
+        prepared = prepare_domain(
+            sample,
+            settings,
+            args.remove_domain_mean,
+            valid_mask=valid_mask,
         )
+        if settings["mode"] in TEMPERATURE_MODES:
+            projection_field = fixed_basis_projection_field(
+                prepared["mode_field"],
+                valid_mask,
+                mode=str(settings["mode"]),
+                lead=lead,
+            )
+        else:
+            prepared = eof_ready_dataset(prepared, "mode_field")
+            projection_field = prepared["mode_field"]
+
         cbf = gain_pseudo_pcs(
             reference["solver"],
-            prepared["mode_field"],
+            projection_field,
             eofn=eof_number,
             reverse_sign=bool(reference["reverse_sign"]),
             EofScaling=args.eof_scaling,
@@ -1586,6 +1649,12 @@ def pcmdi_mode_model(
             "Y": lead_data.Y, "M": lead_data.M,
         }
         cbf_values = np.asarray(cbf.values)
+        if not np.isfinite(cbf_values).all():
+            finite = int(np.isfinite(cbf_values).sum())
+            raise ValueError(
+                f"{settings['mode']} lead {lead}: observed-EOF projection "
+                f"returned {finite}/{cbf_values.size} finite PC values."
+            )
         cbf_pcs.append(
             xr.DataArray(
                 cbf_values.reshape(shape), dims=("Y", "M"), coords=coords
@@ -1595,11 +1664,11 @@ def pcmdi_mode_model(
         pc_time = xr.DataArray(
             cbf_values,
             dims="time",
-            coords={"time": prepared["mode_field"].time},
+            coords={"time": projection_field.time},
             name="projected_pc",
         )
         regression_ds = regression_pattern_from_projected_pc(
-            prepared["mode_field"],
+            projection_field,
             pc_time,
             confidence_level=float(getattr(args, "regression_confidence", 0.95)),
         )
@@ -1652,9 +1721,10 @@ def pcmdi_mode_model(
         reference_pccs.append(reference_pcc)
 
         if eof_strategy == "conventional":
+            conventional_prepared = eof_ready_dataset(prepared, "mode_field")
             pattern, pc, fraction, _, solver = eof_analysis_with_svd_fallback(
                 str(settings["mode"]),
-                prepared,
+                conventional_prepared,
                 "mode_field",
                 eofn=eof_number,
                 eofn_max=eof_number,
@@ -1694,7 +1764,7 @@ def pcmdi_mode_model(
                     ).ravel()
                 reference_bootstrap_patterns = reference["bootstrap_patterns"]
                 bootstrap_ds, _ = eof_bootstrap_diagnostics(
-                    prepared,
+                    conventional_prepared,
                     pattern,
                     settings,
                     args,

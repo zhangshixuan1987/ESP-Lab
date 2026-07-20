@@ -103,6 +103,10 @@ def configuration_signature(
         signature["eof_scaling"] = bool(args.eof_scaling)
         signature["remove_domain_mean"] = bool(args.remove_domain_mean)
         signature["eof_strategy"] = getattr(args, "eof_strategy", "fixed_obs_projection")
+        if str(settings["mode"]) in core.TEMPERATURE_MODES:
+            signature["fixed_basis_projection_mask_version"] = (
+                core.FIXED_BASIS_PROJECTION_MASK_VERSION
+            )
         signature["eof_reference"] = {
             "source": getattr(args, "eof_reference_source", "obs"),
             "years": [
@@ -265,6 +269,13 @@ def write_product(
     dataset = dataset.copy()
     core.validate_spatial_coordinates(dataset, f"{source} {product_kind} product")
     mode = str(settings["mode"])
+    if product_kind == "index" and "mode_index" in dataset:
+        finite_count = int(dataset["mode_index"].notnull().sum().compute())
+        if finite_count == 0:
+            raise ValueError(
+                f"Refusing to write {source} {mode} index product: mode_index "
+                "contains no finite values."
+            )
     dataset.attrs.update(
         title=f"Processed {mode} mode-of-variability diagnostics",
         source=source.upper(),

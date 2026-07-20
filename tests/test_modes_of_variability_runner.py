@@ -14,6 +14,7 @@ from scripts.run_process_modes_of_variability import (
     cached_product_matches,
     configuration_signature,
     validate_args,
+    write_product,
     write_manifest,
 )
 
@@ -48,6 +49,7 @@ def _args(**overrides):
         "nmme_field": "auto",
         "nmme_chunks": "",
         "nmme_sst_land_mask": True,
+        "model_sst_land_mask": True,
         "nmme_fixed_dir": "/data/fixed",
         "obs_dir": "/data/obs",
         "eof_scaling": True,
@@ -112,6 +114,27 @@ def test_nmme_sst_mask_version_invalidates_only_temperature_fields():
     )
     assert temperature["nmme_sst_land_mask"] is True
     assert temperature["nmme_fixed_dir"] == "/data/fixed"
+
+
+def test_temperature_index_signature_tracks_projection_mask_algorithm():
+    temperature_settings = {
+        **_settings(),
+        "mode": "AMO",
+        "domain_mode": "AMO",
+        "field": "SST",
+        "frequency": "monthly",
+        "obs_product": "HadISST2",
+        "obs_var": "sst",
+    }
+    signature = json.loads(
+        configuration_signature(
+            "smyle", temperature_settings, _args(), include_mode=True
+        )
+    )
+
+    assert signature["fixed_basis_projection_mask_version"] == (
+        core.FIXED_BASIS_PROJECTION_MASK_VERSION
+    )
 
 
 def test_nmme_chunk_choice_does_not_invalidate_products():
@@ -457,3 +480,76 @@ def test_eof_ready_dataset_applies_complete_case_spatial_mask():
     assert result["mode_field"].sel(lon=1.0).isnull().all()
     assert result["mode_field"].sel(lon=2.0).isnull().all()
     assert result["mode_field"].sel(lon=3.0).notnull().all()
+
+
+def test_fixed_basis_projection_field_matches_reference_mask():
+    field = xr.DataArray(
+        [
+            [[1.0, np.nan, 9.0]],
+            [[2.0, np.nan, 8.0]],
+        ],
+        dims=("time", "lat", "lon"),
+        coords={"time": [0, 1], "lat": [30.0], "lon": [0.0, 2.5, 5.0]},
+        name="mode_field",
+    )
+    reference_mask = xr.DataArray(
+        [[True, True, False]],
+        dims=("lat", "lon"),
+        coords={"lat": [30.0], "lon": [0.0, 2.5, 5.0]},
+    )
+
+    result = core.fixed_basis_projection_field(
+        field,
+        reference_mask,
+        mode="AMO",
+        lead=1,
+    )
+
+    np.testing.assert_allclose(result.sel(lon=0.0).squeeze(), [1.0, 2.0])
+    np.testing.assert_allclose(result.sel(lon=2.5).squeeze(), [0.0, 0.0])
+    assert result.sel(lon=5.0).isnull().all()
+    assert result.attrs["projection_missing_values_filled"] == 2
+    assert result.attrs["projection_grid_points_filled"] == 1
+
+
+def test_regression_pattern_preserves_spatial_missing_mask():
+    field = xr.DataArray(
+        [
+            [[1.0, np.nan]],
+            [[2.0, np.nan]],
+            [[4.0, np.nan]],
+        ],
+        dims=("time", "lat", "lon"),
+        coords={"time": [0, 1, 2], "lat": [30.0], "lon": [0.0, 2.5]},
+    )
+    pc = xr.DataArray([0.0, 1.0, 2.0], dims="time", coords={"time": field.time})
+
+    result = core.regression_pattern_from_projected_pc(field, pc)
+
+    assert np.isfinite(result["mode_regression_pattern"].sel(lon=0.0))
+    assert np.isnan(result["mode_regression_pattern"].sel(lon=2.5))
+
+
+def test_write_product_rejects_all_nan_mode_index(tmp_path, monkeypatch):
+    dataset = xr.Dataset(
+        {
+            "mode_index": (("Y", "L", "M"), np.full((2, 1, 1), np.nan)),
+        },
+        coords={"Y": [2000, 2001], "L": [1], "M": [1]},
+    )
+    monkeypatch.setattr(core, "validate_spatial_coordinates", lambda *_: None)
+
+    try:
+        write_product(
+            dataset,
+            tmp_path / "invalid.nc",
+            "smyle",
+            _settings(),
+            _args(),
+            core.StationNaoDefinition(),
+            "index",
+        )
+    except ValueError as error:
+        assert "contains no finite values" in str(error)
+    else:
+        raise AssertionError("Expected an all-NaN mode index to be rejected.")

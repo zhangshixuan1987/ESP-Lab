@@ -35,7 +35,9 @@ def test_mode_extent_uses_pattern_bounds_for_amo():
 
 def test_mode_extent_uses_north_pacific_sector_for_npo_pdo_npgo():
     pattern = _pattern(lon=(120, 280), lat=(-20, 80))
+    pna_pattern = _pattern(lon=(120, 240), lat=(20, 85))
 
+    assert movmaps.mode_extent("PNA", pna_pattern) == [120, 240, 15, 85]
     assert movmaps.mode_extent("NPO", pattern) == [120, 240, 15, 75]
     assert movmaps.mode_extent("PDO", pattern) == [120, 240, 15, 75]
     assert movmaps.mode_extent("NPGO", pattern) == [120, 240, 15, 75]
@@ -140,10 +142,10 @@ def test_make_projection_uses_mode_defaults_when_cartopy_is_available():
     _, amo_name = movmaps.make_projection("AMO")
 
     assert nao_name == "atlantic"
-    assert pna_name == "north_polar"
+    assert pna_name == "north_pacific"
     assert psa1_name == "south_polar"
     assert psa2_name == "south_polar"
     assert pdo_name == "north_pacific"
     assert npo_name == "north_pacific"
     assert npgo_name == "north_pacific"
-    assert amo_name == "atlantic"
+    assert amo_name == "platecarree"
