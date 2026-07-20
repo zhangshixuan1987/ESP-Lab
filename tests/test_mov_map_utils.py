@@ -104,6 +104,55 @@ def test_format_longitude_label():
         assert movmaps.format_longitude_label(lon) == label
 
 
+class _RecordingAxis:
+    def __init__(self):
+        self.transAxes = object()
+        self.text_calls = []
+
+    def text(self, x, y, label, **kwargs):
+        self.text_calls.append((x, y, label, kwargs))
+
+
+def test_outside_polar_longitude_labels_use_axes_coordinates():
+    axis = _RecordingAxis()
+    data_projection = object()
+
+    movmaps.add_polar_longitude_labels(
+        axis,
+        "PSA1",
+        [-180, 180, -90, -20],
+        data_projection,
+        longitude_ticks=[-120, -60, 60, 120],
+        label_offset=2.5,
+        fontsize=10,
+        label_position="outside_axes",
+        axes_radius=0.625,
+        central_longitude=0,
+    )
+
+    assert [call[2] for call in axis.text_calls] == [
+        "120°W", "60°W", "60°E", "120°E"
+    ]
+    assert all(call[3]["transform"] is axis.transAxes for call in axis.text_calls)
+    assert len({(round(call[0], 6), round(call[1], 6)) for call in axis.text_calls}) == 4
+
+
+def test_side_polar_latitude_labels_use_axes_coordinates():
+    axis = _RecordingAxis()
+
+    movmaps.add_polar_latitude_labels(
+        axis,
+        "PSA1",
+        latitude_ticks=[-85, -55, -25],
+        label_longitude=0,
+        data_projection=object(),
+        fontsize=10,
+        label_position="side",
+    )
+
+    assert all(call[3]["transform"] is axis.transAxes for call in axis.text_calls)
+
+
 def test_make_projection_can_be_disabled_without_cartopy():
     projection, name = movmaps.make_projection("NAO", use_cartopy=False)
 

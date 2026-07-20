@@ -1,4 +1,22 @@
+import os
+import sys
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
+
+
+def _configure_conda_geospatial_data_paths():
+    """Provide GDAL/PROJ data paths when a Conda kernel omits activation vars."""
+    share = Path(sys.prefix) / "share"
+    candidates = {
+        "GDAL_DATA": share / "gdal",
+        "PROJ_DATA": share / "proj",
+    }
+    for variable, path in candidates.items():
+        if variable not in os.environ and path.is_dir():
+            os.environ[variable] = str(path)
+
+
+_configure_conda_geospatial_data_paths()
 
 from . import data_access_smyle
 from . import data_access_e3sm

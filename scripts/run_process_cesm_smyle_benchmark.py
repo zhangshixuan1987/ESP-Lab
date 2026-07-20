@@ -527,6 +527,86 @@ def validate_monthly_dataset(
         )
 
 
+def existing_benchmark_issues(
+    path: Path,
+    *,
+    field: str,
+    init_month: int,
+    years: list,
+    members: list,
+    nlead: int,
+    freq: str,
+) -> list[str]:
+    """Return reasons an existing benchmark cannot safely be reused.
+
+    Timestamp consistency alone is not sufficient: a legacy file may have a
+    self-consistent ``time(Y, L)`` coordinate while silently omitting an
+    initialization year.  Validate the full expected cohort before honoring
+    the idempotent skip path.
+    """
+    issues: list[str] = []
+    expected_y = smyle_access.build_init_tags(years, init_month)
+    expected_m = members
+
+    if freq == "mon":
+        expected_l = list(range(1, nlead + 1))
+    else:
+        verification_time = smyle_access.expected_verification_time(
+            [expected_y[0]], range(1, nlead + 1)
+        )
+        months = verification_time.isel(Y=0).dt.month.values
+        expected_l = [
+            lead
+            for lead, month in zip(range(1, nlead + 1), months)
+            if int(month) in (1, 4, 7, 10)
+        ]
+
+    with xr.open_dataset(path) as existing:
+        if field not in existing:
+            issues.append(f"missing field {field}")
+
+        actual_y = (
+            [str(value) for value in existing["Y"].values]
+            if "Y" in existing.coords else []
+        )
+        if actual_y != expected_y:
+            missing = [value for value in expected_y if value not in actual_y]
+            extra = [value for value in actual_y if value not in expected_y]
+            issues.append(
+                f"initialization cohort differs (Y={len(actual_y)}, "
+                f"expected {len(expected_y)}; missing={missing}, extra={extra})"
+            )
+
+        actual_m = (
+            [str(value) for value in existing["M"].values]
+            if "M" in existing.coords else []
+        )
+        if actual_m != expected_m:
+            issues.append(
+                f"member cohort differs (M={len(actual_m)}, expected {len(expected_m)})"
+            )
+
+        actual_l = (
+            [int(value) for value in existing["L"].values]
+            if "L" in existing.coords else []
+        )
+        if actual_l != expected_l:
+            issues.append(f"lead coordinate is {actual_l}, expected {expected_l}")
+
+        try:
+            mismatch_count = smyle_access.verification_time_mismatch_count(
+                existing,
+                init_month=init_month,
+            )
+        except (TypeError, ValueError) as exc:
+            issues.append(f"invalid verification time ({exc})")
+        else:
+            if mismatch_count:
+                issues.append(f"{mismatch_count} bad verification dates")
+
+    return issues
+
+
 def load_monthly_benchmark_dataset(
     *,
     data_dir: str,
@@ -623,28 +703,33 @@ def process_one(
         for freq in freqs
     }
 
-    # Skip only when all existing products also have internally consistent
-    # verification dates.  This automatically invalidates legacy benchmarks
-    # whose time(Y,L) coordinate became detached during multi-file concat.
+    # Skip only when all existing products contain the complete requested
+    # cohort and have internally consistent verification dates.  This
+    # invalidates both detached legacy time coordinates and caches that
+    # silently omitted an initialization year.
     if all(path.exists() for path in outfiles.values()) and not force:
-        bad_time_files = []
-        for path in outfiles.values():
-            with xr.open_dataset(path) as existing:
-                mismatch_count = smyle_access.verification_time_mismatch_count(
-                    existing,
-                    init_month=init_month,
-                )
-            if mismatch_count:
-                bad_time_files.append(f"{path.name} ({mismatch_count} bad dates)")
-        if not bad_time_files:
+        invalid_files = []
+        for freq, path in outfiles.items():
+            issues = existing_benchmark_issues(
+                path,
+                field=field,
+                init_month=init_month,
+                years=years,
+                members=members,
+                nlead=nlead,
+                freq=freq,
+            )
+            if issues:
+                invalid_files.append(f"{path.name} ({'; '.join(issues)})")
+        if not invalid_files:
             log.info(
                 "  [SKIP]   %s (already exists)",
                 ", ".join(path.name for path in outfiles.values())
             )
             return "skipped"
         log.warning(
-            "  [REBUILD] invalid verification time: %s",
-            ", ".join(bad_time_files),
+            "  [REBUILD] invalid existing benchmark: %s",
+            ", ".join(invalid_files),
         )
         force = True
 

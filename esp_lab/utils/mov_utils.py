@@ -272,7 +272,10 @@ def add_polar_longitude_labels(
                 0.5 + float(axes_radius) * np.cos(angle),
                 0.5 + float(axes_radius) * np.sin(angle),
                 format_longitude_label(lon),
-                transform=data_projection,
+                # The coordinates above are fractions of the axes, not
+                # geographic longitude/latitude values.  Using the data CRS
+                # here collapses the labels around the polar map seam.
+                transform=ax.transAxes,
                 ha="center",
                 va="center",
                 fontsize=fontsize,
@@ -333,7 +336,7 @@ def add_polar_latitude_labels(
                 x_position,
                 y,
                 label,
-                transform=data_projection,
+                transform=ax.transAxes,
                 ha="left",
                 va="center",
                 fontsize=fontsize,

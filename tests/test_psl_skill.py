@@ -45,6 +45,36 @@ def test_seasonal_centered_mean_rejects_all_missing_input():
         psl_skill.seasonal_centered_mean(da)
 
 
+def test_retain_complete_seasonal_leads_drops_only_all_missing_endpoint():
+    data = xr.DataArray(
+        np.ones((2, 8, 3)),
+        dims=("Y", "L", "M"),
+        coords={"Y": [2000, 2001], "L": [3, 6, 9, 12, 15, 18, 21, 24], "M": range(3)},
+    )
+    data.loc[{"L": 24}] = np.nan
+    # A partially missing lead remains a valid, complete-season coordinate.
+    data.loc[{"Y": 2000, "L": 21, "M": 0}] = np.nan
+    valid_time = xr.DataArray(
+        np.tile(np.arange(8), (2, 1)),
+        dims=("Y", "L"),
+        coords={"Y": data.Y, "L": data.L},
+    )
+
+    kept, kept_time, dropped = psl_skill.retain_complete_seasonal_leads(data, valid_time)
+
+    assert kept.L.values.tolist() == [3, 6, 9, 12, 15, 18, 21]
+    assert kept_time.L.values.tolist() == kept.L.values.tolist()
+    assert dropped == [24]
+
+
+def test_retain_complete_seasonal_leads_rejects_mismatched_coordinates():
+    data = xr.DataArray([1.0, np.nan], dims="L", coords={"L": [3, 6]})
+    valid_time = xr.DataArray([0, 1], dims="L", coords={"L": [3, 9]})
+
+    with pytest.raises(ValueError, match="identical L coordinates"):
+        psl_skill.retain_complete_seasonal_leads(data, valid_time)
+
+
 def test_observation_agreement_removes_local_monthly_climatology():
     time = [
         cftime.DatetimeNoLeap(year, month, 15)

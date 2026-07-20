@@ -33,6 +33,55 @@ LOG = logging.getLogger(__name__)
 PRODUCT_CONFIGURATION_SCHEMA = 6
 
 
+def smyle_benchmark_fingerprints(
+    settings: dict[str, object],
+    args: argparse.Namespace,
+) -> list[dict[str, object]]:
+    """Describe the benchmark files that feed a SMYLE field product.
+
+    Including these lightweight file fingerprints in the cache signature
+    prevents a corrected upstream benchmark from leaving an older regridded
+    field/index cache falsely reusable.
+    """
+    archive_field = str(
+        settings.get(
+            "archive_field",
+            "TS" if str(settings["field"]) == "SST" else settings["field"],
+        )
+    )
+    frequency = "seas" if settings["frequency"] == "seasonal" else "mon"
+    root = Path(args.smyle_benchmark_dir)
+    fingerprints: list[dict[str, object]] = []
+    for init_month in args.init_months:
+        name = core.smyle_access.benchmark_filename(
+            archive_field,
+            init_month,
+            nens=args.smyle_nens,
+            nlead=args.monthly_nlead,
+            freq=frequency,
+        )
+        candidates = [
+            root / "leadtime_acc" / "inputs" / archive_field / name,
+            root / name,
+        ]
+        path = next(
+            (candidate for candidate in candidates if candidate.exists()),
+            candidates[0],
+        )
+        record: dict[str, object] = {
+            "init_month": int(init_month),
+            "path": str(path.resolve()),
+        }
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            record["missing"] = True
+        else:
+            record.update(size=int(stat.st_size), mtime_ns=int(stat.st_mtime_ns))
+        fingerprints.append(record)
+    return fingerprints
+
+
 def configuration_signature(
     source: str,
     settings: dict[str, object],
@@ -74,6 +123,7 @@ def configuration_signature(
             signature.update(
                 benchmark_dir=str(Path(args.smyle_benchmark_dir).resolve()),
                 ensemble_size=args.smyle_nens,
+                benchmark_inputs=smyle_benchmark_fingerprints(settings, args),
             )
         elif source == "nmme":
             signature.update(
@@ -294,6 +344,17 @@ def write_product(
             else "PCMDI conventional EOF pattern"
         ),
         common_basis_reference=str(settings["obs_product"]),
+        observation_data_period=(
+            f"{args.obs_start_year}-{args.obs_end_year}"
+        ),
+        eof_reference_period=(
+            f"{args.eof_reference_start_year}-{args.eof_reference_end_year}"
+        ),
+        hindcast_initialization_period=(
+            "not_applicable"
+            if source == "obs"
+            else f"{args.start_year}-{args.end_year}"
+        ),
         eof_scaling=str(args.eof_scaling),
         remove_domain_mean=str(args.remove_domain_mean),
         sst_ocean_mask_min_valid_fraction=str(
@@ -484,6 +545,7 @@ def write_manifest(
         "modes": mode_configs,
         "init_months": args.init_months,
         "years": [args.start_year, args.end_year],
+        "hindcast_initialization_years": [args.start_year, args.end_year],
         "climatology": [args.clim_start, args.clim_end],
         "monthly_nlead": args.monthly_nlead,
         "target_grid": {

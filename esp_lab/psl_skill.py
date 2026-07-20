@@ -144,6 +144,43 @@ def seasonal_centered_mean(
     return out
 
 
+def retain_complete_seasonal_leads(
+    data: xr.DataArray,
+    valid_time: xr.DataArray,
+) -> tuple[xr.DataArray, xr.DataArray, list[int]]:
+    """Exclude seasonal lead coordinates containing no finite hindcast data.
+
+    Centered three-month means require a month on either side of the target
+    month. A 24-month hindcast therefore has seven complete seasonal centers;
+    an upstream ``L=24`` coordinate may be retained as an all-missing
+    placeholder. This helper preserves every partially or fully populated
+    lead and removes only leads that are entirely missing across all other
+    dimensions.
+    """
+    if "L" not in data.dims or "L" not in valid_time.dims:
+        raise ValueError("data and valid_time must both contain an L dimension")
+    if not data["L"].identical(valid_time["L"]):
+        raise ValueError("data and valid_time must have identical L coordinates")
+
+    finite_by_lead = data.notnull()
+    for dim in tuple(dim for dim in finite_by_lead.dims if dim != "L"):
+        finite_by_lead = finite_by_lead.any(dim)
+    if finite_by_lead.chunks is not None:
+        # Boolean indexing with ``drop=True`` requires a realized mask.
+        finite_by_lead = finite_by_lead.compute()
+
+    complete = data["L"].where(finite_by_lead, drop=True)
+    dropped = data["L"].where(~finite_by_lead, drop=True)
+    if complete.size == 0:
+        raise ValueError("no complete seasonal leads are available")
+
+    return (
+        data.sel(L=complete),
+        valid_time.sel(L=complete),
+        [int(value) for value in dropped.values],
+    )
+
+
 def psl_reference(
     index_name: str,
     external_dir: str | Path | None = None,

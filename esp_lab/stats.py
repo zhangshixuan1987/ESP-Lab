@@ -453,7 +453,20 @@ def compute_skill_annual(mod_da,mod_time,obs_da,nleadavg=1,nleads=1,resamp=0,det
     s2t  = xr.concat(s2t_list,lvalsda)
     return xr.Dataset({'corr':corr,'pval':pval,'rmse':rmse,'msss':msss,'rpc':rpc,'sig_obs':sigo,'sig_sig':sigs,'sig_tot':sigt,'s2t':s2t})
 
-def compute_skill_seasonal(mod_da,mod_time,obs_da,climy0=None,climy1=None,nleadavg=1,nleads=1,resamp=0,detrend=False,monthly=False, is_anomaly=False):
+def compute_skill_seasonal(
+    mod_da,
+    mod_time,
+    obs_da,
+    climy0=None,
+    climy1=None,
+    nleadavg=1,
+    nleads=1,
+    resamp=0,
+    detrend=False,
+    monthly=False,
+    is_anomaly=False,
+    target_years_by_lead=None,
+):
     """
     Computes a suite of deterministic skill metrics given two DataArrays
     corresponding to model and observations, which must share the same
@@ -486,6 +499,11 @@ def compute_skill_seasonal(mod_da,mod_time,obs_da,climy0=None,climy1=None,nleada
         instead of each lead season)
     is_anomaly : bool (optional)
         If True, assumes obs_da is already anomaly data and skips climo removal. Default False.
+    target_years_by_lead : mapping, optional
+        Explicit target-year cohort for each lead coordinate. When supplied,
+        model and observation samples are restricted to these years after
+        time alignment. This supports fair multi-model comparisons using an
+        identical valid cohort separately for every initialization and lead.
 
     Returns
     -------
@@ -494,6 +512,7 @@ def compute_skill_seasonal(mod_da,mod_time,obs_da,climy0=None,climy1=None,nleada
     """
     corr_list = []; pval_list = []; rmse_list = []; msss_list = []; rpc_list = []
     sigobs_list = []; sigsig_list = []; sigtot_list = []; s2t_list = []
+    sample_count_list = []; target_start_list = []; target_end_list = []
     
     # convert L to leadtime values:
     if (monthly):
@@ -519,6 +538,22 @@ def compute_skill_seasonal(mod_da,mod_time,obs_da,climy0=None,climy1=None,nleada
         if (nleadavg>1):
             obs_seas = obs_seas.rolling(time=nleadavg,min_periods=nleadavg, center=True).mean().dropna('time',how='all')
         a,b = xr.align(ens_ts,obs_seas)
+        lead_value = int(lvalsda.values[i])
+        if target_years_by_lead is not None:
+            requested_years = np.asarray(
+                target_years_by_lead.get(lead_value, []), dtype=int
+            )
+            available_years = np.intersect1d(a.time.values, b.time.values)
+            selected_years = np.intersect1d(available_years, requested_years)
+            a = a.sel(time=selected_years)
+            b = b.sel(time=selected_years)
+        else:
+            selected_years = np.asarray(a.time.values, dtype=int)
+        if selected_years.size < 3:
+            raise ValueError(
+                f"Lead {lead_value} has only {selected_years.size} common "
+                "target-year samples; at least three are required."
+            )
         a = _single_chunk_core_dim(a,'time')
         b = _single_chunk_core_dim(b,'time')
         if detrend:
@@ -545,6 +580,9 @@ def compute_skill_seasonal(mod_da,mod_time,obs_da,climy0=None,climy1=None,nleada
         sigsig_list.append(sigsig)
         sigtot_list.append(sigtot)
         s2t_list.append(sigsig/sigtot)
+        sample_count_list.append(int(selected_years.size))
+        target_start_list.append(int(selected_years.min()))
+        target_end_list.append(int(selected_years.max()))
     corr = xr.concat(corr_list,lvalsda)
     pval = xr.concat(pval_list,lvalsda)
     rmse = xr.concat(rmse_list,lvalsda)
@@ -554,7 +592,78 @@ def compute_skill_seasonal(mod_da,mod_time,obs_da,climy0=None,climy1=None,nleada
     sigs = xr.concat(sigsig_list,lvalsda)
     sigt = xr.concat(sigtot_list,lvalsda)
     s2t  = xr.concat(s2t_list,lvalsda)
-    return xr.Dataset({'corr':corr,'pval':pval,'rmse':rmse,'msss':msss,'rpc':rpc,'sig_obs':sigo,'sig_sig':sigs,'sig_tot':sigt,'s2t':s2t})
+    return xr.Dataset({
+        'corr':corr,
+        'pval':pval,
+        'rmse':rmse,
+        'msss':msss,
+        'rpc':rpc,
+        'sig_obs':sigo,
+        'sig_sig':sigs,
+        'sig_tot':sigt,
+        's2t':s2t,
+        'sample_count': xr.DataArray(sample_count_list, dims='L', coords={'L': lvalsda}),
+        'target_year_start': xr.DataArray(target_start_list, dims='L', coords={'L': lvalsda}),
+        'target_year_end': xr.DataArray(target_end_list, dims='L', coords={'L': lvalsda}),
+    })
+
+
+def common_valid_target_years_seasonal(
+    model_indices,
+    model_times,
+    obs_da,
+    leads,
+):
+    """Return identical valid target-year cohorts for several hindcasts.
+
+    The intersection is computed independently for each lead. A model year is
+    valid when its verification time is defined and its ensemble index has at
+    least one finite value. The matching observed month/year must also contain
+    a finite index value.
+    """
+    if set(model_indices) != set(model_times):
+        raise ValueError("model_indices and model_times must have identical keys.")
+    if not model_indices:
+        raise ValueError("At least one model is required for sample intersection.")
+
+    obs_year = np.asarray(obs_da.time.dt.year.values, dtype=int)
+    obs_month = np.asarray(obs_da.time.dt.month.values, dtype=int)
+    obs_finite = obs_da.notnull()
+    for dim in tuple(dim for dim in obs_finite.dims if dim != "time"):
+        obs_finite = obs_finite.any(dim)
+    obs_finite = np.asarray(obs_finite.values, dtype=bool)
+
+    result = {}
+    for lead in map(int, leads):
+        target_months = set()
+        common_years = None
+        for model in model_indices:
+            index = model_indices[model].sel(L=lead)
+            valid_time = model_times[model].sel(L=lead)
+            years = np.asarray(valid_time.dt.year.values, dtype=int)
+            months = np.asarray(valid_time.dt.month.values, dtype=int)
+            target_months.update(np.unique(months).tolist())
+
+            finite = index.notnull()
+            for dim in tuple(dim for dim in finite.dims if dim != "Y"):
+                finite = finite.any(dim)
+            model_years = set(years[np.asarray(finite.values, dtype=bool)].tolist())
+            common_years = (
+                model_years if common_years is None else common_years & model_years
+            )
+
+        if len(target_months) != 1:
+            raise ValueError(
+                f"Lead {lead} has inconsistent target months across models: "
+                f"{sorted(target_months)}"
+            )
+        target_month = target_months.pop()
+        observed_years = set(
+            obs_year[(obs_month == target_month) & obs_finite].tolist()
+        )
+        selected = sorted((common_years or set()) & observed_years)
+        result[lead] = selected
+    return result
 
 
 def compute_skill_seasonal_batch(
