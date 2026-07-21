@@ -20,14 +20,21 @@ def main():
         "--dir",
         type=str,
         required=True,
-        help="Path to the directory containing figures.json and the saved PNG figures.",
+        help="Path to the directory containing the saved diagnostic figures.",
+    )
+    parser.add_argument(
+        "--discover",
+        action="store_true",
+        help="Rebuild figures.json from actual fig_* image files before generating HTML.",
     )
     args = parser.parse_args()
 
     diag_dir = Path(args.dir)
     print(f"Generating diagnostic webpage in: {diag_dir}")
     try:
-        output_path = generate_diagnostics_webpage(diag_dir)
+        output_path = generate_diagnostics_webpage(
+            diag_dir, discover_figures=args.discover
+        )
         print(f"Success! Webpage created at: {output_path}")
     except Exception as e:
         print(f"Error generating webpage: {e}", file=sys.stderr)

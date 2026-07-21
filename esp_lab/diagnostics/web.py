@@ -1,15 +1,234 @@
 import json
+import re
+import stat
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Union
 
 
-def generate_diagnostics_webpage(diag_dir: Union[str, Path]) -> Path:
+FIGURE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".webp"}
+CLIMATE_MODES = {
+    "AMO",
+    "EA",
+    "NAM",
+    "NAO",
+    "NPGO",
+    "NPO",
+    "PDO",
+    "PNA",
+    "PSA1",
+    "PSA2",
+    "SAM",
+    "SCA",
+}
+
+
+def _humanize_figure_name(filename: str) -> str:
+    """Return a readable title for a workflow figure filename."""
+    stem = Path(filename).stem
+    if stem.lower().startswith("fig_"):
+        stem = stem[4:]
+    replacements = {
+        "acc": "ACC",
+        "eli": "ELI",
+        "enso": "ENSO",
+        "eof": "EOF",
+        "iod": "IOD",
+        "jja": "JJA",
+        "djf": "DJF",
+        "nmme": "NMME",
+        "nrmse": "nRMSE",
+        "prect": "PRECT",
+        "psl": "PSL",
+        "rmse": "RMSE",
+        "sst": "SST",
+        "tc": "TC",
+        "trefht": "TREFHT",
+    }
+    words = []
+    for token in re.split(r"[_\-]+", stem):
+        lower = token.lower()
+        if lower in {"nino34", "nino3.4"}:
+            words.append("Niño3.4")
+        elif lower == "nino3" and words and words[-1] == "Niño":
+            words[-1] = "Niño3"
+        elif lower == "4" and words and words[-1] == "Niño3":
+            words[-1] = "Niño3.4"
+        elif lower.startswith("nino") and lower[4:].isdigit():
+            words.append(f"Niño{lower[4:]}")
+        else:
+            words.append(replacements.get(lower, token.capitalize()))
+    return " ".join(words)
+
+
+def _infer_metric(filename: str) -> str:
+    """Infer a compact metric key for a figure without manifest metadata."""
+    stem = Path(filename).stem.lower()
+    candidates = (
+        "global_teleconnection_patterns",
+        "multi_e3sm_rmse_skill_map_conus",
+        "multi_e3sm_rmse_skill_diff",
+        "multi_e3sm_rmse_skill_map",
+        "multi_e3sm_acc_skill_map",
+        "rmse_diff_compare",
+        "rmse_compare_global",
+        "rmse_compare_conus",
+        "time_series",
+        "eof_patterns",
+        "acc_skill",
+        "lead_time_benchmark",
+        "drift_climatology",
+        "skill",
+    )
+    return next((metric for metric in candidates if metric in stem), "workflow_figure")
+
+
+def _infer_mode(filename: str) -> str:
+    """Infer a broad diagnostic group for a figure without metadata."""
+    stem = Path(filename).stem.lower()
+    for token, label in (
+        ("nmme", "NMME"),
+        ("nino", "ENSO"),
+        ("enso", "ENSO"),
+        ("eli", "ELI"),
+        ("tc_", "TC"),
+        ("tropical_cyclone", "TC"),
+        ("iod", "IOD"),
+        ("nao", "NAO"),
+        ("sst", "SST"),
+        ("psl", "PSL"),
+        ("prect", "PRECT"),
+        ("trefht", "TREFHT"),
+    ):
+        if token in stem:
+            return label
+    return "Other"
+
+
+def _infer_workflow_group(filename: str, metric: str, mode: str) -> str:
+    """Map a figure to one of the major workflow diagnostic sections."""
+    stem = Path(filename).stem.lower()
+    metric_lower = metric.lower()
+    if "eli" in stem or "eli" in metric_lower:
+        return "ELI"
+    if stem.startswith("fig_tc_") or "track_density" in stem:
+        return "TC"
+    if mode.upper() in CLIMATE_MODES or metric_lower in {
+        "eof_patterns",
+        "global_teleconnection_patterns",
+        "pc_time_series",
+    }:
+        return "MOV"
+    if metric_lower.startswith("leadtime_acc"):
+        return "LEAD_ACC"
+    if metric_lower.startswith("leadtime_rmse") or metric_lower.startswith(
+        "rmse_compare"
+    ):
+        return "LEAD_RMSE"
+    return "SST_INDEX"
+
+
+def discover_workflow_figures(
+    diag_dir: Union[str, Path],
+    *,
+    pattern: str = "fig_*",
+    write_manifest: bool = False,
+) -> dict:
+    """Catalog actual workflow figures in a directory.
+
+    Only files matching ``pattern`` with a supported image extension are
+    returned. Existing manifest metadata is retained for files that still
+    exist; stale entries are removed and missing entries are synthesized.
+    """
+    diag_dir = Path(diag_dir)
+    if not diag_dir.is_dir():
+        raise FileNotFoundError(f"Diagnostics directory does not exist: {diag_dir}")
+
+    manifest_path = diag_dir / "figures.json"
+    existing_manifest = {"figures": []}
+    if manifest_path.is_file():
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as fh:
+                existing_manifest = json.load(fh)
+        except Exception as exc:
+            raise ValueError(f"Failed to parse manifest JSON file: {exc}") from exc
+
+    metadata_by_file = {
+        entry.get("file"): entry
+        for entry in existing_manifest.get("figures", [])
+        if entry.get("file")
+    }
+    figure_paths = sorted(
+        path
+        for path in diag_dir.glob(pattern)
+        if path.is_file() and path.suffix.lower() in FIGURE_EXTENSIONS
+    )
+
+    figures = []
+    for path in figure_paths:
+        entry = dict(metadata_by_file.get(path.name, {}))
+        entry.update({"file": path.name})
+        entry.setdefault("mode", _infer_mode(path.name))
+        entry.setdefault("metric", _infer_metric(path.name))
+        entry.setdefault("title", _humanize_figure_name(path.name))
+        entry.setdefault("caption", "Workflow-generated diagnostic figure.")
+        entry["group"] = _infer_workflow_group(
+            path.name, entry["metric"], entry["mode"]
+        )
+        figures.append(entry)
+
+    manifest = {
+        key: value
+        for key, value in existing_manifest.items()
+        if key not in {"figures", "updated"}
+    }
+    manifest["figures"] = figures
+    manifest["updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    if write_manifest:
+        with open(manifest_path, "w", encoding="utf-8") as fh:
+            json.dump(manifest, fh, indent=2, ensure_ascii=False)
+            fh.write("\n")
+
+    return manifest
+
+
+def _make_gallery_web_readable(diag_dir: Path, manifest: dict) -> None:
+    """Ensure the portal can traverse the gallery and read its files."""
+    directory_bits = (
+        stat.S_IRUSR
+        | stat.S_IWUSR
+        | stat.S_IXUSR
+        | stat.S_IRGRP
+        | stat.S_IXGRP
+        | stat.S_IROTH
+        | stat.S_IXOTH
+    )
+    diag_dir.chmod(diag_dir.stat().st_mode | directory_bits)
+
+    for entry in manifest.get("figures", []):
+        filename = entry.get("file")
+        if not filename:
+            continue
+        figure_path = diag_dir / filename
+        if figure_path.is_file():
+            readable_bits = stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH
+            figure_path.chmod(figure_path.stat().st_mode | readable_bits)
+
+
+def generate_diagnostics_webpage(
+    diag_dir: Union[str, Path],
+    *,
+    discover_figures: bool = False,
+    figure_pattern: str = "fig_*",
+    make_web_readable: bool = True,
+) -> Path:
     """Generate an interactive HTML webpage for viewing diagnostics figures.
 
-    This function reads a `figures.json` manifest file from the specified
-    directory, embeds its contents inside an HTML template containing a modern,
-    responsive dark-mode viewer, and writes the output as `index.html` in the
-    same directory.
+    This function embeds figure metadata inside a modern, responsive dark-mode
+    viewer and writes the output as `index.html` in the same directory. When
+    ``discover_figures`` is true, the manifest is first synchronized with the
+    actual workflow figure files in the directory.
 
     The generated webpage is 100% self-contained (no external remote CSS/JS dependencies)
     and uses direct JSON embedding to avoid browser CORS errors when loaded via file://.
@@ -18,6 +237,13 @@ def generate_diagnostics_webpage(diag_dir: Union[str, Path]) -> Path:
     ----------
     diag_dir : str or pathlib.Path
         Path to the directory containing the figures and `figures.json`.
+    discover_figures : bool, optional
+        Discover actual workflow figures and remove stale manifest entries.
+    figure_pattern : str, optional
+        Filename glob used when discovering figures. Defaults to ``fig_*``.
+    make_web_readable : bool, optional
+        Make cataloged figures publicly readable and the gallery directory
+        publicly traversable. Defaults to true.
 
     Returns
     -------
@@ -34,18 +260,25 @@ def generate_diagnostics_webpage(diag_dir: Union[str, Path]) -> Path:
         raise FileNotFoundError(f"Diagnostics directory does not exist: {diag_dir}")
 
     manifest_path = diag_dir / "figures.json"
-    if not manifest_path.exists():
-        raise FileNotFoundError(
-            f"Figures manifest not found at {manifest_path}. "
-            "Please ensure you have generated figures and their entries have been saved."
+    if discover_figures:
+        manifest_data = discover_workflow_figures(
+            diag_dir, pattern=figure_pattern, write_manifest=True
         )
-
-    # Load manifest data
-    try:
-        with open(manifest_path, "r", encoding="utf-8") as fh:
-            manifest_data = json.load(fh)
-    except Exception as e:
-        raise ValueError(f"Failed to parse manifest JSON file: {e}")
+        if not manifest_data["figures"]:
+            raise FileNotFoundError(
+                f"No workflow figures matching {figure_pattern!r} found in {diag_dir}"
+            )
+    else:
+        if not manifest_path.exists():
+            raise FileNotFoundError(
+                f"Figures manifest not found at {manifest_path}. "
+                "Please ensure you have generated figures and their entries have been saved."
+            )
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as fh:
+                manifest_data = json.load(fh)
+        except Exception as e:
+            raise ValueError(f"Failed to parse manifest JSON file: {e}")
 
     # Build the HTML template
     html_content = _build_html_template(manifest_data)
@@ -54,11 +287,10 @@ def generate_diagnostics_webpage(diag_dir: Union[str, Path]) -> Path:
     with open(output_path, "w", encoding="utf-8") as fh:
         fh.write(html_content)
 
-    try:
+    if make_web_readable:
+        _make_gallery_web_readable(diag_dir, manifest_data)
+        manifest_path.chmod(0o644)
         output_path.chmod(0o644)
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).warning(f"Could not set read permissions on index.html: {e}")
 
     return output_path
 
@@ -73,6 +305,9 @@ def _build_html_template(manifest: dict) -> str:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>ESP-Lab Diagnostic Viewer</title>
     <!-- Modern font from Google Fonts. Standard system-ui fallback is included for offline use. -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -356,28 +591,16 @@ def _build_html_template(manifest: dict) -> str:
             color: var(--text-secondary);
         }
 
-        /* Horizontal Tabs for Metrics */
+        /* Compact figure-type filters within the selected workflow group */
         .metrics-tabs {
-            display: flex;
+            display: none;
+            flex-wrap: wrap;
             gap: 0.5rem;
             margin-bottom: 2rem;
-            overflow-x: auto;
-            padding-bottom: 0.5rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
-            scrollbar-width: thin;
-        }
-
-        .metrics-tabs::-webkit-scrollbar {
-            height: 4px;
-        }
-
-        .metrics-tabs::-webkit-scrollbar-track {
-            background: rgba(255, 255, 255, 0.01);
-        }
-
-        .metrics-tabs::-webkit-scrollbar-thumb {
-            background: rgba(255, 255, 255, 0.12);
-            border-radius: 2px;
+            padding: 0.75rem;
+            background: rgba(15, 23, 42, 0.45);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
         }
 
         .metric-tab-btn {
@@ -385,7 +608,7 @@ def _build_html_template(manifest: dict) -> str:
             border: 1px solid var(--border-color);
             border-radius: 9999px;
             color: var(--text-secondary);
-            padding: 0.5rem 1.25rem;
+            padding: 0.45rem 1rem;
             font-family: var(--font-body);
             font-size: 0.85rem;
             font-weight: 500;
@@ -1401,33 +1624,47 @@ def _build_html_template(manifest: dict) -> str:
         // Group mapping metadata
         const GROUP_LABELS = {
             "ALL": "All Figures",
-            "AMO": "AMO (Atlantic Multidecadal Oscillation)",
-            "ATLNINO": "Atlantic Niño",
-            "EA": "EA (East Atlantic Pattern)",
-            "IOD": "IOD (Indian Ocean Dipole)",
-            "NAM": "NAM (Northern Annular Mode)",
-            "NAO": "NAO (North Atlantic Oscillation)",
-            "NINO12": "Niño 1+2 SST",
-            "NINO3": "Niño 3 SST",
-            "NINO4": "Niño 4 SST",
-            "NINO3.4": "Niño 3.4 SST",
-            "NPGO": "NPGO (North Pacific Gyre Oscillation)",
-            "NPO": "NPO (North Pacific Oscillation)",
-            "PDO": "PDO (Pacific Decadal Oscillation)",
-            "PNA": "PNA (Pacific-North American)",
-            "PSA1": "PSA1 (Pacific-South American 1)",
-            "PSA2": "PSA2 (Pacific-South American 2)",
-            "SAM": "SAM (Southern Annular Mode)",
-            "SCA": "SCA (Scandinavian Pattern)",
-            "TNA": "TNA (Tropical North Atlantic)",
+            "LEAD_ACC": "Lead-time ACC",
+            "LEAD_RMSE": "Lead-time RMSE",
+            "SST_INDEX": "SST Indices",
+            "MOV": "Modes of Variability",
             "TC": "Tropical Cyclones",
-            "PRECT": "PRECT (Precipitation)",
-            "PSL": "PSL (Sea Level Pressure)",
-            "TREFHT": "TREFHT (Reference Height Temp)"
+            "ELI": "ELI Diagnostics",
+            "OTHER": "Other"
         };
+
+        const FIGURE_TYPE_LABELS = {
+            "ALL": "All figure types",
+            "SKILL": "Skill",
+            "TIME_SERIES": "Time series",
+            "SKILL_MAP": "Skill maps",
+            "DIFFERENCE": "Differences",
+            "MODEL_COMPARISON": "Model comparison",
+            "EOF_PATTERNS": "EOF patterns",
+            "TELECONNECTIONS": "Teleconnections",
+            "PC_TIME_SERIES": "PC time series",
+            "METHOD_COMPARISON": "Method comparison",
+            "LEAD_TIME": "Lead-time comparison",
+            "ENSO_REGRESSION": "ENSO regression",
+            "TRACK_DENSITY": "Track density",
+            "TRAJECTORIES": "Trajectories",
+            "DRIFT": "Drift climatology",
+            "NMME_BENCHMARK": "NMME benchmark",
+            "ELI_NINO34": "ELI vs Niño3.4",
+            "OTHER": "Other"
+        };
+        const FIGURE_TYPE_ORDER = [
+            "SKILL", "SKILL_MAP", "TIME_SERIES", "MODEL_COMPARISON",
+            "DIFFERENCE", "EOF_PATTERNS", "TELECONNECTIONS", "PC_TIME_SERIES",
+            "METHOD_COMPARISON", "LEAD_TIME", "ENSO_REGRESSION", "TRACK_DENSITY",
+            "TRAJECTORIES", "DRIFT", "NMME_BENCHMARK", "ELI_NINO34", "OTHER"
+        ];
 
         // Parse group names from filenames or properties
         function parseGroup(fig) {
+            if (fig.group && fig.group.trim() !== "") {
+                return fig.group.trim().toUpperCase();
+            }
             if (fig.mode && fig.mode.trim() !== "") {
                 const cleanMode = fig.mode.trim().toUpperCase();
                 if (cleanMode === "NINO3_4" || cleanMode === "NINO34") return "NINO3.4";
@@ -1463,6 +1700,48 @@ def _build_html_template(manifest: dict) -> str:
                 .join(' ');
         }
 
+        // Reduce internal metric keys to a few readable figure types.
+        function classifyFigureType(fig) {
+            const metric = (fig.metric || "").toLowerCase();
+            const file = (fig.file || "").toLowerCase();
+
+            if (fig.group === "LEAD_ACC") {
+                if (metric.includes("compare")) return "MODEL_COMPARISON";
+                if (metric.includes("diff")) return "DIFFERENCE";
+                return "SKILL_MAP";
+            }
+            if (fig.group === "LEAD_RMSE") {
+                if (metric.startsWith("rmse_compare")) return "MODEL_COMPARISON";
+                if (metric.includes("diff")) return "DIFFERENCE";
+                return "SKILL_MAP";
+            }
+            if (fig.group === "SST_INDEX") {
+                return metric.includes("time_series") || file.includes("timeseries")
+                    ? "TIME_SERIES" : "SKILL";
+            }
+            if (fig.group === "MOV") {
+                if (metric === "eof_patterns") return "EOF_PATTERNS";
+                if (metric === "global_teleconnection_patterns") return "TELECONNECTIONS";
+                if (metric === "pc_time_series") return "PC_TIME_SERIES";
+                return "SKILL";
+            }
+            if (fig.group === "TC") {
+                if (metric.includes("method")) return "METHOD_COMPARISON";
+                if (metric.includes("leadtime")) return "LEAD_TIME";
+                if (metric.includes("enso_regression")) return "ENSO_REGRESSION";
+                if (metric.includes("density")) return "TRACK_DENSITY";
+                if (metric.includes("trajectory")) return "TRAJECTORIES";
+            }
+            if (fig.group === "ELI") {
+                if (metric.includes("dual_axis")) return "ELI_NINO34";
+                if (metric.includes("drift")) return "DRIFT";
+                if (metric.includes("benchmark")) return "NMME_BENCHMARK";
+                if (metric.includes("time_series")) return "TIME_SERIES";
+                return "SKILL";
+            }
+            return "OTHER";
+        }
+
         // Initialize Web Application
         document.addEventListener("DOMContentLoaded", () => {
             // Display Update Timestamp
@@ -1471,6 +1750,7 @@ def _build_html_template(manifest: dict) -> str:
             // Process groups and figure properties
             manifest.figures.forEach(fig => {
                 fig.group = parseGroup(fig);
+                fig.figureType = classifyFigureType(fig);
             });
 
             renderSidebar();
@@ -1504,35 +1784,6 @@ def _build_html_template(manifest: dict) -> str:
                 });
             }
 
-            // Drag-to-scroll for metrics tabs on desktop devices
-            const tabsContainer = document.getElementById("metricsTabs");
-            if (tabsContainer) {
-                let isDown = false;
-                let startX;
-                let scrollLeft;
-
-                tabsContainer.addEventListener("mousedown", (e) => {
-                    isDown = true;
-                    startX = e.pageX - tabsContainer.offsetLeft;
-                    scrollLeft = tabsContainer.scrollLeft;
-                    tabsContainer.style.cursor = "grabbing";
-                });
-                tabsContainer.addEventListener("mouseleave", () => {
-                    isDown = false;
-                    tabsContainer.style.cursor = "default";
-                });
-                tabsContainer.addEventListener("mouseup", () => {
-                    isDown = false;
-                    tabsContainer.style.cursor = "default";
-                });
-                tabsContainer.addEventListener("mousemove", (e) => {
-                    if (!isDown) return;
-                    e.preventDefault();
-                    const x = e.pageX - tabsContainer.offsetLeft;
-                    const walk = (x - startX) * 1.5; // Scroll speed modifier
-                    tabsContainer.scrollLeft = scrollLeft - walk;
-                });
-            }
         });
 
         // Render groups lists in sidebar
@@ -1546,8 +1797,20 @@ def _build_html_template(manifest: dict) -> str:
                 counts[fig.group] = (counts[fig.group] || 0) + 1;
             });
 
-            // Sort groups: show ALL, then sort others alphabetically
-            const groups = Object.keys(counts).filter(g => g !== "ALL").sort();
+            // Follow the major section order used by the diagnostics workflow.
+            const workflowOrder = [
+                "LEAD_ACC", "LEAD_RMSE", "SST_INDEX", "MOV", "TC", "ELI", "OTHER"
+            ];
+            const groups = Object.keys(counts)
+                .filter(g => g !== "ALL")
+                .sort((a, b) => {
+                    const ai = workflowOrder.indexOf(a);
+                    const bi = workflowOrder.indexOf(b);
+                    if (ai === -1 && bi === -1) return a.localeCompare(b);
+                    if (ai === -1) return 1;
+                    if (bi === -1) return -1;
+                    return ai - bi;
+                });
             const allGroups = ["ALL", ...groups];
 
             allGroups.forEach(grp => {
@@ -1599,25 +1862,29 @@ def _build_html_template(manifest: dict) -> str:
                 return matchesGroup && matchesSearch;
             });
 
-            // 2. Generate sub-metrics list based on current selection
+            // 2. Show concise figure-type filters only within a major group.
             const uniqueMetrics = new Set();
-            list.forEach(fig => uniqueMetrics.add(fig.metric));
+            list.forEach(fig => uniqueMetrics.add(fig.figureType));
 
             // Render sub-metric tab buttons
             const metricsTabs = document.getElementById("metricsTabs");
             metricsTabs.innerHTML = "";
 
-            if (uniqueMetrics.size > 1) {
+            if (activeGroup !== "ALL" && uniqueMetrics.size > 1) {
                 const allBtn = document.createElement("button");
                 allBtn.className = `metric-tab-btn ${activeMetric === "ALL" ? "active" : ""}`;
-                allBtn.innerText = "All Metrics";
+                allBtn.innerText = FIGURE_TYPE_LABELS.ALL;
                 allBtn.onclick = () => selectMetric("ALL");
                 metricsTabs.appendChild(allBtn);
 
-                Array.from(uniqueMetrics).sort().forEach(met => {
+                Array.from(uniqueMetrics).sort((a, b) => {
+                    const ai = FIGURE_TYPE_ORDER.indexOf(a);
+                    const bi = FIGURE_TYPE_ORDER.indexOf(b);
+                    return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+                }).forEach(met => {
                     const btn = document.createElement("button");
                     btn.className = `metric-tab-btn ${activeMetric === met ? "active" : ""}`;
-                    btn.innerText = formatMetricName(met);
+                    btn.innerText = FIGURE_TYPE_LABELS[met] || formatMetricName(met);
                     btn.onclick = () => selectMetric(met);
                     metricsTabs.appendChild(btn);
                 });
@@ -1629,7 +1896,7 @@ def _build_html_template(manifest: dict) -> str:
 
             // 3. Filter by sub-metric
             if (activeMetric !== "ALL") {
-                list = list.filter(fig => fig.metric === activeMetric);
+                list = list.filter(fig => fig.figureType === activeMetric);
             }
 
             filteredFigures = list; // Cache for lightbox arrows
@@ -1637,7 +1904,8 @@ def _build_html_template(manifest: dict) -> str:
             // Update main title info
             const label = GROUP_LABELS[activeGroup] || activeGroup;
             document.getElementById("activeGroupTitle").innerText = label;
-            document.getElementById("activeGroupDesc").innerText = `${list.length} figure(s) matches filters`;
+            document.getElementById("activeGroupDesc").innerText =
+                `${list.length} ${list.length === 1 ? "figure" : "figures"}`;
 
             // 4. Render Grid
             if (list.length === 0) {
@@ -1677,7 +1945,7 @@ def _build_html_template(manifest: dict) -> str:
                         ${fig.caption ? `<p class="card-caption">${fig.caption}</p>` : ''}
                         <div class="card-meta">
                             <span class="meta-tag">${fig.group}</span>
-                            <span class="meta-tag metric">${formatMetricName(fig.metric)}</span>
+                            <span class="meta-tag metric">${FIGURE_TYPE_LABELS[fig.figureType] || formatMetricName(fig.metric)}</span>
                             ${fig.reference ? `<span class="meta-tag">${fig.reference}</span>` : ''}
                         </div>
                     </div>
