@@ -1,5 +1,6 @@
 import cftime
 import numpy as np
+import pandas as pd
 import xarray as xr
 
 from esp_lab import eli
@@ -30,13 +31,28 @@ def test_initialization_years_supports_numeric_and_tagged_coordinates():
     )
 
 
+def test_observation_alignment_supports_numpy_and_cftime_dates():
+    observation = xr.DataArray(
+        [1.0, 2.0],
+        dims="time",
+        coords={"time": pd.to_datetime(["2000-01-01", "2000-02-01"])},
+    )
+
+    result = eli.observations_for_times(
+        observation,
+        [cftime.DatetimeNoLeap(2000, 2, 15), cftime.DatetimeNoLeap(2000, 1, 15)],
+    )
+
+    np.testing.assert_array_equal(result, [2.0, 1.0])
+
+
 def test_common_target_years_are_intersected_per_lead():
     first, first_time = _hindcast([2000, 2001, 2002, 2003])
     second, second_time = _hindcast(
         [2000, 2001, 2002, 2003], missing={"Y": 2001, "L": 1}
     )
     observation = xr.DataArray(
-        np.arange(6, dtype=float),
+        np.arange(8, dtype=float),
         dims="time",
         coords={
             "time": [

@@ -186,13 +186,20 @@ def common_target_years_by_lead(
 
 def observations_for_times(observation: xr.DataArray, times) -> np.ndarray:
     """Return observation values matched exactly by target year and month."""
+
+    def year_month(value):
+        if hasattr(value, "year") and hasattr(value, "month"):
+            return int(value.year), int(value.month)
+        timestamp = pd.Timestamp(value)
+        return int(timestamp.year), int(timestamp.month)
+
     lookup = {
-        (int(t.year), int(t.month)): float(value)
+        year_month(t): float(value)
         for t, value in zip(observation.time.values, observation.values)
         if np.isfinite(value)
     }
     return np.asarray(
-        [lookup.get((int(t.year), int(t.month)), np.nan) for t in times],
+        [lookup.get(year_month(t), np.nan) for t in times],
         dtype=float,
     )
 
