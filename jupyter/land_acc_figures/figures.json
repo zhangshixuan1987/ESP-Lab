@@ -1,0 +1,19 @@
+{
+  "figures": [
+    {
+      "file": "fig_h2osoi_depth0-1.6m_integrated_mm_CPC_Soil_Moisture_V2_multi_e3sm_acc_sigmask_p10.png",
+      "mode": "",
+      "metric": "leadtime_acc",
+      "title": "Lead-time ACC Skill: H2OSOI versus CPC_Soil_Moisture_V2",
+      "caption": "ACC rows by seasonal lead using complete configured cohorts; pointwise effective-correlation p < 0.1 without spatial multiple-testing correction."
+    },
+    {
+      "file": "fig_h2osoi_depth0-1.6m_integrated_mm_CPC_Soil_Moisture_V2_fosirl_minus_reanalysis_acc.png",
+      "mode": "",
+      "metric": "leadtime_acc_difference",
+      "title": "Lead-time ACC Difference: H2OSOI versus CPC Soil Moisture V2",
+      "caption": "FOSIRL minus Reanalysis ACC by seasonal lead and initialization month."
+    }
+  ],
+  "updated": "2026-08-04T20:09:04Z"
+}

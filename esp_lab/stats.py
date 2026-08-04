@@ -512,7 +512,8 @@ def compute_skill_seasonal(
     """
     corr_list = []; pval_list = []; rmse_list = []; msss_list = []; rpc_list = []
     sigobs_list = []; sigsig_list = []; sigtot_list = []; s2t_list = []
-    sample_count_list = []; target_start_list = []; target_end_list = []
+    sample_count_list = []; valid_sample_count_list = []
+    target_start_list = []; target_end_list = []
     
     # convert L to leadtime values:
     if (monthly):
@@ -560,6 +561,12 @@ def compute_skill_seasonal(
                 a = detrend_linear(a,'time')
                 b = detrend_linear(b,'time')
         amean = a.mean('M')
+        # The scalar sample_count records the requested global target-year
+        # cohort. Keep the paired count at every grid cell as well so local
+        # missing data are visible in the cached result.
+        valid_sample_count_list.append(
+            (amean.notnull() & b.notnull()).sum('time').astype('int16')
+        )
         sigobs = b.std('time')
         sigsig = amean.std('time')
         if (resamp>0):
@@ -592,6 +599,7 @@ def compute_skill_seasonal(
     sigs = xr.concat(sigsig_list,lvalsda)
     sigt = xr.concat(sigtot_list,lvalsda)
     s2t  = xr.concat(s2t_list,lvalsda)
+    valid_n = xr.concat(valid_sample_count_list,lvalsda)
     return xr.Dataset({
         'corr':corr,
         'pval':pval,
@@ -603,6 +611,7 @@ def compute_skill_seasonal(
         'sig_tot':sigt,
         's2t':s2t,
         'sample_count': xr.DataArray(sample_count_list, dims='L', coords={'L': lvalsda}),
+        'valid_sample_count': valid_n,
         'target_year_start': xr.DataArray(target_start_list, dims='L', coords={'L': lvalsda}),
         'target_year_end': xr.DataArray(target_end_list, dims='L', coords={'L': lvalsda}),
     })
@@ -613,13 +622,16 @@ def common_valid_target_years_seasonal(
     model_times,
     obs_da,
     leads,
+    *,
+    require_all_members=False,
 ):
     """Return identical valid target-year cohorts for several hindcasts.
 
     The intersection is computed independently for each lead. A model year is
-    valid when its verification time is defined and its ensemble index has at
-    least one finite value. The matching observed month/year must also contain
-    a finite index value.
+    valid when its verification time is defined and its ensemble index has
+    finite data. By default at least one member must be present; with
+    ``require_all_members=True`` every member must contain some finite spatial
+    data. The matching observed month/year must also contain a finite value.
     """
     if set(model_indices) != set(model_times):
         raise ValueError("model_indices and model_times must have identical keys.")
@@ -645,8 +657,17 @@ def common_valid_target_years_seasonal(
             target_months.update(np.unique(months).tolist())
 
             finite = index.notnull()
-            for dim in tuple(dim for dim in finite.dims if dim != "Y"):
-                finite = finite.any(dim)
+            spatial_dims = tuple(
+                dim for dim in finite.dims if dim not in ("Y", "M")
+            )
+            if spatial_dims:
+                finite = finite.any(spatial_dims)
+            if "M" in finite.dims:
+                finite = (
+                    finite.all("M")
+                    if require_all_members
+                    else finite.any("M")
+                )
             model_years = set(years[np.asarray(finite.values, dtype=bool)].tolist())
             common_years = (
                 model_years if common_years is None else common_years & model_years

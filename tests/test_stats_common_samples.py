@@ -80,5 +80,29 @@ def test_compute_skill_records_explicit_target_year_cohort():
     )
 
     assert int(result.sample_count.sel(L=1)) == 3
+    assert int(result.valid_sample_count.sel(L=1)) == 3
     assert int(result.target_year_start.sel(L=1)) == 2000
     assert int(result.target_year_end.sel(L=1)) == 2003
+
+
+def test_common_valid_target_years_can_require_every_member():
+    model, valid_time = _hindcast([2000, 2001, 2002], leads=(1,))
+    model.loc[{"Y": "2001110100", "L": 1, "M": 0}] = np.nan
+    obs = xr.DataArray(
+        [1.0, 2.0, 3.0],
+        dims="time",
+        coords={
+            "time": [cftime.DatetimeNoLeap(year, 1, 15) for year in range(2000, 2003)]
+        },
+    )
+
+    permissive = stats.common_valid_target_years_seasonal(
+        {"model": model}, {"model": valid_time}, obs, leads=[1]
+    )
+    strict = stats.common_valid_target_years_seasonal(
+        {"model": model}, {"model": valid_time}, obs, leads=[1],
+        require_all_members=True,
+    )
+
+    assert permissive[1] == [2000, 2001, 2002]
+    assert strict[1] == [2000, 2002]

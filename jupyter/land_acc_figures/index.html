@@ -1,306 +1,4 @@
-import json
-import re
-import stat
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Union
-
-
-FIGURE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".webp"}
-CLIMATE_MODES = {
-    "AMO",
-    "EA",
-    "NAM",
-    "NAO",
-    "NPGO",
-    "NPO",
-    "PDO",
-    "PNA",
-    "PSA1",
-    "PSA2",
-    "SAM",
-    "SCA",
-}
-
-
-def _humanize_figure_name(filename: str) -> str:
-    """Return a readable title for a workflow figure filename."""
-    stem = Path(filename).stem
-    if stem.lower().startswith("fig_"):
-        stem = stem[4:]
-    replacements = {
-        "acc": "ACC",
-        "eli": "ELI",
-        "enso": "ENSO",
-        "eof": "EOF",
-        "iod": "IOD",
-        "jja": "JJA",
-        "djf": "DJF",
-        "nmme": "NMME",
-        "nrmse": "nRMSE",
-        "prect": "PRECT",
-        "psl": "PSL",
-        "rmse": "RMSE",
-        "sst": "SST",
-        "tc": "TC",
-        "trefht": "TREFHT",
-    }
-    words = []
-    for token in re.split(r"[_\-]+", stem):
-        lower = token.lower()
-        if lower in {"nino34", "nino3.4"}:
-            words.append("Niño3.4")
-        elif lower == "nino3" and words and words[-1] == "Niño":
-            words[-1] = "Niño3"
-        elif lower == "4" and words and words[-1] == "Niño3":
-            words[-1] = "Niño3.4"
-        elif lower.startswith("nino") and lower[4:].isdigit():
-            words.append(f"Niño{lower[4:]}")
-        else:
-            words.append(replacements.get(lower, token.capitalize()))
-    return " ".join(words)
-
-
-def _infer_metric(filename: str) -> str:
-    """Infer a compact metric key for a figure without manifest metadata."""
-    stem = Path(filename).stem.lower()
-    candidates = (
-        "global_teleconnection_patterns",
-        "multi_e3sm_rmse_skill_map_conus",
-        "multi_e3sm_rmse_skill_diff",
-        "multi_e3sm_rmse_skill_map",
-        "multi_e3sm_acc_skill_map",
-        "rmse_diff_compare",
-        "rmse_compare_global",
-        "rmse_compare_conus",
-        "time_series",
-        "eof_patterns",
-        "acc_skill",
-        "lead_time_benchmark",
-        "drift_climatology",
-        "skill",
-    )
-    return next((metric for metric in candidates if metric in stem), "workflow_figure")
-
-
-def _infer_mode(filename: str) -> str:
-    """Infer a broad diagnostic group for a figure without metadata."""
-    stem = Path(filename).stem.lower()
-    for token, label in (
-        ("nmme", "NMME"),
-        ("nino", "ENSO"),
-        ("enso", "ENSO"),
-        ("eli", "ELI"),
-        ("tc_", "TC"),
-        ("tropical_cyclone", "TC"),
-        ("iod", "IOD"),
-        ("nao", "NAO"),
-        ("sst", "SST"),
-        ("psl", "PSL"),
-        ("prect", "PRECT"),
-        ("trefht", "TREFHT"),
-    ):
-        if token in stem:
-            return label
-    return "Other"
-
-
-def _infer_workflow_group(filename: str, metric: str, mode: str) -> str:
-    """Map a figure to one of the major workflow diagnostic sections."""
-    stem = Path(filename).stem.lower()
-    metric_lower = metric.lower()
-    if "eli" in stem or "eli" in metric_lower:
-        return "ELI"
-    if stem.startswith("fig_tc_") or "track_density" in stem:
-        return "TC"
-    if mode.upper() in CLIMATE_MODES or metric_lower in {
-        "eof_patterns",
-        "global_teleconnection_patterns",
-        "pc_time_series",
-    }:
-        return "MOV"
-    if metric_lower.startswith("leadtime_acc"):
-        return "LEAD_ACC"
-    if metric_lower.startswith("leadtime_rmse") or metric_lower.startswith(
-        "rmse_compare"
-    ):
-        return "LEAD_RMSE"
-    return "SST_INDEX"
-
-
-def discover_workflow_figures(
-    diag_dir: Union[str, Path],
-    *,
-    pattern: str = "fig_*",
-    write_manifest: bool = False,
-) -> dict:
-    """Catalog actual workflow figures in a directory.
-
-    Only files matching ``pattern`` with a supported image extension are
-    returned. Existing manifest metadata is retained for files that still
-    exist; stale entries are removed and missing entries are synthesized.
-    """
-    diag_dir = Path(diag_dir)
-    if not diag_dir.is_dir():
-        raise FileNotFoundError(f"Diagnostics directory does not exist: {diag_dir}")
-
-    manifest_path = diag_dir / "figures.json"
-    existing_manifest = {"figures": []}
-    if manifest_path.is_file():
-        try:
-            with open(manifest_path, "r", encoding="utf-8") as fh:
-                existing_manifest = json.load(fh)
-        except Exception as exc:
-            raise ValueError(f"Failed to parse manifest JSON file: {exc}") from exc
-
-    metadata_by_file = {
-        entry.get("file"): entry
-        for entry in existing_manifest.get("figures", [])
-        if entry.get("file")
-    }
-    figure_paths = sorted(
-        path
-        for path in diag_dir.glob(pattern)
-        if path.is_file() and path.suffix.lower() in FIGURE_EXTENSIONS
-    )
-
-    figures = []
-    for path in figure_paths:
-        entry = dict(metadata_by_file.get(path.name, {}))
-        entry.update({"file": path.name})
-        entry.setdefault("mode", _infer_mode(path.name))
-        entry.setdefault("metric", _infer_metric(path.name))
-        entry.setdefault("title", _humanize_figure_name(path.name))
-        entry.setdefault("caption", "Workflow-generated diagnostic figure.")
-        entry["group"] = _infer_workflow_group(
-            path.name, entry["metric"], entry["mode"]
-        )
-        figures.append(entry)
-
-    manifest = {
-        key: value
-        for key, value in existing_manifest.items()
-        if key not in {"figures", "updated"}
-    }
-    manifest["figures"] = figures
-    manifest["updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    if write_manifest:
-        with open(manifest_path, "w", encoding="utf-8") as fh:
-            json.dump(manifest, fh, indent=2, ensure_ascii=False)
-            fh.write("\n")
-
-    return manifest
-
-
-def _make_gallery_web_readable(diag_dir: Path, manifest: dict) -> None:
-    """Ensure the portal can traverse the gallery and read its files."""
-    directory_bits = (
-        stat.S_IRUSR
-        | stat.S_IWUSR
-        | stat.S_IXUSR
-        | stat.S_IRGRP
-        | stat.S_IXGRP
-        | stat.S_IROTH
-        | stat.S_IXOTH
-    )
-    diag_dir.chmod(diag_dir.stat().st_mode | directory_bits)
-
-    for entry in manifest.get("figures", []):
-        filename = entry.get("file")
-        if not filename:
-            continue
-        figure_path = diag_dir / filename
-        if figure_path.is_file():
-            readable_bits = stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH
-            figure_path.chmod(figure_path.stat().st_mode | readable_bits)
-
-
-def generate_diagnostics_webpage(
-    diag_dir: Union[str, Path],
-    *,
-    discover_figures: bool = False,
-    figure_pattern: str = "fig_*",
-    make_web_readable: bool = True,
-) -> Path:
-    """Generate an interactive HTML webpage for viewing diagnostics figures.
-
-    This function embeds figure metadata inside a modern, responsive dark-mode
-    viewer and writes the output as `index.html` in the same directory. When
-    ``discover_figures`` is true, the manifest is first synchronized with the
-    actual workflow figure files in the directory.
-
-    The generated webpage is 100% self-contained (no external remote CSS/JS dependencies)
-    and uses direct JSON embedding to avoid browser CORS errors when loaded via file://.
-
-    Parameters
-    ----------
-    diag_dir : str or pathlib.Path
-        Path to the directory containing the figures and `figures.json`.
-    discover_figures : bool, optional
-        Discover actual workflow figures and remove stale manifest entries.
-    figure_pattern : str, optional
-        Filename glob used when discovering figures. Defaults to ``fig_*``.
-    make_web_readable : bool, optional
-        Make cataloged figures publicly readable and the gallery directory
-        publicly traversable. Defaults to true.
-
-    Returns
-    -------
-    pathlib.Path
-        The path to the generated `index.html` file.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the output directory or `figures.json` does not exist.
-    """
-    diag_dir = Path(diag_dir)
-    if not diag_dir.exists():
-        raise FileNotFoundError(f"Diagnostics directory does not exist: {diag_dir}")
-
-    manifest_path = diag_dir / "figures.json"
-    if discover_figures:
-        manifest_data = discover_workflow_figures(
-            diag_dir, pattern=figure_pattern, write_manifest=True
-        )
-        if not manifest_data["figures"]:
-            raise FileNotFoundError(
-                f"No workflow figures matching {figure_pattern!r} found in {diag_dir}"
-            )
-    else:
-        if not manifest_path.exists():
-            raise FileNotFoundError(
-                f"Figures manifest not found at {manifest_path}. "
-                "Please ensure you have generated figures and their entries have been saved."
-            )
-        try:
-            with open(manifest_path, "r", encoding="utf-8") as fh:
-                manifest_data = json.load(fh)
-        except Exception as e:
-            raise ValueError(f"Failed to parse manifest JSON file: {e}")
-
-    # Build the HTML template
-    html_content = _build_html_template(manifest_data)
-
-    output_path = diag_dir / "index.html"
-    with open(output_path, "w", encoding="utf-8") as fh:
-        fh.write(html_content)
-
-    if make_web_readable:
-        _make_gallery_web_readable(diag_dir, manifest_data)
-        manifest_path.chmod(0o644)
-        output_path.chmod(0o644)
-
-    return output_path
-
-
-def _build_html_template(manifest: dict) -> str:
-    """Build the raw string content of the index.html page."""
-    # Serialize the manifest to embed directly in the script tags
-    manifest_json_str = json.dumps(manifest, indent=2)
-
-    template = """<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -1606,7 +1304,25 @@ def _build_html_template(manifest: dict) -> str:
 
     <!-- Embedded Figures Manifest Data -->
     <script>
-        const manifest = __MANIFEST_JSON__;
+        const manifest = {
+  "figures": [
+    {
+      "file": "fig_h2osoi_depth0-1.6m_integrated_mm_CPC_Soil_Moisture_V2_multi_e3sm_acc_sigmask_p10.png",
+      "mode": "",
+      "metric": "leadtime_acc",
+      "title": "Lead-time ACC Skill: H2OSOI versus CPC_Soil_Moisture_V2",
+      "caption": "ACC rows by seasonal lead using complete configured cohorts; pointwise effective-correlation p < 0.1 without spatial multiple-testing correction."
+    },
+    {
+      "file": "fig_h2osoi_depth0-1.6m_integrated_mm_CPC_Soil_Moisture_V2_fosirl_minus_reanalysis_acc.png",
+      "mode": "",
+      "metric": "leadtime_acc_difference",
+      "title": "Lead-time ACC Difference: H2OSOI versus CPC Soil Moisture V2",
+      "caption": "FOSIRL minus Reanalysis ACC by seasonal lead and initialization month."
+    }
+  ],
+  "updated": "2026-08-04T20:09:04Z"
+};
     </script>
 
     <!-- Main Logic Script -->
@@ -2380,7 +2096,3 @@ def _build_html_template(manifest: dict) -> str:
     </script>
 </body>
 </html>
-"""
-
-    # Embed manifest JSON string into placeholder
-    return template.replace("__MANIFEST_JSON__", manifest_json_str)
