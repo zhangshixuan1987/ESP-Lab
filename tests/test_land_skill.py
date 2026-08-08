@@ -1,5 +1,6 @@
 import cftime
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 
@@ -32,6 +33,142 @@ def test_prepare_land_field_keeps_map_fields(field):
     assert out.name == field
     assert out.dims == ("time", "lat", "lon")
     assert out.attrs["units"] == "mm"
+
+
+def test_mask_c3s_swe_flags_masks_negative_values_but_keeps_zero():
+    swe = xr.DataArray(
+        [-30.0, -20.0, -10.0, -1.0, 0.0, 12.0],
+        dims="point",
+        attrs={"units": "mm"},
+    )
+
+    out = land_skill.mask_c3s_swe_flags(swe)
+
+    np.testing.assert_allclose(
+        out.values, [np.nan, np.nan, np.nan, np.nan, 0.0, 12.0], equal_nan=True
+    )
+    assert out.attrs["units"] == "mm"
+    assert "zero retained" in out.attrs["flag_treatment"]
+
+
+def test_complete_calendar_seasonal_mean_rejects_sparse_false_season():
+    time = pd.to_datetime(
+        [
+            "1999-12-01", "2000-01-01", "2000-02-01",
+            "2000-03-01", "2000-04-01", "2000-05-01",
+            "2000-10-01", "2000-11-01", "2000-12-01",
+        ]
+    )
+    monthly = xr.DataArray(np.arange(len(time), dtype=float), dims="time", coords={"time": time})
+
+    out = land_skill.complete_calendar_seasonal_mean(monthly)
+
+    assert out.time.dt.strftime("%Y-%m").values.tolist() == ["2000-01", "2000-04"]
+    assert float(out.sel(time="2000-01-01")) == pytest.approx(1.0)
+    assert float(out.sel(time="2000-04-01")) == pytest.approx(4.0)
+
+
+def test_complete_calendar_seasonal_mean_can_retain_missing_seasons():
+    time = pd.date_range("1999-12-01", "2000-11-01", freq="MS")
+    monthly = xr.DataArray(
+        np.arange(len(time), dtype=float), dims="time", coords={"time": time}
+    ).where(lambda da: ~da.time.dt.month.isin([6, 7, 8, 9]))
+
+    out = land_skill.complete_calendar_seasonal_mean(monthly, retain_missing=True)
+
+    assert out.time.dt.strftime("%Y-%m").values.tolist() == [
+        "2000-01", "2000-04", "2000-07", "2000-10"
+    ]
+    assert out.sel(time="2000-07-01").isnull()
+    assert out.sel(time="2000-10-01").isnull()
+    assert out.attrs["missing_season_representation"] == "explicit all-NaN time slices"
+
+
+def test_complete_calendar_monthly_change_does_not_bridge_gaps():
+    monthly = xr.DataArray(
+        [10.0, 13.0, 20.0, 25.0],
+        dims="time",
+        coords={"time": pd.to_datetime([
+            "2000-04-01", "2000-05-01", "2000-10-01", "2000-11-01"
+        ])},
+        attrs={"units": "mm"},
+    )
+
+    out = land_skill.complete_calendar_monthly_change(monthly)
+
+    assert float(out.sel(time="2000-05-01")) == pytest.approx(3.0)
+    assert np.isnan(out.sel(time="2000-10-01"))
+    assert float(out.sel(time="2000-11-01")) == pytest.approx(5.0)
+    assert out.attrs["units"] == "mm"
+    assert "SWE(t) - SWE(t-1)" in out.attrs["change_definition"]
+
+
+def test_monthly_land_hindcast_change_uses_later_lead_and_time():
+    y = ["2000050100"]
+    monthly = xr.Dataset(
+        {
+            "H2OSNO": (("Y", "L", "M"), [[[2.0], [5.0], [4.0]]]),
+            "time": (("Y", "L"), np.asarray([[
+                cftime.DatetimeNoLeap(2000, 5, 15),
+                cftime.DatetimeNoLeap(2000, 6, 15),
+                cftime.DatetimeNoLeap(2000, 7, 15),
+            ]], dtype=object)),
+        },
+        coords={"Y": y, "L": [1, 2, 3], "M": ["EN00"]},
+    )
+
+    out = land_skill.monthly_land_hindcast_change_dataset(monthly)
+
+    assert out.L.values.tolist() == [2, 3]
+    np.testing.assert_allclose(out.DELTA_H2OSNO.values.ravel(), [3.0, -1.0])
+    assert out.time.dt.month.values.tolist() == [[6, 7]]
+
+
+def test_monthly_land_hindcast_change_rejects_nonconsecutive_time():
+    monthly = xr.Dataset(
+        {
+            "H2OSNO": (("Y", "L", "M"), [[[2.0], [5.0]]]),
+            "time": (("Y", "L"), np.asarray([[
+                cftime.DatetimeNoLeap(2000, 5, 15),
+                cftime.DatetimeNoLeap(2000, 7, 15),
+            ]], dtype=object)),
+        },
+        coords={"Y": ["2000050100"], "L": [1, 2], "M": ["EN00"]},
+    )
+
+    with pytest.raises(ValueError, match="consecutive months"):
+        land_skill.monthly_land_hindcast_change_dataset(monthly)
+
+
+def test_retain_reference_supported_leads_uses_verification_month():
+    data = xr.DataArray(
+        np.ones((2, 4, 1)),
+        dims=("Y", "L", "M"),
+        coords={"Y": [2000, 2001], "L": [3, 6, 9, 12], "M": [0]},
+    )
+    valid_time = xr.DataArray(
+        np.asarray(
+            [
+                pd.to_datetime(["2000-07-01", "2000-10-01", "2001-01-01", "2001-04-01"]),
+                pd.to_datetime(["2001-07-01", "2001-10-01", "2002-01-01", "2002-04-01"]),
+            ]
+        ),
+        dims=("Y", "L"),
+        coords={"Y": data.Y, "L": data.L},
+    )
+    reference = xr.DataArray(
+        [1.0, 2.0, 3.0, 4.0],
+        dims="time",
+        coords={"time": pd.to_datetime(["2000-01-01", "2000-04-01", "2001-01-01", "2001-04-01"])},
+    )
+
+    kept, kept_time, dropped = land_skill.retain_reference_supported_leads(
+        data, valid_time, reference
+    )
+
+    assert kept.L.values.tolist() == [9, 12]
+    assert kept_time.L.values.tolist() == [9, 12]
+    assert dropped == [3, 6]
 
 
 def test_prepare_h2osoi_selects_explicit_surface_layer():
