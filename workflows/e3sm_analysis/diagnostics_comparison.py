@@ -365,7 +365,7 @@ def main():
     )
     args = parser.parse_args()
 
-    project_root = Path(__file__).resolve().parents[1] if '__file__' in globals() else Path(os.getcwd())
+    project_root = Path(__file__).resolve().parents[2] if '__file__' in globals() else Path(os.getcwd())
     
     cmip_amip_path = os.path.join(project_root, args.cmip_amip_file)
     cmip_hist_path = os.path.join(project_root, args.cmip_hist_file)

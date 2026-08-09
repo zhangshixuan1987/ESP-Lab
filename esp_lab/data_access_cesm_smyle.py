@@ -920,6 +920,7 @@ def load_benchmark(
     fname = benchmark_filename(field, init_month, nens=nens, nlead=nlead, freq=freq)
     benchmark_root = Path(benchmark_dir)
     candidates = [
+        benchmark_root / "leadtime_acc" / "inputs" / "atm" / field / fname,
         benchmark_root / "leadtime_acc" / "inputs" / field / fname,
         benchmark_root / fname,
     ]

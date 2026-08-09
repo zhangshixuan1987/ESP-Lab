@@ -1,7 +1,7 @@
 import numpy as np
 import xarray as xr
 
-from workflows.rmse_compare_helper import (
+from workflows.leadtime_skill.rmse_comparison import (
     area_weighted_mask_fraction,
     bootstrap_rmse_diff_matched_ensemble_memorysafe,
     compact_year_tag,

@@ -1,7 +1,7 @@
 import numpy as np
 import xarray as xr
 
-from workflows.e3sm_timeseries_compare import (
+from workflows.e3sm_analysis.timeseries_comparison import (
     _format_time_label,
     _find_landfrac_file,
     _get_initial_value_mask,
@@ -224,11 +224,11 @@ def test_plot_timeseries_comparison_uses_each_simulation_time(tmp_path, monkeypa
         return []
 
     monkeypatch.setattr(
-        "workflows.e3sm_timeseries_compare.plt.plot",
+        "workflows.e3sm_analysis.timeseries_comparison.plt.plot",
         capture_plot,
     )
     monkeypatch.setattr(
-        "workflows.e3sm_timeseries_compare.plt.legend",
+        "workflows.e3sm_analysis.timeseries_comparison.plt.legend",
         lambda *args, **kwargs: None,
     )
 
@@ -305,11 +305,11 @@ def test_plot_timeseries_comparison_overlays_observations(tmp_path, monkeypatch)
         return []
 
     monkeypatch.setattr(
-        "workflows.e3sm_timeseries_compare.plt.plot",
+        "workflows.e3sm_analysis.timeseries_comparison.plt.plot",
         capture_plot,
     )
     monkeypatch.setattr(
-        "workflows.e3sm_timeseries_compare.plt.legend",
+        "workflows.e3sm_analysis.timeseries_comparison.plt.legend",
         lambda *args, **kwargs: None,
     )
 
@@ -461,7 +461,7 @@ def test_plot_timeseries_comparison_uses_output_tag(tmp_path, monkeypatch):
     saved_paths = []
 
     monkeypatch.setattr(
-        "workflows.e3sm_timeseries_compare.plt.savefig",
+        "workflows.e3sm_analysis.timeseries_comparison.plt.savefig",
         lambda path, *args, **kwargs: saved_paths.append(path),
     )
 

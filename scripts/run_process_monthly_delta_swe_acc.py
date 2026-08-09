@@ -3,6 +3,9 @@
 ΔSWE at month t is approximated as SWE(t) - SWE(t-1) using consecutive
 monthly-mean storage values. C3S gaps are expanded before differencing, so a
 change is missing unless both adjacent calendar months are available.
+
+Products use the source-first diagnostic layout shared with the 1a workflow:
+``<diag-root>/<source-or-case>/leadtime_acc/{inputs,skill}/land/<field>``.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ import numpy as np
 import xarray as xr
 
 from esp_lab import data_access_e3sm, land_skill, stats
-from esp_lab.paths import S2D_DIAG_ROOT
+from esp_lab.paths import S2D_DIAG_ROOT, leadtime_acc_dir
 from esp_lab.utils import mapplot_utils as maps
 from esp_lab.utils import mov_utils as mov
 
@@ -64,21 +67,27 @@ def safe_to_netcdf(ds: xr.Dataset, path: Path) -> None:
 
 
 def reference_path(root: Path) -> Path:
-    return root / "reference" / REFERENCE_PRODUCT / FIELD / (
+    return leadtime_acc_dir(
+        REFERENCE_PRODUCT, "inputs", "land", FIELD, root=root
+    ) / (
         f"{REFERENCE_PRODUCT}_{FIELD}_monthly_{GRID_TAG}.nc"
     )
 
 
 def model_path(root: Path, cache_tag: str, init_month: int) -> Path:
-    return root / "model" / cache_tag / FIELD / (
+    return leadtime_acc_dir(
+        cache_tag, "inputs", "land", FIELD, root=root
+    ) / (
         f"{cache_tag}{init_month:02d}_{FIELD}_monthly_{GRID_TAG}.nc"
     )
 
 
-def skill_path(cache_tag: str, init_month: int) -> Path:
+def skill_path(root: Path, cache_tag: str, init_month: int) -> Path:
     y0, y1 = RUN["climatology_years"]
     trend = "detrend" if RUN["detrend"] else "nodetrend"
-    return Path(S2D_DIAG_ROOT) / cache_tag / "leadtime_acc" / "skill" / "land" / FIELD / (
+    return leadtime_acc_dir(
+        cache_tag, "skill", "land", FIELD, root=root
+    ) / (
         f"{cache_tag}{init_month:02d}_{FIELD}_{REFERENCE_PRODUCT}_"
         f"skill_clim_{y0}_{y1}_{trend}.nc"
     )
@@ -253,7 +262,7 @@ def compute_skills(root: Path, reference: xr.DataArray, force: bool):
 
     for case_name, cfg in E3SM_CASES.items():
         for init_month in RUN["init_months"]:
-            output = skill_path(cfg["cache_tag"], init_month)
+            output = skill_path(root, cfg["cache_tag"], init_month)
             if output.exists() and not force:
                 skill = xr.open_dataset(output).load()
                 print("Reuse skill:", output)
@@ -405,9 +414,14 @@ def plot_skills(skills, figure_dir: Path) -> list[Path]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--input-root",
+        "--diag-root", "--input-root",
+        dest="diag_root",
         type=Path,
-        default=Path(S2D_DIAG_ROOT) / "land_acc_inputs" / "monthly_delta_swe",
+        default=Path(S2D_DIAG_ROOT),
+        help=(
+            "Top-level S2D diagnostic root. --input-root is retained as an "
+            "alias for compatibility."
+        ),
     )
     parser.add_argument(
         "--data-dir",
@@ -438,7 +452,7 @@ def main() -> None:
         skills = {
             case_name: {
                 init_month: xr.open_dataset(
-                    skill_path(cfg["cache_tag"], init_month)
+                    skill_path(args.diag_root, cfg["cache_tag"], init_month)
                 ).load()
                 for init_month in RUN["init_months"]
             }
@@ -447,12 +461,12 @@ def main() -> None:
         plot_skills(skills, args.figure_dir)
         return
     reference = prepare_reference(
-        args.input_root, args.reference_pattern, args.force_preprocess
+        args.diag_root, args.reference_pattern, args.force_preprocess
     )
     prepare_models(
-        args.input_root, args.data_dir, reference, args.force_preprocess
+        args.diag_root, args.data_dir, reference, args.force_preprocess
     )
-    skills = compute_skills(args.input_root, reference, args.force_skill)
+    skills = compute_skills(args.diag_root, reference, args.force_skill)
     plot_skills(skills, args.figure_dir)
 
 

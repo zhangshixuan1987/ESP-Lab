@@ -691,7 +691,7 @@ def process_one(
     if freqs is None:
         freqs = ["mon", "seas"]
 
-    output_dir = Path(outdir) / "leadtime_acc" / "inputs" / field
+    output_dir = Path(outdir) / "leadtime_acc" / "inputs" / "atm" / field
     outfiles = {
         freq: output_dir / benchmark_filename(
             field,

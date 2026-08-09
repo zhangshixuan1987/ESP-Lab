@@ -10,6 +10,7 @@ matplotlib
 netcdf4
 numpy
 pandas
+PyYAML
 pcmdi_metrics
 regionmask
 scipy

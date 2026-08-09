@@ -8,7 +8,7 @@ import xarray as xr
 import cftime
 
 from esp_lab.paths import NMME_DIAG_DIR, NMME_FIXED_DIR
-from workflows import modes_of_variability_core as core
+from workflows.modes_of_variability import analysis as modes_analysis
 from scripts.run_process_modes_of_variability import (
     add_skill_lead_subset,
     cached_product_matches,
@@ -110,7 +110,7 @@ def test_nmme_sst_mask_version_invalidates_only_temperature_fields():
 
     assert "nmme_sst_mask_version" not in pressure
     assert temperature["nmme_sst_mask_version"] == (
-        core.nmme_access.NMME_SST_MASK_VERSION
+        modes_analysis.nmme_access.NMME_SST_MASK_VERSION
     )
     assert temperature["nmme_sst_land_mask"] is True
     assert temperature["nmme_fixed_dir"] == "/data/fixed"
@@ -133,7 +133,7 @@ def test_temperature_index_signature_tracks_projection_mask_algorithm():
     )
 
     assert signature["fixed_basis_projection_mask_version"] == (
-        core.FIXED_BASIS_PROJECTION_MASK_VERSION
+        modes_analysis.FIXED_BASIS_PROJECTION_MASK_VERSION
     )
 
 
@@ -174,7 +174,7 @@ def test_nmme_products_use_canonical_uppercase_directory(tmp_path):
         "frequency": "monthly",
     }
 
-    field_path, index_path = core.product_paths(
+    field_path, index_path = modes_analysis.product_paths(
         tmp_path,
         "PDO",
         "nmme",
@@ -232,9 +232,9 @@ def test_nmme_fields_are_materialized_one_model_at_a_time(monkeypatch):
         def __call__(self, dataset):
             return dataset
 
-    monkeypatch.setattr(core, "nmme_field_dataset", fake_nmme_field_dataset)
+    monkeypatch.setattr(modes_analysis, "nmme_field_dataset", fake_nmme_field_dataset)
     monkeypatch.setattr(
-        core.regrid,
+        modes_analysis.regrid,
         "make_regridder",
         lambda *args, **kwargs: IdentityRegridder(),
     )
@@ -256,7 +256,7 @@ def test_nmme_fields_are_materialized_one_model_at_a_time(monkeypatch):
     )
     destination = xr.Dataset(coords={"lat": [-1.0, 1.0], "lon": [0.0, 2.0]})
 
-    result = core.model_field_dataset("nmme", 5, settings, args, destination)
+    result = modes_analysis.model_field_dataset("nmme", 5, settings, args, destination)
 
     assert calls == [["model-a"], ["model-b"]]
     assert list(result.M.values) == ["model-a:M001", "model-b:M001"]
@@ -293,7 +293,7 @@ def test_reference_ocean_mask_accepts_cli_resolution_tokens(monkeypatch):
     )
 
     for resolution in ("110m", "50m", "10m"):
-        mask = core.generate_reference_ocean_mask(
+        mask = modes_analysis.generate_reference_ocean_mask(
             data,
             natural_earth_resolution=resolution,
         )
@@ -383,7 +383,7 @@ def test_atomic_to_netcdf_uses_independent_temporary_files(tmp_path):
 
     with ThreadPoolExecutor(max_workers=4) as executor:
         futures = [
-            executor.submit(core.atomic_to_netcdf, FakeDataset(), destination)
+            executor.submit(modes_analysis.atomic_to_netcdf, FakeDataset(), destination)
             for _ in range(4)
         ]
         for future in futures:
@@ -400,7 +400,7 @@ def test_manifest_merge_preserves_parallel_task_products(tmp_path):
         sources=["obs", "e3sm", "smyle"],
         merge_manifest=True,
     )
-    station = core.StationNaoDefinition()
+    station = modes_analysis.StationNaoDefinition()
     nao = _settings()
     pdo = {
         **_settings(),
@@ -449,10 +449,12 @@ def test_eof_analysis_retries_svd_nonconvergence(monkeypatch):
     def failing_numpy_svd(*args, **kwargs):
         raise np.linalg.LinAlgError("SVD did not converge")
 
-    monkeypatch.setattr(core, "eof_analysis_get_variance_mode", fake_eof_analysis)
-    monkeypatch.setattr(core, "_NUMPY_SVD", failing_numpy_svd)
+    monkeypatch.setattr(
+        modes_analysis, "eof_analysis_get_variance_mode", fake_eof_analysis
+    )
+    monkeypatch.setattr(modes_analysis, "_NUMPY_SVD", failing_numpy_svd)
 
-    result = core.eof_analysis_with_svd_fallback()
+    result = modes_analysis.eof_analysis_with_svd_fallback()
 
     assert len(attempts) == 2
     np.testing.assert_allclose(result, [1.0, 1.0])
@@ -474,7 +476,7 @@ def test_eof_ready_dataset_applies_complete_case_spatial_mask():
         name="mode_field",
     )
 
-    result = core.eof_ready_dataset(field.to_dataset(), "mode_field")
+    result = modes_analysis.eof_ready_dataset(field.to_dataset(), "mode_field")
 
     assert result["mode_field"].sel(lon=0.0).notnull().all()
     assert result["mode_field"].sel(lon=1.0).isnull().all()
@@ -498,7 +500,7 @@ def test_fixed_basis_projection_field_matches_reference_mask():
         coords={"lat": [30.0], "lon": [0.0, 2.5, 5.0]},
     )
 
-    result = core.fixed_basis_projection_field(
+    result = modes_analysis.fixed_basis_projection_field(
         field,
         reference_mask,
         mode="AMO",
@@ -524,7 +526,7 @@ def test_regression_pattern_preserves_spatial_missing_mask():
     )
     pc = xr.DataArray([0.0, 1.0, 2.0], dims="time", coords={"time": field.time})
 
-    result = core.regression_pattern_from_projected_pc(field, pc)
+    result = modes_analysis.regression_pattern_from_projected_pc(field, pc)
 
     assert np.isfinite(result["mode_regression_pattern"].sel(lon=0.0))
     assert np.isnan(result["mode_regression_pattern"].sel(lon=2.5))
@@ -537,7 +539,9 @@ def test_write_product_rejects_all_nan_mode_index(tmp_path, monkeypatch):
         },
         coords={"Y": [2000, 2001], "L": [1], "M": [1]},
     )
-    monkeypatch.setattr(core, "validate_spatial_coordinates", lambda *_: None)
+    monkeypatch.setattr(
+        modes_analysis, "validate_spatial_coordinates", lambda *_: None
+    )
 
     try:
         write_product(
@@ -546,7 +550,7 @@ def test_write_product_rejects_all_nan_mode_index(tmp_path, monkeypatch):
             "smyle",
             _settings(),
             _args(),
-            core.StationNaoDefinition(),
+            modes_analysis.StationNaoDefinition(),
             "index",
         )
     except ValueError as error:
