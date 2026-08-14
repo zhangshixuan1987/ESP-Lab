@@ -724,6 +724,51 @@ def spatial_paired_diff(
     ).rename("paired_diff")
 
 
+def paired_effect_size(
+    paired_diff_by_year: xr.DataArray,
+    *,
+    year_dim: str = "Y",
+    scale_epsilon: float = 1.0e-12,
+) -> xr.DataArray:
+    """Mean signed paired difference normalized by across-start variability."""
+    scale = paired_diff_by_year.std(year_dim, skipna=True, ddof=1)
+    effect = (
+        paired_diff_by_year.mean(year_dim, skipna=True) / scale.where(scale > scale_epsilon)
+    ).rename("paired_effect_size")
+    effect.attrs["definition"] = "mean(DeltaD_s) / std(DeltaD_s) across initialization years"
+    return effect
+
+
+def paired_fdr_significance(
+    paired_diff_by_year: xr.DataArray,
+    *,
+    year_dim: str = "Y",
+    alpha: float = 0.05,
+) -> xr.DataArray:
+    """Benjamini-Hochberg field-significance mask from paired start-year tests."""
+    from scipy.stats import ttest_1samp
+
+    def _pvalue(values: np.ndarray) -> float:
+        return float(ttest_1samp(values, 0.0, nan_policy="omit").pvalue)
+
+    pvalues = xr.apply_ufunc(
+        _pvalue, paired_diff_by_year,
+        input_core_dims=[[year_dim]], output_core_dims=[[]],
+        vectorize=True, dask="parallelized", output_dtypes=[float],
+    ).rename("paired_pvalue")
+    flat = np.asarray(pvalues.compute().values).ravel()
+    finite = np.isfinite(flat)
+    ordered = np.sort(flat[finite])
+    if not len(ordered):
+        return xr.zeros_like(pvalues, dtype=bool).rename("fdr_significant")
+    critical = alpha * np.arange(1, len(ordered) + 1) / len(ordered)
+    passed = ordered <= critical
+    threshold = ordered[np.flatnonzero(passed)[-1]] if passed.any() else -np.inf
+    mask = (pvalues <= threshold).rename("fdr_significant")
+    mask.attrs.update({"method": "Benjamini-Hochberg", "alpha": alpha})
+    return mask
+
+
 def window_average(
     field: xr.DataArray,
     window_def: WindowDef,
@@ -1136,6 +1181,8 @@ __all__ = [
     "spatial_bias",
     "spatial_adjustment",
     "spatial_paired_diff",
+    "paired_effect_size",
+    "paired_fdr_significance",
     "window_average",
     # Section 5 — Bootstrap
     "bootstrap_spatial_ci",

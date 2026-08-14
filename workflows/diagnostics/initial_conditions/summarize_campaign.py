@@ -14,10 +14,9 @@ What this script does
    - Individual years
    - Cross-year mean and spread
 3. For every component and priority variable, compute:
-   - Mean IC RMSE across start years
-   - Interannual range (max − min RMSE)
+   - Median IC RMSE/NRMSE and interquartile spread across start years
    - Spatially averaged bias (mean of mean_diff)
-   - Sign-agreement fraction (fraction of starts with positive mean_diff)
+   - Sign consistency and exceptional-start contribution
    - May vs November contrast
 4. Write campaign_summary/ tables.
 
@@ -30,7 +29,7 @@ Outputs
 -------
     output/campaign_summary/campaign_stats.csv           (main table)
     output/campaign_summary/may_vs_nov_contrast.csv
-    output/campaign_summary/top_variables_by_rmse.csv
+    output/campaign_summary/top_variables_by_nrmse.csv
     output/campaign_summary/campaign_summary.png         (heatmap figure)
 """
 
@@ -53,6 +52,8 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from esp_lab.diagnostics.ic_core import aggregate_campaign_stats
+from esp_lab.diagnostics.products import standardize_product_table, write_product_bundle
+from esp_lab.diagnostics.store import config_fingerprint
 
 from .config import build_ic_config, load_config
 
@@ -176,29 +177,37 @@ def run(
         if verbose:
             print(f"  May vs Nov contrast → {cs_dir / 'may_vs_nov_contrast.csv'}")
 
-    # Top-20 variables by mean RMSE (all seasons combined)
+    # Cross-variable ranking uses dimensionless NRMSE, never raw RMSE.
     agg_all = aggregate_campaign_stats(records, group_by="component,variable")
-    top_vars = agg_all.nlargest(20, "mean_rmse")
-    top_vars.to_csv(cs_dir / "top_variables_by_rmse.csv", index=False)
+    rank_metric = (
+        "median_nrmse"
+        if "median_nrmse" in agg_all and agg_all["median_nrmse"].notna().any()
+        else "mean_rmse"
+    )
+    top_vars = agg_all.nlargest(20, rank_metric)
+    top_vars.to_csv(cs_dir / "top_variables_by_nrmse.csv", index=False)
 
     if verbose:
-        print("\n--- Top 20 variables by mean IC RMSE ---")
-        cols = ["component", "variable", "mean_rmse", "std_rmse", "sign_agreement_frac"]
+        print("\n--- Top 20 variables by median IC NRMSE ---")
+        cols = [
+            "component", "variable", "median_nrmse", "median_rmse",
+            "p25_rmse", "p75_rmse", "sign_consistency", "max_start_rmse_fraction",
+        ]
         available = [c for c in cols if c in top_vars.columns]
         print(top_vars[available].to_string(index=False))
 
     # Campaign heatmap: rows = top variables, columns = components
-    if not agg_all.empty and "mean_rmse" in agg_all.columns:
+    if not agg_all.empty and rank_metric in agg_all.columns:
         try:
             pivot = agg_all.pivot_table(
-                index="variable", columns="component", values="mean_rmse"
+                index="variable", columns="component", values=rank_metric
             )
             top_idx = pivot.max(axis=1).nlargest(30).index
             pivot = pivot.loc[top_idx]
             _campaign_heatmap(
                 pivot,
                 title=(
-                    f"IC RMSE: {ic_cfg.experiment_pair.test_label} − "
+                    f"IC {rank_metric}: {ic_cfg.experiment_pair.test_label} − "
                     f"{ic_cfg.experiment_pair.ref_label}\n"
                     f"({len(all_stats['start_date'].unique())} start dates)"
                 ),
@@ -208,6 +217,57 @@ def run(
                 print(f"\n  Campaign heatmap → {cs_dir / 'campaign_summary.png'}")
         except Exception as exc:
             warnings.warn(f"  Heatmap failed: {exc}", stacklevel=2)
+
+    # Standard Branch-0 products for 5f. Preserve one row per start and metric;
+    # native-grid difference fields stay in NetCDF and are linked by manifest.
+    metric_columns = [
+        name for name in (
+            "mean_diff", "mad", "rmse", "nrmse", "pattern_corr",
+            "p05_diff", "p50_diff", "p95_diff", "frac_exceeding_threshold",
+        )
+        if name in all_stats.columns
+    ]
+    product_rows = []
+    for record in all_stats.to_dict(orient="records"):
+        start = str(record.get("start_date", ""))
+        for metric in metric_columns:
+            value = record.get(metric)
+            if pd.isna(value):
+                continue
+            product_rows.append({
+                "start_date": start,
+                "init_year": int(start[:4]) if len(start) >= 4 else np.nan,
+                "init_month": int(start[5:7]) if len(start) >= 7 else np.nan,
+                "component": record.get("component"),
+                "variable": record.get("variable"),
+                "units": record.get("units", record.get("native_units")),
+                "native_grid_id": record.get("grid_signature", record.get("grid_id")),
+                "lead_units": "initial_condition",
+                "lead_start": 0, "lead_end": 0, "baseline": "time-zero restart",
+                "metric_name": f"ic_{metric}", "value": float(value),
+                "sample_count": record.get("n_valid"),
+            })
+    if product_rows:
+        fingerprint = config_fingerprint(ic_cfg, variable="all_initial_conditions")
+        product_table = standardize_product_table(
+            product_rows, workflow="5b_initial_conditions",
+            configuration_hash=fingerprint,
+            defaults={
+                "region": "native_grid", "member_aggregation": "per_restart_pair",
+                "significance_method": "not_applicable",
+            },
+        )
+        write_product_bundle(
+            cs_dir / "products", product_table,
+            workflow="5b_initial_conditions", configuration_hash=fingerprint,
+            field_paths=sorted(vs_dir.glob("*_diff.nc")),
+            metadata={
+                "inventory_status": "candidate_inventory",
+                "percentile_weighting": "recorded per variable in statistics metadata",
+                "cross_component_pointwise_comparison": False,
+                "native_grid_only": True,
+            },
+        )
 
     return campaign_df
 

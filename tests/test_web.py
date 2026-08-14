@@ -95,6 +95,17 @@ def test_discover_workflow_figures_reconciles_manifest(tmp_path):
     assert json.loads(manifest_file.read_text(encoding="utf-8")) == manifest
 
 
+def test_discover_workflow_figures_groups_leadtime_drift(tmp_path):
+    figure = tmp_path / "fig_leadtime_drift_two_reference_sst_05_skill.png"
+    figure.touch()
+
+    manifest = discover_workflow_figures(tmp_path)
+
+    assert len(manifest["figures"]) == 1
+    assert manifest["figures"][0]["metric"] == "leadtime_drift"
+    assert manifest["figures"][0]["group"] == "LEAD_DRIFT"
+
+
 def test_generate_webpage_with_discovery_needs_no_existing_manifest(tmp_path):
     figure_path = tmp_path / "fig_eli_time_series.svg"
     figure_path.touch()

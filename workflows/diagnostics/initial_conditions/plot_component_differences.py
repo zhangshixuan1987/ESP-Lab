@@ -7,10 +7,10 @@ Step 4: Generate spatial and vertical diagnostic plots for priority IC
 
 Plots produced per (date, component, variable)
 ----------------------------------------------
-* Global difference map  (ΔX = test − ref)
+* Four-panel native-grid fingerprint (signed, relative, standardised, threshold mask)
 * Area-weighted zonal-mean difference profile
 * Vertical RMSE profile  (for 3-D fields: ocean layers, soil levels)
-* Histogram of differences
+* Global histogram and regional empirical CDFs
 
 Plots produced per (date, component)
 -------------------------------------
@@ -25,7 +25,8 @@ Usage
 
 Outputs
 -------
-    output/maps/<date>_<component>_<var>_diff_map.png
+    output/maps/<date>_<component>_<var>_fingerprint.png
+    output/maps/<date>_<component>_<var>_distribution.png
     output/profiles/<date>_<component>_<var>_zonal_mean.png
     output/profiles/<date>_<component>_<var>_vertical_rmse.png
     output/maps/<date>_<component>_rmse_bar.png
@@ -114,6 +115,110 @@ def _map_plot(diff_da: xr.DataArray, title: str, outpath: Path) -> None:
     plt.close(fig)
 
 
+def _plot_native_field(ax, da: xr.DataArray, title: str, *, categorical: bool = False):
+    """Plot a structured or MPAS-native field without regridding."""
+    plot_da = da
+    depth_dim = _detect_depth_dim(plot_da)
+    if depth_dim:
+        plot_da = plot_da.isel({depth_dim: 0})
+    for dim in list(plot_da.dims):
+        if dim not in ("lat", "lon", "nCells", "x", "y"):
+            plot_da = plot_da.isel({dim: 0})
+
+    cmap = "Greys" if categorical else "RdBu_r"
+    kwargs = {"vmin": 0, "vmax": 1} if categorical else {}
+    if not categorical:
+        vmax = float(np.nanpercentile(np.abs(plot_da.values), 98))
+        vmax = vmax if np.isfinite(vmax) and vmax > 0 else 1.0
+        kwargs = {"vmin": -vmax, "vmax": vmax}
+
+    if "lat" in plot_da.dims and "lon" in plot_da.dims:
+        artist = ax.pcolormesh(
+            plot_da["lon"], plot_da["lat"], plot_da,
+            shading="auto", cmap=cmap, **kwargs,
+        )
+    elif "nCells" in plot_da.dims and {"latCell", "lonCell"} <= set(plot_da.coords):
+        lat = np.asarray(plot_da["latCell"])
+        lon = np.asarray(plot_da["lonCell"])
+        if np.nanmax(np.abs(lat)) <= np.pi + 0.1:
+            lat = np.rad2deg(lat)
+        if np.nanmax(np.abs(lon)) <= 2 * np.pi + 0.1:
+            lon = np.rad2deg(lon)
+        artist = ax.scatter(lon, lat, c=plot_da.values, s=1, cmap=cmap, rasterized=True, **kwargs)
+    else:
+        values = np.asarray(plot_da).ravel()
+        artist = ax.scatter(np.arange(values.size), values, s=2, c=values, cmap=cmap, **kwargs)
+        ax.set_xlabel("native cell index")
+    ax.set_title(title, fontsize=FS["title"])
+    return artist
+
+
+def _fingerprint_plot(ds: xr.Dataset, title: str, outpath: Path) -> None:
+    """Four-panel native-grid physical fingerprint."""
+    panels = [
+        ("signed_difference", "signed difference", False),
+        ("relative_difference", "relative difference", False),
+        ("standardized_difference", "standardized difference", False),
+        ("threshold_exceedance", "threshold exceedance", True),
+    ]
+    fig, axes = plt.subplots(2, 2, figsize=(12, 7), dpi=FIG_DPI, constrained_layout=True)
+    for ax, (name, label, categorical) in zip(axes.flat, panels):
+        if name not in ds:
+            ax.set_axis_off()
+            continue
+        artist = _plot_native_field(ax, ds[name], label, categorical=categorical)
+        fig.colorbar(artist, ax=ax, fraction=0.035, pad=0.02)
+    fig.suptitle(title, fontsize=FS["suptitle"])
+    fig.savefig(outpath, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _distribution_plot(diff_da: xr.DataArray, title: str, outpath: Path) -> None:
+    plot_da = diff_da
+    depth_dim = _detect_depth_dim(plot_da)
+    if depth_dim:
+        plot_da = plot_da.isel({depth_dim: 0})
+    for dim in list(plot_da.dims):
+        if dim not in ("lat", "lon", "nCells", "x", "y"):
+            plot_da = plot_da.isel({dim: 0})
+    values = np.asarray(plot_da).ravel()
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return
+    fig, axes = plt.subplots(1, 2, figsize=(10, 3.8), dpi=FIG_DPI, constrained_layout=True)
+    axes[0].hist(values, bins=80, color="steelblue", alpha=0.85)
+    axes[0].axvline(0, color="k", lw=1, ls="--")
+    axes[0].set(xlabel="ΔX", ylabel="cell count", title="Histogram")
+    region_values = {"Global": values}
+    lat = None
+    if "lat" in plot_da.coords:
+        lat = plot_da["lat"].broadcast_like(plot_da).values.ravel()
+    elif "latCell" in plot_da.coords:
+        lat = np.asarray(plot_da["latCell"])
+        if np.nanmax(np.abs(lat)) <= np.pi + 0.1:
+            lat = np.rad2deg(lat)
+    if lat is not None and lat.size == np.asarray(plot_da).size:
+        raw_values = np.asarray(plot_da).ravel()
+        bands = {
+            "Arctic (≥60°N)": lat >= 60,
+            "Tropics (20°S–20°N)": np.abs(lat) <= 20,
+            "Antarctic (≤60°S)": lat <= -60,
+        }
+        for label, mask in bands.items():
+            regional = raw_values[mask & np.isfinite(raw_values)]
+            if regional.size:
+                region_values[label] = regional
+    for label, regional in region_values.items():
+        ordered = np.sort(regional)
+        axes[1].plot(ordered, np.arange(1, ordered.size + 1) / ordered.size, label=label)
+    axes[1].axvline(0, color="k", lw=1, ls="--")
+    axes[1].set(xlabel="ΔX", ylabel="empirical probability", title="Empirical CDF")
+    axes[1].legend(fontsize=max(6, FS["tick"] - 1))
+    fig.suptitle(title, fontsize=FS["suptitle"])
+    fig.savefig(outpath, bbox_inches="tight")
+    plt.close(fig)
+
+
 def _zonal_mean_plot(
     diff_da: xr.DataArray, var: str, title: str, outpath: Path
 ) -> None:
@@ -144,24 +249,32 @@ def _zonal_mean_plot(
 def _vertical_rmse_plot(
     diff_da: xr.DataArray, depth_dim: str, title: str, outpath: Path
 ) -> None:
-    """Vertical profile of layer-wise RMSE."""
-    fig, ax = plt.subplots(figsize=(4, 6), dpi=FIG_DPI)
+    """Vertical profiles of layer-wise weighted mean difference and RMSE."""
+    fig, axes = plt.subplots(1, 2, figsize=(8, 6), dpi=FIG_DPI, sharey=True)
     try:
-        rmse_profile = np.sqrt((diff_da ** 2).mean(
-            dim=[d for d in diff_da.dims if d != depth_dim], skipna=True
-        ))
+        reduce_dims = [d for d in diff_da.dims if d != depth_dim]
+        if "areaCell" in diff_da.coords and "nCells" in reduce_dims:
+            weights = diff_da["areaCell"]
+            mean_profile = diff_da.weighted(weights).mean(reduce_dims, skipna=True)
+            rmse_profile = np.sqrt((diff_da ** 2).weighted(weights).mean(reduce_dims, skipna=True))
+        else:
+            mean_profile = diff_da.mean(dim=reduce_dims, skipna=True)
+            rmse_profile = np.sqrt((diff_da ** 2).mean(dim=reduce_dims, skipna=True))
         depth = rmse_profile[depth_dim].values if depth_dim in rmse_profile.coords \
             else np.arange(len(rmse_profile))
-        ax.plot(rmse_profile.values, depth, color="steelblue", lw=1.5, marker="o",
-                markersize=3)
-        ax.invert_yaxis()
-        ax.set_xlabel("RMSE", fontsize=FS["label"])
-        ax.set_ylabel(depth_dim, fontsize=FS["label"])
+        axes[0].plot(mean_profile.values, depth, color="firebrick", lw=1.5, marker="o", markersize=3)
+        axes[0].axvline(0, color="k", lw=1, ls="--")
+        axes[0].set_xlabel("weighted mean ΔX", fontsize=FS["label"])
+        axes[1].plot(rmse_profile.values, depth, color="steelblue", lw=1.5, marker="o", markersize=3)
+        axes[1].set_xlabel("RMSE", fontsize=FS["label"])
+        axes[0].invert_yaxis()
+        axes[0].set_ylabel(depth_dim, fontsize=FS["label"])
     except Exception as exc:
         warnings.warn(f"_vertical_rmse_plot for {outpath.name}: {exc}", stacklevel=2)
 
-    ax.set_title(title, fontsize=FS["title"])
-    ax.tick_params(labelsize=FS["tick"])
+    fig.suptitle(title, fontsize=FS["title"])
+    for ax in axes:
+        ax.tick_params(labelsize=FS["tick"])
     plt.tight_layout()
     fig.savefig(outpath, bbox_inches="tight")
     plt.close(fig)
@@ -171,12 +284,13 @@ def _rmse_bar_chart(
     stat_df: pd.DataFrame, date: str, comp: str, top_n: int, outpath: Path
 ) -> None:
     """Horizontal bar chart of top-N variables by RMSE."""
-    top = stat_df.nlargest(top_n, "rmse")
+    rank_metric = "nrmse" if "nrmse" in stat_df else "rmse"
+    top = stat_df.nlargest(top_n, rank_metric)
     fig, ax = plt.subplots(figsize=(7, max(3, len(top) * 0.4)), dpi=FIG_DPI)
-    bars = ax.barh(top["variable"], top["rmse"], color="steelblue", alpha=0.85)
-    ax.set_xlabel("RMSE  (ΔX = test − ref)", fontsize=FS["label"])
+    ax.barh(top["variable"], top[rank_metric], color="steelblue", alpha=0.85)
+    ax.set_xlabel(rank_metric.upper(), fontsize=FS["label"])
     ax.set_title(
-        f"{comp.upper()}  IC RMSE  |  {date}", fontsize=FS["title"]
+        f"{comp.upper()}  IC {rank_metric.upper()}  |  {date}", fontsize=FS["title"]
     )
     ax.tick_params(labelsize=FS["tick"])
     plt.tight_layout()
@@ -227,6 +341,7 @@ def run(
     profiles_dir.mkdir(parents=True, exist_ok=True)
 
     active_dates = [single_date] if single_date else ic_cfg.active_dates
+    fingerprint_keywords = cfg.get("diagnostics", {}).get("fingerprint_keywords", {})
 
     if verbose:
         print("=" * 70)
@@ -260,27 +375,33 @@ def run(
                     continue
 
                 member = str(ds_diff.attrs.get("member", "nomember"))
-                for var in ds_diff.data_vars:
-                    diff_da = ds_diff[var]
-                    base = f"{date}_{member}_{comp}_{var}"
-                    title_base = f"ΔX ({comp.upper()} · {var} · {member})  |  {date}"
-
-                    if diff_da.ndim >= 1:
-                        _map_plot(diff_da, title=title_base,
-                                  outpath=maps_dir / f"{base}_diff_map.png")
-                    if "lat" in diff_da.dims or diff_da.ndim >= 2:
-                        _zonal_mean_plot(
-                            diff_da, var,
-                            title=f"Zonal mean ΔX  |  {comp.upper()} {var} {member}  |  {date}",
-                            outpath=profiles_dir / f"{base}_zonal_mean.png",
-                        )
-                    depth_dim = _detect_depth_dim(diff_da)
-                    if depth_dim and diff_da.ndim >= 2:
-                        _vertical_rmse_plot(
-                            diff_da, depth_dim,
-                            title=f"Vertical RMSE  |  {comp.upper()} {var} {member}  |  {date}",
-                            outpath=profiles_dir / f"{base}_vertical_rmse.png",
-                        )
+                var = str(ds_diff.attrs.get("source_variable", next(iter(ds_diff.data_vars))))
+                keywords = [str(k).lower() for k in fingerprint_keywords.get(comp, [])]
+                if keywords and not any(k in var.lower() for k in keywords):
+                    ds_diff.close()
+                    continue
+                diff_da = ds_diff.get("signed_difference", ds_diff[next(iter(ds_diff.data_vars))])
+                base = f"{date}_{member}_{comp}_{var}"
+                title_base = f"IC fingerprint ({comp.upper()} · {var} · {member}) | {date}"
+                _fingerprint_plot(ds_diff, title_base, maps_dir / f"{base}_fingerprint.png")
+                _distribution_plot(
+                    diff_da,
+                    f"ΔX distribution | {comp.upper()} {var} {member} | {date}",
+                    maps_dir / f"{base}_distribution.png",
+                )
+                if "lat" in diff_da.dims or diff_da.ndim >= 2:
+                    _zonal_mean_plot(
+                        diff_da, var,
+                        title=f"Zonal mean ΔX | {comp.upper()} {var} {member} | {date}",
+                        outpath=profiles_dir / f"{base}_zonal_mean.png",
+                    )
+                depth_dim = _detect_depth_dim(diff_da)
+                if depth_dim and diff_da.ndim >= 2:
+                    _vertical_rmse_plot(
+                        diff_da, depth_dim,
+                        title=f"Vertical RMSE | {comp.upper()} {var} {member} | {date}",
+                        outpath=profiles_dir / f"{base}_vertical_rmse.png",
+                    )
                 ds_diff.close()
 
             stats_files = sorted(vs_dir.glob(f"{date}_*_{comp}_stats.csv"))

@@ -31,6 +31,7 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 import xarray as xr
+from esp_lab.diagnostics.products import resolve_experiment_roles
 
 import sys
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -45,6 +46,8 @@ from esp_lab.diagnostics.monthly_core import (
     spatial_bias,
     spatial_paired_diff,
     window_average,
+    paired_effect_size,
+    paired_fdr_significance,
     valid_year_month_spatial,
 )
 
@@ -205,7 +208,10 @@ def run_diagnostics(
     experiments = list(config.experiments.keys())
     if len(experiments) < 2:
         raise ValueError("Need at least 2 experiments.")
+    # Preserve established ref/test display products while resolving the paired
+    # subtraction independently of insertion order.
     ref_label, test_label = experiments[0], experiments[1]
+    sign_ref_label, sign_test_label = resolve_experiment_roles(experiments)
 
     results: Dict[int, Dict[str, Any]] = {}
 
@@ -305,11 +311,13 @@ def run_diagnostics(
 
                 ref_adj_win  = ref_adj_L.mean(["Y", "L"],  skipna=True)
                 test_adj_win = test_adj_L.mean(["Y", "L"], skipna=True)
-                paired_win   = test_adj_win - ref_adj_win
+                sign_factor = 1.0 if test_label == sign_test_label else -1.0
+                paired_win = sign_factor * (test_adj_win - ref_adj_win)
 
                 # Per-year paired diff for bootstrap
                 paired_by_year = _compute_per_year_paired_diff(
-                    da_test=da_test, da_ref=da_ref,
+                    da_test=data[sign_test_label][init_month],
+                    da_ref=data[sign_ref_label][init_month],
                     obs_da=obs_da, init_month=init_month,
                     config=config, window_def=win_def,
                 )
@@ -321,6 +329,10 @@ def run_diagnostics(
                     "adj_test":            test_adj_win,
                     "paired_diff":         paired_win,
                     "paired_diff_by_year": paired_by_year,
+                    "paired_effect_size":  paired_effect_size(paired_by_year),
+                    "fdr_significant":     paired_fdr_significance(
+                        paired_by_year, alpha=config.bootstrap_alpha
+                    ),
                     "sel_leads":           sel_leads,
                     "init_years":          init_years,
                 }

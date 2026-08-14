@@ -30,7 +30,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from esp_lab.diagnostics.daily_core import (
     DEFAULT_DAILY_EXPERIMENT_SPECS,
-    DEFAULT_DAILY_WINDOW_DEFS,
+    RECOMMENDED_DAILY_WINDOW_DEFS,
     DailyDriftConfig,
     DailyVariableSpec,
     convert_kelvin_to_celsius_if_needed,
@@ -56,7 +56,7 @@ INIT_MONTHS: List[int] = [5, 11]                    # May and November
 MEMBERS:     List[str] = [f"EN{i:02d}" for i in range(10)]   # EN00–EN09
 LEAD_DAYS:   List[int] = list(range(1, 85))          # days 1–84
 
-DAILY_WINDOW_DEFS: Dict[str, Tuple[int, int]] = DEFAULT_DAILY_WINDOW_DEFS
+DAILY_WINDOW_DEFS: Dict[str, Tuple[int, int]] = RECOMMENDED_DAILY_WINDOW_DEFS
 
 # Daily variables metadata
 DAILY_VARIABLE_SPECS: List[DailyVariableSpec] = [

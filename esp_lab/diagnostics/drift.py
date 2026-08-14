@@ -50,6 +50,13 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 import xarray as xr
+from esp_lab.diagnostics.products import (
+    PAIRED_SIGN_CONVENTION,
+    resolve_experiment_roles,
+    standardize_product_table,
+    write_product_bundle,
+)
+from esp_lab.diagnostics.store import config_fingerprint
 
 
 # ===========================================================================
@@ -138,6 +145,10 @@ class VariableSpec:
     obs_convert:
         Callable applied to observation DataArrays after loading.
         Defaults to identity.
+    attractor_component, attractor_variable, attractor_grid, attractor_frequency:
+        Metadata locating the prepared model-attractor reference.  These are
+        configuration only; diagnostic functions contain no component-specific
+        branching.
     """
 
     native_field: str
@@ -150,6 +161,10 @@ class VariableSpec:
     mask: str = "ocean"
     model_convert: Callable = field(default=_identity, repr=False)
     obs_convert: Callable = field(default=_identity, repr=False)
+    attractor_component: Optional[str] = None
+    attractor_variable: Optional[str] = None
+    attractor_grid: str = "180x360_aave"
+    attractor_frequency: str = "monthly"
 
     VALID_MASKS = {"ocean", "land", "none"}
 
@@ -163,6 +178,15 @@ class VariableSpec:
             raise ValueError(
                 "VariableSpec: obs_product and obs_var must both be set or "
                 "both be None."
+            )
+        if self.attractor_frequency not in {"monthly", "daily"}:
+            raise ValueError(
+                "VariableSpec.attractor_frequency must be 'monthly' or 'daily'."
+            )
+        if (self.attractor_component is None) != (self.attractor_variable is None):
+            raise ValueError(
+                "VariableSpec: attractor_component and attractor_variable must "
+                "both be set or both be None."
             )
 
 
@@ -196,6 +220,10 @@ class DriftConfig:
         ``[lon_min, lon_max, lat_min, lat_max]`` bounding box.
     region_name:
         Human-readable region label (e.g. ``"Nino3.4"``).
+    reference_years:
+        Inclusive historical period used upstream to prepare the attractor.
+    distance_tolerance:
+        Neutral band around zero for two-reference regime classification.
     """
 
     # Required
@@ -219,6 +247,8 @@ class DriftConfig:
     freq_tag: str = "mon"
     region: List[float] = field(default_factory=lambda: [-170.0, -120.0, -5.0, 5.0])
     region_name: str = "Nino3.4"
+    reference_years: Tuple[int, int] = (1981, 2010)
+    distance_tolerance: float = 1.0e-6
 
     def __post_init__(self):
         if not self.init_years:
@@ -242,6 +272,10 @@ class DriftConfig:
             raise ValueError(
                 "DriftConfig.region must be [lon_min, lon_max, lat_min, lat_max]."
             )
+        if self.reference_years[0] > self.reference_years[1]:
+            raise ValueError("DriftConfig.reference_years must be increasing.")
+        if self.distance_tolerance < 0:
+            raise ValueError("DriftConfig.distance_tolerance must be non-negative.")
 
     @property
     def n_years(self) -> int:
@@ -540,6 +574,22 @@ def paired_difference(
     ).rename("paired_diff")
 
 
+def paired_difference_by_start(
+    case_test: CaseArray,
+    case_ref: CaseArray,
+    baseline_lead: int,
+) -> xr.DataArray:
+    """Paired adjustment per initialization year, retaining the ``Y`` axis."""
+    test, ref = xr.align(case_test.data, case_ref.data, join="inner")
+    state_difference = test.mean("M", skipna=True) - ref.mean("M", skipna=True)
+    result = (
+        state_difference - state_difference.sel(L=baseline_lead)
+    ).rename("paired_diff_by_start")
+    result.attrs["sign_convention"] = PAIRED_SIGN_CONVENTION
+    result.attrs["baseline"] = f"lead {baseline_lead} (1-based valid month)"
+    return result
+
+
 # ===========================================================================
 # Section 6 — Skill diagnostics (separate from drift)
 # ===========================================================================
@@ -758,6 +808,10 @@ def write_manifest(
 
     manifest = {
         "created_at":     datetime.now(timezone.utc).isoformat(),
+        "schema_version": "1.0.0",
+        "workflow": "5a_regional_drift",
+        "sign_convention": PAIRED_SIGN_CONVENTION,
+        "baseline": f"lead {drift_cfg.baseline_lead} (1-based valid month)",
         "python_version": sys.version,
         "region":         region if region is not None else drift_cfg.region,
         "region_name":    region_name or drift_cfg.region_name,
@@ -1176,7 +1230,8 @@ def run_pipeline(
     exp_labels = list(experiment_specs.keys())
     results: Dict = {
         "bias": {}, "adjustment": {}, "skill": {},
-        "paired_diff": {}, "ci_lower": {}, "ci_upper": {},
+        "paired_diff": {}, "paired_diff_by_start": {},
+        "ci_lower": {}, "ci_upper": {},
         "window_tables": [], "sample_years": {}, "sample_leads": {},
     }
 
@@ -1252,10 +1307,14 @@ def run_pipeline(
             )
 
         if len(exp_labels) == 2:
-            ref_lbl, test_lbl = exp_labels[0], exp_labels[1]
+            ref_lbl, test_lbl = resolve_experiment_roles(exp_labels)
             results["paired_diff"][init_month] = paired_difference(
                 results["adjustment"][test_lbl][init_month],
                 results["adjustment"][ref_lbl][init_month],
+            )
+            results["paired_diff_by_start"][init_month] = paired_difference_by_start(
+                aligned_cases[test_lbl], aligned_cases[ref_lbl],
+                drift_cfg.baseline_lead,
             )
             try:
                 lo, hi = bootstrap_paired_ci(
@@ -1318,6 +1377,69 @@ def run_pipeline(
                     })
             pd.DataFrame(rows).to_csv(
                 outdir / f"{prefix}_paired_diff.csv", index=False
+            )
+            start_rows = []
+            for init_month, da in results["paired_diff_by_start"].items():
+                for year in da.Y.values:
+                    for lead in da.L.values:
+                        start_rows.append({
+                            "init_month": int(init_month),
+                            "init_year": int(year),
+                            "lead": int(lead),
+                            "paired_diff": float(da.sel(Y=year, L=lead)),
+                            "sign_convention": PAIRED_SIGN_CONVENTION,
+                            "baseline_lead": int(drift_cfg.baseline_lead),
+                        })
+            pd.DataFrame(start_rows).to_csv(
+                outdir / f"{prefix}_paired_diff_by_start.csv", index=False
+            )
+            product_rows = [
+                {
+                    "init_month": row["init_month"],
+                    "component": "atm", "variable": var_spec.native_field,
+                    "units": var_spec.plot_units, "native_grid_id": "regional_mean",
+                    "region": drift_cfg.region_name, "lead_units": "month",
+                    "lead_start": row["lead"], "lead_end": row["lead"],
+                    "baseline": (
+                        f"lead {drift_cfg.baseline_lead} (1-based valid month)"
+                    ),
+                    "metric_name": "paired_adjustment", "value": row["paired_diff"],
+                    "uncertainty_lower": row["ci_lower"],
+                    "uncertainty_upper": row["ci_upper"],
+                    "reference_product": var_spec.obs_product,
+                    "sample_count": len(results["sample_years"][row["init_month"]]),
+                    "significance_method": "paired initialization-year bootstrap",
+                }
+                for row in rows
+            ]
+            product_rows.extend({
+                "start_date": f"{row['init_year']:04d}-{row['init_month']:02d}-01",
+                "init_year": row["init_year"], "init_month": row["init_month"],
+                "component": "atm", "variable": var_spec.native_field,
+                "units": var_spec.plot_units, "native_grid_id": "regional_mean",
+                "region": drift_cfg.region_name, "lead_units": "month",
+                "lead_start": row["lead"], "lead_end": row["lead"],
+                "baseline": f"lead {drift_cfg.baseline_lead} (1-based valid month)",
+                "metric_name": "paired_adjustment_by_start",
+                "value": row["paired_diff"], "reference_product": var_spec.obs_product,
+                "sample_count": 1,
+            } for row in start_rows)
+            fingerprint = config_fingerprint(
+                drift_cfg, variable=var_spec.native_field,
+                context={"experiments": list(experiment_specs)},
+            )
+            product_table = standardize_product_table(
+                product_rows, workflow="5a_regional_drift",
+                configuration_hash=fingerprint,
+            )
+            write_product_bundle(
+                outdir / f"{prefix}_products", product_table,
+                workflow="5a_regional_drift", configuration_hash=fingerprint,
+                metadata={
+                    "region_bounds": drift_cfg.region,
+                    "baseline_lead": drift_cfg.baseline_lead,
+                    "lead_numbering": "lead 1 is the initialization calendar month",
+                },
             )
 
         write_manifest(

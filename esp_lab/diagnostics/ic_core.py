@@ -426,6 +426,7 @@ class StructureDiff:
     dim_mismatches: Dict[str, Tuple] = field(default_factory=dict)
     dtype_mismatches: Dict[str, Tuple] = field(default_factory=dict)
     coord_mismatches: Dict[str, str] = field(default_factory=dict)
+    variable_attr_mismatches: Dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -434,9 +435,17 @@ class StructureDiff:
             "n_only_test": len(self.only_in_test),
             "n_dim_mismatch": len(self.dim_mismatches),
             "n_dtype_mismatch": len(self.dtype_mismatches),
+            "n_coord_mismatch": len(self.coord_mismatches),
+            "n_variable_attr_mismatch": len(self.variable_attr_mismatches),
             "common_vars": ",".join(sorted(self.common_vars)),
             "only_ref": ",".join(sorted(self.only_in_ref)),
             "only_test": ",".join(sorted(self.only_in_test)),
+            "dim_mismatches": json.dumps(self.dim_mismatches, sort_keys=True),
+            "dtype_mismatches": json.dumps(self.dtype_mismatches, sort_keys=True),
+            "coord_mismatches": json.dumps(self.coord_mismatches, sort_keys=True),
+            "variable_attr_mismatches": json.dumps(
+                self.variable_attr_mismatches, sort_keys=True
+            ),
         }
 
 
@@ -486,7 +495,8 @@ def compare_nc_schema(
         if r_dt != t_dt:
             dtype_mismatches[v] = (r_dt, t_dt)
 
-    # Coordinate mismatches (shape only, not values)
+    # Coordinate identity includes values and ordering, not only shape.  This
+    # prevents cell-by-cell subtraction on a permuted native grid.
     ref_coords = set(ds_ref.coords)
     test_coords = set(ds_test.coords)
     coord_mismatches: Dict[str, str] = {}
@@ -496,6 +506,29 @@ def compare_nc_schema(
                 f"shape ref={ds_ref.coords[c].shape} "
                 f"test={ds_test.coords[c].shape}"
             )
+        elif not ds_ref.coords[c].equals(ds_test.coords[c]):
+            coord_mismatches[c] = "values or ordering differ"
+
+    # MPAS grid descriptors are commonly stored as data variables rather than
+    # coordinates.  Equality here is a direct mesh/cell-ordering check.
+    grid_descriptors = {
+        "latCell", "lonCell", "xCell", "yCell", "zCell", "areaCell",
+        "cellsOnCell", "verticesOnCell", "edgesOnCell", "indexToCellID",
+    }
+    for name in sorted(grid_descriptors & set(common)):
+        if not ds_ref[name].equals(ds_test[name]):
+            coord_mismatches[f"data_var:{name}"] = "values or ordering differ"
+
+    attrs_to_compare = ("units", "standard_name", "long_name", "positive", "axis")
+    variable_attr_mismatches: Dict[str, str] = {}
+    for v in common:
+        mismatched = {
+            attr: (ds_ref[v].attrs.get(attr), ds_test[v].attrs.get(attr))
+            for attr in attrs_to_compare
+            if ds_ref[v].attrs.get(attr) != ds_test[v].attrs.get(attr)
+        }
+        if mismatched:
+            variable_attr_mismatches[v] = json.dumps(mismatched, default=str)
 
     return StructureDiff(
         common_vars=common,
@@ -504,6 +537,7 @@ def compare_nc_schema(
         dim_mismatches=dim_mismatches,
         dtype_mismatches=dtype_mismatches,
         coord_mismatches=coord_mismatches,
+        variable_attr_mismatches=variable_attr_mismatches,
     )
 
 
@@ -553,6 +587,7 @@ def ic_variable_stats(
     da_ref: xr.DataArray,
     da_test: xr.DataArray,
     area_weights: Optional[xr.DataArray] = None,
+    meaningful_threshold: Optional[float] = None,
     eps: float = 1e-10,
 ) -> dict:
     """Compute IC difference statistics between two DataArrays.
@@ -570,15 +605,19 @@ def ic_variable_stats(
         Optional spatial area weights (same spatial dimensions as the arrays).
         If provided, RMSE, mean diff, and MAD are area-weighted.
         For MPAS components, pass the native cell-area array.
+    meaningful_threshold:
+        Absolute-difference threshold in the variable's native units.  The
+        exceedance fraction uses this value; when omitted, ``eps`` is used.
     eps:
         Small value used to guard against division by zero in relative RMSE.
 
     Returns
     -------
     dict with keys:
-        min_diff, max_diff, mean_diff, mad, rmse, spatial_std,
-        rel_rmse, pattern_corr, frac_differing, integral_diff_ref,
-        integral_diff_test, n_valid
+        min_diff, max_diff, max_abs_diff, p05_diff, p50_diff, p95_diff,
+        mean_diff, mad, rmse, reference_std, nrmse, pattern_corr,
+        meaningful_threshold, frac_exceeding_threshold, integral_ref,
+        integral_test, integral_diff, integral_pct_diff, n_valid
     """
     diff = da_test - da_ref
     n_valid = int(diff.notnull().sum().values)
@@ -613,9 +652,10 @@ def ic_variable_stats(
 
     spatial_std = float(diff.std(skipna=True).values)
 
-    # Reference scale for relative RMSE: spatial std of reference field
-    ref_std = float(da_ref.std(skipna=True).values)
-    rel_rmse = rmse / (ref_std + eps)
+    # Reference scale for NRMSE: weighted spatial standard deviation.
+    ref_mean = _wavg(da_ref)
+    ref_std = float(np.sqrt(max(_wavg((da_ref - ref_mean) ** 2), 0.0)))
+    nrmse = rmse / ref_std if ref_std > eps else float("nan")
 
     # Pattern correlation (Pearson, area-weighted if available)
     try:
@@ -629,9 +669,11 @@ def ic_variable_stats(
     except Exception:
         pattern_corr = float("nan")
 
-    # Fraction of valid grid cells that differ meaningfully (> eps)
-    frac_differing = float(
-        (np.abs(diff) > eps).sum(skipna=True).values
+    threshold = eps if meaningful_threshold is None else float(meaningful_threshold)
+    if threshold < 0:
+        raise ValueError("meaningful_threshold must be non-negative")
+    frac_exceeding = float(
+        (np.abs(diff) > threshold).sum(skipna=True).values
     ) / max(n_valid, 1)
 
     # A physical area integral when native cell areas are available; otherwise
@@ -645,18 +687,35 @@ def ic_variable_stats(
         integral_diff_ref = float(da_ref.sum(skipna=True).values)
         integral_diff_test = float(da_test.sum(skipna=True).values)
 
+    integral_diff = integral_diff_test - integral_diff_ref
+    integral_pct_diff = (
+        100.0 * integral_diff / integral_diff_ref
+        if abs(integral_diff_ref) > eps else float("nan")
+    )
+    quantiles = diff.quantile([0.05, 0.50, 0.95], skipna=True).values
+
     return {
         "min_diff": float(diff.min(skipna=True).values),
         "max_diff": float(diff.max(skipna=True).values),
+        "max_abs_diff": float(np.abs(diff).max(skipna=True).values),
+        "p05_diff": float(quantiles[0]),
+        "p50_diff": float(quantiles[1]),
+        "p95_diff": float(quantiles[2]),
         "mean_diff": mean_diff,
         "mad": mad,
         "rmse": rmse,
         "spatial_std": spatial_std,
-        "rel_rmse": rel_rmse,
+        "reference_std": ref_std,
+        "nrmse": nrmse,
+        "rel_rmse": nrmse,
         "pattern_corr": pattern_corr,
-        "frac_differing": frac_differing,
+        "meaningful_threshold": threshold,
+        "frac_exceeding_threshold": frac_exceeding,
+        "frac_differing": frac_exceeding,
         "integral_ref": integral_diff_ref,
         "integral_test": integral_diff_test,
+        "integral_diff": integral_diff,
+        "integral_pct_diff": integral_pct_diff,
         "n_valid": n_valid,
     }
 
@@ -666,9 +725,12 @@ def _empty_stats() -> dict:
     return {
         k: float("nan")
         for k in (
-            "min_diff", "max_diff", "mean_diff", "mad", "rmse",
-            "spatial_std", "rel_rmse", "pattern_corr", "frac_differing",
-            "integral_ref", "integral_test",
+            "min_diff", "max_diff", "max_abs_diff", "p05_diff", "p50_diff",
+            "p95_diff", "mean_diff", "mad", "rmse", "spatial_std",
+            "reference_std", "nrmse", "rel_rmse", "pattern_corr",
+            "meaningful_threshold", "frac_exceeding_threshold",
+            "frac_differing", "integral_ref", "integral_test",
+            "integral_diff", "integral_pct_diff",
         )
     } | {"n_valid": 0}
 
@@ -750,6 +812,7 @@ def _date_to_season(date_str: str) -> str:
 def _agg_group(g: pd.DataFrame) -> pd.Series:
     """Aggregate one group of per-start-date stats."""
     rmse_vals = g["rmse"].dropna()
+    nrmse_vals = g["nrmse"].dropna() if "nrmse" in g else pd.Series(dtype=float)
     md_vals = g["mean_diff"].dropna()
     pc_vals = g["pattern_corr"].dropna() if "pattern_corr" in g else pd.Series(dtype=float)
     fd_vals = g["frac_differing"].dropna() if "frac_differing" in g else pd.Series(dtype=float)
@@ -758,15 +821,27 @@ def _agg_group(g: pd.DataFrame) -> pd.Series:
         {
             "n_starts": len(g),
             "mean_rmse": rmse_vals.mean() if len(rmse_vals) else float("nan"),
+            "median_rmse": rmse_vals.median() if len(rmse_vals) else float("nan"),
             "std_rmse": rmse_vals.std() if len(rmse_vals) > 1 else float("nan"),
+            "p25_rmse": rmse_vals.quantile(0.25) if len(rmse_vals) else float("nan"),
+            "p75_rmse": rmse_vals.quantile(0.75) if len(rmse_vals) else float("nan"),
             "min_rmse": rmse_vals.min() if len(rmse_vals) else float("nan"),
             "max_rmse": rmse_vals.max() if len(rmse_vals) else float("nan"),
+            "median_nrmse": nrmse_vals.median() if len(nrmse_vals) else float("nan"),
+            "max_start_rmse_fraction": (
+                rmse_vals.max() / rmse_vals.sum()
+                if len(rmse_vals) and rmse_vals.sum() > 0 else float("nan")
+            ),
             "mean_abs_mean_diff": md_vals.abs().mean() if len(md_vals) else float("nan"),
             "mean_pattern_corr": pc_vals.mean() if len(pc_vals) else float("nan"),
             "mean_frac_differing": fd_vals.mean() if len(fd_vals) else float("nan"),
             "sign_agreement_frac": (
                 float((md_vals > 0).sum()) / len(md_vals)
                 if len(md_vals) else float("nan")
+            ),
+            "sign_consistency": (
+                max(float((md_vals > 0).sum()), float((md_vals < 0).sum()))
+                / len(md_vals) if len(md_vals) else float("nan")
             ),
         }
     )
@@ -857,6 +932,14 @@ def check_atm_surface_vs_land(
     )
 
     try:
+        spatial_names = {"ncol", "nCells", "gridcell", "lndgrid", "lat", "lon", "x", "y"}
+        shared_dims = set(da_atm_ts.dims) & set(da_lnd_tgrnd.dims) & spatial_names
+        if not shared_dims:
+            report.notes = "Native grids differ; model mapping weights are required."
+            report.warnings.append(
+                "No shared spatial dimension — cross-component comparison skipped."
+            )
+            return report
         # Align on shared coordinates (inner join → only overlap)
         atm_al, lnd_al = xr.align(da_atm_ts, da_lnd_tgrnd, join="inner")
         mismatch = np.abs(atm_al - lnd_al)
@@ -935,6 +1018,14 @@ def check_ocean_ice_consistency(
     )
 
     try:
+        spatial_names = {"ncol", "nCells", "gridcell", "lat", "lon", "x", "y"}
+        shared_dims = set(da_sst.dims) & set(da_aice.dims) & spatial_names
+        if not shared_dims:
+            report.notes += " | Native grids differ; model mapping weights are required."
+            report.warnings.append(
+                "No shared spatial dimension — ocean/ice comparison skipped."
+            )
+            return report
         sst_al, aice_al = xr.align(da_sst, da_aice, join="inner")
         n_pts = int(sst_al.notnull().sum().values)
         report.n_points = n_pts

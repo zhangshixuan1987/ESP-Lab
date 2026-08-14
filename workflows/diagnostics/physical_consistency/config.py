@@ -24,7 +24,7 @@ import sys
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from esp_lab.diagnostics.daily_core import DEFAULT_DAILY_EXPERIMENT_SPECS, DEFAULT_DAILY_WINDOW_DEFS
+from esp_lab.diagnostics.daily_core import DEFAULT_DAILY_EXPERIMENT_SPECS, RECOMMENDED_DAILY_WINDOW_DEFS
 from esp_lab.diagnostics.monthly_core import DEFAULT_WINDOW_DEFS as DEFAULT_MONTHLY_WINDOW_DEFS
 from esp_lab.paths import figure_output_dir, multimodel_diagnostic_dir
 
@@ -45,5 +45,5 @@ PHYSICAL_FIELDS = [
     "LHFLX", "SHFLX", "TREFHT", "PRECT", "H2OSOI", "TS", "FSNS", "FLNS"
 ]
 
-DAILY_WINDOWS = DEFAULT_DAILY_WINDOW_DEFS
+DAILY_WINDOWS = RECOMMENDED_DAILY_WINDOW_DEFS
 MONTHLY_WINDOWS = DEFAULT_MONTHLY_WINDOW_DEFS

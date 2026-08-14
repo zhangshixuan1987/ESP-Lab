@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -159,6 +159,7 @@ def integrate_soil_moisture(
     h2osoi: xr.DataArray,
     layer_depths: Optional[Sequence[float]] = None,
     lev_dim: str = "levgrnd",
+    require_thickness: bool = False,
 ) -> xr.DataArray:
     """Integrate soil moisture over layer depths (e.g. 0–1.6 m).
 
@@ -167,7 +168,9 @@ def integrate_soil_moisture(
     h2osoi:
         Soil moisture DataArray with a level dimension.
     layer_depths:
-        Optional depth weights for each layer in meters. If None, simple mean across levels.
+        Actual layer thicknesses in meters. Production physical diagnostics set
+        ``require_thickness=True``; the legacy unweighted mean remains available
+        only for backward compatibility.
     lev_dim:
         Name of level dimension.
 
@@ -178,12 +181,24 @@ def integrate_soil_moisture(
     if lev_dim not in h2osoi.dims:
         return h2osoi
 
-    if layer_depths is not None:
-        w = np.asarray(layer_depths, dtype=float)
-        w_da = xr.DataArray(w, dims=[lev_dim], coords={lev_dim: h2osoi.coords[lev_dim]})
-        sm = (h2osoi * w_da).sum(lev_dim, skipna=True)
-    else:
+    if layer_depths is None:
+        if require_thickness:
+            raise ValueError(
+                "Actual soil-layer thicknesses are required; a simple vertical mean "
+                "is not a physically valid storage integral."
+            )
         sm = h2osoi.mean(lev_dim, skipna=True)
+        sm.name = "integrated_soil_moisture"
+        sm.attrs["long_name"] = "Unweighted mean soil moisture (legacy mode)"
+        sm.attrs["integration_method"] = "unweighted_mean"
+        return sm
+    w = np.asarray(layer_depths, dtype=float)
+    if w.size != h2osoi.sizes[lev_dim] or np.any(~np.isfinite(w)) or np.any(w <= 0):
+        raise ValueError(
+            f"layer_depths must contain {h2osoi.sizes[lev_dim]} positive finite values."
+        )
+    w_da = xr.DataArray(w, dims=[lev_dim], coords={lev_dim: h2osoi.coords[lev_dim]})
+    sm = (h2osoi * w_da).sum(lev_dim, skipna=True)
 
     sm.name = "integrated_soil_moisture"
     sm.attrs["long_name"] = "Integrated soil moisture"
@@ -337,6 +352,20 @@ def compute_apparent_energy_residual(
     return r_app
 
 
+def compute_land_water_residual(
+    storage_tendency: xr.DataArray,
+    precipitation: xr.DataArray,
+    evapotranspiration: xr.DataArray,
+    runoff: xr.DataArray,
+) -> xr.DataArray:
+    """Compute land-water residual ``dS/dt - (P - ET - R)``."""
+    residual = storage_tendency - (precipitation - evapotranspiration - runoff)
+    residual.name = "land_water_residual"
+    residual.attrs["long_name"] = "Land-water residual dS/dt - (P - ET - R)"
+    residual.attrs["units"] = storage_tendency.attrs.get("units", "unknown")
+    return residual
+
+
 # ===========================================================================
 # Section 7 — Paired Bootstrap for Physical Metrics
 # ===========================================================================
@@ -392,5 +421,6 @@ __all__ = [
     "compute_coupling_slope",
     "compute_precip_sm_lag_response",
     "compute_apparent_energy_residual",
+    "compute_land_water_residual",
     "bootstrap_physical_metric_ci",
 ]

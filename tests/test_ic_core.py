@@ -184,6 +184,23 @@ class TestVariableStats:
         stats = ic_variable_stats(ref, test)
         assert abs(stats["rmse"] - 1.0) < 1e-9
 
+    def test_complete_scientific_metric_contract(self):
+        ref = xr.DataArray(np.array([0.0, 1.0, 2.0, 3.0]), dims=["x"])
+        test = xr.DataArray(np.array([0.0, 2.0, 4.0, 6.0]), dims=["x"])
+        stats = ic_variable_stats(ref, test, meaningful_threshold=1.5)
+        assert stats["max_abs_diff"] == pytest.approx(3.0)
+        assert stats["p50_diff"] == pytest.approx(1.5)
+        assert stats["frac_exceeding_threshold"] == pytest.approx(0.5)
+        assert stats["meaningful_threshold"] == pytest.approx(1.5)
+        assert stats["nrmse"] == pytest.approx(stats["rmse"] / stats["reference_std"])
+        assert stats["integral_diff"] == pytest.approx(6.0)
+        assert stats["integral_pct_diff"] == pytest.approx(100.0)
+
+    def test_negative_threshold_rejected(self):
+        ref = xr.DataArray(np.ones(4), dims=["x"])
+        with pytest.raises(ValueError, match="non-negative"):
+            ic_variable_stats(ref, ref, meaningful_threshold=-1.0)
+
     def test_identical_returns_zero_rmse(self):
         ref = xr.DataArray(np.linspace(0, 1, 50), dims=["x"])
         test = ref.copy()
@@ -257,6 +274,22 @@ class TestNCSchema:
         diff = compare_nc_schema(ds_ref, ds_test)
         assert "x" in diff.dim_mismatches
         assert diff.dim_mismatches["x"] == (50, 100)
+
+    def test_coordinate_ordering_mismatch(self):
+        ds_ref = xr.Dataset(
+            {"t": xr.DataArray([1.0, 2.0], dims=["x"])}, coords={"x": [0, 1]}
+        )
+        ds_test = xr.Dataset(
+            {"t": xr.DataArray([2.0, 1.0], dims=["x"])}, coords={"x": [1, 0]}
+        )
+        diff = compare_nc_schema(ds_ref, ds_test)
+        assert diff.coord_mismatches["x"] == "values or ordering differ"
+
+    def test_units_mismatch(self):
+        ds_ref = xr.Dataset({"t": xr.DataArray([1.0], dims=["x"], attrs={"units": "K"})})
+        ds_test = xr.Dataset({"t": xr.DataArray([1.0], dims=["x"], attrs={"units": "degC"})})
+        diff = compare_nc_schema(ds_ref, ds_test)
+        assert "t" in diff.variable_attr_mismatches
 
     def test_dtype_mismatch(self):
         ds_ref = xr.Dataset({"t": xr.DataArray(np.ones(10, dtype=np.float32), dims=["x"])})

@@ -65,6 +65,7 @@ def _infer_metric(filename: str) -> str:
     """Infer a compact metric key for a figure without manifest metadata."""
     stem = Path(filename).stem.lower()
     candidates = (
+        "leadtime_drift",
         "global_teleconnection_patterns",
         "multi_e3sm_rmse_skill_map_conus",
         "multi_e3sm_rmse_skill_diff",
@@ -121,6 +122,8 @@ def _infer_workflow_group(filename: str, metric: str, mode: str) -> str:
         return "MOV"
     if metric_lower.startswith("leadtime_acc"):
         return "LEAD_ACC"
+    if metric_lower.startswith("leadtime_drift"):
+        return "LEAD_DRIFT"
     if metric_lower.startswith("leadtime_rmse") or metric_lower.startswith(
         "rmse_compare"
     ):
@@ -1625,6 +1628,7 @@ def _build_html_template(manifest: dict) -> str:
         const GROUP_LABELS = {
             "ALL": "All Figures",
             "LEAD_ACC": "Lead-time ACC",
+            "LEAD_DRIFT": "Lead-time Drift",
             "LEAD_RMSE": "Lead-time RMSE",
             "SST_INDEX": "SST Indices",
             "MOV": "Modes of Variability",
@@ -1720,6 +1724,12 @@ def _build_html_template(manifest: dict) -> str:
                 if (metric.includes("diff")) return "DIFFERENCE";
                 return "SKILL_MAP";
             }
+            if (fig.group === "LEAD_DRIFT") {
+                if (file.includes("spatial_maps")) return "SKILL_MAP";
+                if (file.includes("regime_fraction")) return "DRIFT";
+                if (file.includes("drift")) return "DRIFT";
+                return "SKILL";
+            }
             if (fig.group === "LEAD_RMSE") {
                 if (metric.startsWith("rmse_compare")) return "MODEL_COMPARISON";
                 if (metric.includes("diff")) return "DIFFERENCE";
@@ -1809,7 +1819,7 @@ def _build_html_template(manifest: dict) -> str:
 
             // Follow the major section order used by the diagnostics workflow.
             const workflowOrder = [
-                "LEAD_ACC", "LEAD_RMSE", "SST_INDEX", "MOV", "TC", "ELI", "OTHER"
+                "LEAD_ACC", "LEAD_RMSE", "LEAD_DRIFT", "SST_INDEX", "MOV", "TC", "ELI", "OTHER"
             ];
             const groups = Object.keys(counts)
                 .filter(g => g !== "ALL")

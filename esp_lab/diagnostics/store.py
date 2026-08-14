@@ -16,7 +16,7 @@ from typing import Any, Mapping
 import xarray as xr
 
 
-STORE_VERSION = 1
+STORE_VERSION = 2
 _LOCATION_ONLY_CONFIG_KEYS = {"output_root", "figure_outdir"}
 
 
@@ -160,6 +160,7 @@ def save_diagnostic_store(
     variable: str,
     workflow: str,
     context: Mapping[str, Any] | None = None,
+    product_metadata: Mapping[str, Any] | None = None,
 ) -> Path:
     """Materialize reduced diagnostics atomically as compressed NetCDF files."""
     root = Path(path)
@@ -185,6 +186,7 @@ def save_diagnostic_store(
         "config_fingerprint": config_fingerprint(config, variable=variable, context=context),
         "config": _jsonable(config),
         "context": _jsonable(context or {}),
+        "product_metadata": _jsonable(product_metadata or {}),
         "month_files": month_files,
         "complete": True,
     }

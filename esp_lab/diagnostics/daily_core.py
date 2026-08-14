@@ -188,6 +188,7 @@ class DailyDriftConfig:
     data_dir: str
 
     baseline_day: int = 1
+    baseline_window: Optional[Tuple[int, int]] = (1, 3)
 
     pilot_only: bool = True
     pilot_years: List[int] = field(default_factory=lambda: [1980, 1981, 1982])
@@ -215,6 +216,10 @@ class DailyDriftConfig:
             raise ValueError(
                 f"DailyDriftConfig.baseline_day={self.baseline_day} not in lead_days."
             )
+        if self.baseline_window is not None:
+            first, last = self.baseline_window
+            if first > last:
+                raise ValueError("DailyDriftConfig.baseline_window must be ordered.")
         if not self.variables:
             raise ValueError("DailyDriftConfig.variables must not be empty.")
         for name, (df, dl) in self.window_defs.items():
@@ -258,6 +263,14 @@ DEFAULT_DAILY_WINDOW_DEFS: Dict[str, Tuple[int, int]] = {
     "weeks_2_3":  (8, 21),
     "weeks_4_6":  (22, 42),
     "weeks_7_12": (43, 84),
+}
+
+RECOMMENDED_DAILY_WINDOW_DEFS: Dict[str, Tuple[int, int]] = {
+    "days_1_3":   (1, 3),
+    "days_4_7":   (4, 7),
+    "days_8_21":  (8, 21),
+    "days_22_42": (22, 42),
+    "days_43_84": (43, 84),
 }
 
 
@@ -586,6 +599,38 @@ def daily_spatial_paired_diff(
     return (
         adj_test.sel(d=common_days) - adj_ref.sel(d=common_days)
     ).rename("paired_diff")
+
+
+def rapid_adjustment_metrics(
+    adjustment: xr.DataArray,
+    *,
+    day_dim: str = "d",
+    early_days: Tuple[int, int] = (1, 7),
+    late_days: Tuple[int, int] = (22, 84),
+) -> xr.Dataset:
+    """Summarize rapid adjustment while retaining start and spatial axes."""
+    if day_dim not in adjustment.dims or adjustment.sizes[day_dim] < 2:
+        raise ValueError(f"adjustment must contain at least two {day_dim!r} values.")
+    rate = adjustment.diff(day_dim)
+    abs_rate = np.abs(rate)
+    maximum_rate = abs_rate.max(day_dim, skipna=True).rename("maximum_adjustment_rate")
+    day_of_maximum = abs_rate.idxmax(day_dim, skipna=True).rename("day_of_maximum_adjustment")
+    cumulative = adjustment.sum(day_dim, skipna=True).rename("cumulative_adjustment")
+    sign_reversal = (
+        (adjustment.max(day_dim, skipna=True) > 0)
+        & (adjustment.min(day_dim, skipna=True) < 0)
+    ).rename("sign_reversal_or_overshoot")
+
+    early = rate.sel({day_dim: slice(*early_days)}).pipe(np.abs).mean(day_dim, skipna=True)
+    late = rate.sel({day_dim: slice(*late_days)}).pipe(np.abs).mean(day_dim, skipna=True)
+    early_late_ratio = (early / late.where(late > 0)).rename("early_late_adjustment_ratio")
+    return xr.Dataset({
+        maximum_rate.name: maximum_rate,
+        day_of_maximum.name: day_of_maximum,
+        sign_reversal.name: sign_reversal,
+        cumulative.name: cumulative,
+        early_late_ratio.name: early_late_ratio,
+    })
 
 
 def daily_window_average(
@@ -941,6 +986,7 @@ __all__ = [
     "DailyDriftConfig",
     "DEFAULT_DAILY_EXPERIMENT_SPECS",
     "DEFAULT_DAILY_WINDOW_DEFS",
+    "RECOMMENDED_DAILY_WINDOW_DEFS",
     "DailyInventoryStatus",
     "DailyGateStatus",
     "DailyLeadCoverageResult",
@@ -954,6 +1000,7 @@ __all__ = [
     "daily_spatial_bias",
     "daily_spatial_adjustment",
     "daily_spatial_paired_diff",
+    "rapid_adjustment_metrics",
     "daily_window_average",
     "bootstrap_daily_spatial_ci",
     "daily_significance_mask",

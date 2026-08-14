@@ -194,3 +194,30 @@ dask:
 netcdf:
   chunks: {}   # empty = let xarray choose; or e.g. {nCells: 10000}
   engine: "netcdf4"
+
+# -----------------------------------------------------------------------
+# Scientific diagnostic policy
+# -----------------------------------------------------------------------
+diagnostics:
+  # Used only when an absolute, unit-aware threshold is not supplied below.
+  # The fallback is scale-aware and makes the exceedance metric comparable,
+  # but campaign publications should use reviewed absolute thresholds.
+  default_threshold_sigma_fraction: 0.01
+  constant_field_threshold: 1.0e-10
+
+  # Exact variable-name overrides in native units.  Add entries only after
+  # confirming the restart-file units in Step 2.
+  meaningful_thresholds:
+    atm: {}
+    lnd: {}
+    ocn: {}
+    ice: {}
+    rof: {}
+
+  # Maps and profiles are selected by scientific relevance, not raw RMSE.
+  # Matching is case-insensitive substring matching to tolerate model naming.
+  fingerprint_keywords:
+    lnd: ["h2osoi", "soilwater", "h2osno", "swe", "t_soisno", "t_grnd"]
+    ocn: ["temperature", "salinity", "sst", "ssh"]
+    ice: ["iceconcentration", "aice", "icethickness", "vice", "snowvolume"]
+    rof: ["river", "storage", "volr", "h2o"]

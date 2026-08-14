@@ -32,6 +32,8 @@ from __future__ import annotations
 import argparse
 import sys
 import warnings
+import hashlib
+import json
 import re
 from pathlib import Path
 
@@ -58,6 +60,39 @@ from esp_lab.diagnostics.ic_io import (
 from .config import build_ic_config, load_config
 
 
+def _grid_integrity(da: xr.DataArray) -> tuple[str, str]:
+    """Return a stable native-grid signature and explicit coordinate ordering."""
+    payload = {"dims": [(dim, int(da.sizes[dim])) for dim in da.dims], "coords": {}}
+    ordering = []
+    for name in da.dims:
+        if name not in da.coords or da.coords[name].ndim != 1:
+            ordering.append(f"{name}:index")
+            continue
+        values = np.asarray(da.coords[name].values)
+        if values.size < 2 or not np.issubdtype(values.dtype, np.number):
+            direction = "index"
+        else:
+            delta = np.diff(values.astype(float))
+            direction = "ascending" if np.all(delta > 0) else (
+                "descending" if np.all(delta < 0) else "nonmonotonic"
+            )
+        ordering.append(f"{name}:{direction}")
+        payload["coords"][name] = {
+            "size": int(values.size), "first": str(values[0]) if values.size else None,
+            "last": str(values[-1]) if values.size else None, "ordering": direction,
+        }
+    for name, coord in da.coords.items():
+        if coord.ndim != 1 or name in payload["coords"]:
+            continue
+        values = np.ascontiguousarray(coord.values)
+        payload["coords"][name] = {
+            "dims": list(coord.dims), "size": int(values.size),
+            "sha256": hashlib.sha256(values.tobytes()).hexdigest()[:16],
+        }
+    encoded = json.dumps(payload, sort_keys=True).encode()
+    return hashlib.sha256(encoded).hexdigest()[:16], ",".join(ordering)
+
+
 # ---------------------------------------------------------------------------
 # Area-weight loader for MPAS components
 # ---------------------------------------------------------------------------
@@ -69,8 +104,58 @@ def _load_area_weights(ds: xr.Dataset, component: str) -> xr.DataArray | None:
         for var in ("areaCell", "area", "cellArea"):
             if var in ds:
                 return ds[var]
-    # ELM land (area is not always in the restart; skip)
+    if component in ("lnd", "rof"):
+        for var in ("area", "AREA", "cellArea", "areacella"):
+            if var not in ds:
+                continue
+            weights = ds[var]
+            if component == "lnd":
+                for fraction in ("landfrac", "LANDFRAC", "land_fraction"):
+                    if fraction in ds:
+                        try:
+                            weights = weights * ds[fraction]
+                        except Exception:
+                            pass
+                        break
+            return weights
     return None
+
+
+def _load_volume_weights(
+    ds: xr.Dataset, da: xr.DataArray, area_weights: xr.DataArray | None
+) -> xr.DataArray | None:
+    """Return MPAS cell volume when layer thickness is compatible."""
+    if area_weights is None or "nVertLevels" not in da.dims:
+        return None
+    for name in ("layerThickness", "restingThickness"):
+        if name not in ds:
+            continue
+        thickness = ds[name]
+        extra_dims = [d for d in thickness.dims if d not in da.dims]
+        if extra_dims:
+            thickness = thickness.isel({d: 0 for d in extra_dims})
+        try:
+            return (area_weights * thickness).broadcast_like(da)
+        except Exception:
+            continue
+    return None
+
+
+def _meaningful_threshold(
+    cfg: dict, component: str, variable: str, da_ref: xr.DataArray
+) -> tuple[float, str]:
+    """Resolve a variable threshold, falling back to a scale-aware rule."""
+    diagnostics = cfg.get("diagnostics", {})
+    overrides = diagnostics.get("meaningful_thresholds", {})
+    component_overrides = overrides.get(component, {})
+    if variable in component_overrides:
+        return float(component_overrides[variable]), "configured_absolute"
+
+    sigma_fraction = float(diagnostics.get("default_threshold_sigma_fraction", 0.01))
+    ref_std = float(da_ref.std(skipna=True).values)
+    if np.isfinite(ref_std) and ref_std > 0:
+        return sigma_fraction * ref_std, f"{sigma_fraction:g}_reference_sigma"
+    return float(diagnostics.get("constant_field_threshold", 1.0e-10)), "numerical_floor"
 
 
 # ---------------------------------------------------------------------------
@@ -178,23 +263,59 @@ def run(
                 try:
                     # Materialize one variable pair at a time.  Chunked restart
                     # reads remain Dask-backed up to this compute boundary.
-                    da_ref, da_test = dask.compute(ds_ref[var], ds_test[var])
+                    ref_var = ds_ref[var]
+                    test_var = ds_test[var]
+                    if "nCells" in ref_var.dims:
+                        native_coords = {
+                            name: ds_ref[name]
+                            for name in ("latCell", "lonCell", "areaCell")
+                            if name in ds_ref and ds_ref[name].dims == ("nCells",)
+                        }
+                        if native_coords:
+                            ref_var = ref_var.assign_coords(native_coords)
+                            test_var = test_var.assign_coords(native_coords)
+                    da_ref, da_test = dask.compute(ref_var, test_var)
 
                     # Use area weights only if dimensions align
                     aw = None
+                    weighting = "unweighted"
                     if area_weights is not None:
                         try:
                             aw = area_weights.broadcast_like(da_ref)
+                            weighting = (
+                                "native_effective_land_area" if comp == "lnd"
+                                else "native_cell_area"
+                            )
                         except Exception:
                             pass
+                    if comp == "ocn":
+                        volume_weights = _load_volume_weights(ds_ref, da_ref, area_weights)
+                        if volume_weights is not None:
+                            aw = volume_weights
+                            weighting = "native_cell_volume"
 
-                    stats = ic_variable_stats(da_ref, da_test, area_weights=aw)
+                    threshold, threshold_source = _meaningful_threshold(
+                        cfg, comp, var, da_ref
+                    )
+                    stats = ic_variable_stats(
+                        da_ref,
+                        da_test,
+                        area_weights=aw,
+                        meaningful_threshold=threshold,
+                    )
+                    grid_signature, coordinate_ordering = _grid_integrity(da_ref)
                     stat_row = {
                         "start_date": date,
                         "component": comp,
                         "member": member,
                         "variable": var,
                         "season": ic_cfg.date_season(date),
+                        "units": da_ref.attrs.get("units", ""),
+                        "threshold_source": threshold_source,
+                        "weighting": weighting,
+                        "percentile_weighting": "unweighted",
+                        "grid_signature": grid_signature,
+                        "coordinate_ordering": coordinate_ordering,
                         **stats,
                     }
                     stat_rows.append(stat_row)
@@ -202,20 +323,48 @@ def run(
 
                     # Persist each variable immediately so a large component
                     # never accumulates every restart field in memory.
-                    diff_da = (da_test - da_ref).rename(var)
+                    diff_da = (da_test - da_ref).rename("signed_difference")
+                    ref_scale = max(abs(float(da_ref.mean(skipna=True).values)), threshold)
+                    relative_da = (diff_da / np.maximum(np.abs(da_ref), ref_scale * 1.0e-6)).rename(
+                        "relative_difference"
+                    )
+                    standard_scale = stats["reference_std"]
+                    standardized_da = (
+                        diff_da / standard_scale if np.isfinite(standard_scale) and standard_scale > 0
+                        else xr.full_like(diff_da, np.nan)
+                    ).rename("standardized_difference")
+                    exceedance_da = (np.abs(diff_da) > threshold).astype("int8").rename(
+                        "threshold_exceedance"
+                    )
                     var_token = re.sub(r"[^A-Za-z0-9_.-]+", "_", var)
                     diff_path = vs_dir / f"{date}_{member_token}_{comp}_{var_token}_diff.nc"
-                    diff_ds = diff_da.to_dataset(name=var)
+                    diff_ds = xr.merge([
+                        diff_da,
+                        relative_da,
+                        standardized_da,
+                        exceedance_da,
+                    ])
                     diff_ds.attrs.update({
                         "ref_experiment": ic_cfg.experiment_pair.ref_label,
                         "test_experiment": ic_cfg.experiment_pair.test_label,
                         "start_date": date,
                         "component": comp,
                         "member": member,
+                        "source_variable": var,
+                        "source_units": da_ref.attrs.get("units", ""),
+                        "meaningful_threshold": threshold,
+                        "threshold_source": threshold_source,
+                        "weighting": weighting,
+                        "percentile_weighting": "unweighted",
+                        "grid_signature": grid_signature,
+                        "coordinate_ordering": coordinate_ordering,
                     })
                     diff_ds.to_netcdf(
                         diff_path,
-                        encoding={var: {"zlib": True, "complevel": 2}},
+                        encoding={
+                            name: {"zlib": True, "complevel": 2}
+                            for name in diff_ds.data_vars
+                        },
                     )
 
                     if verbose:

@@ -16,6 +16,7 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 import xarray as xr
+from esp_lab.diagnostics.products import resolve_experiment_roles
 
 import sys
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -30,6 +31,7 @@ from esp_lab.diagnostics.daily_core import (
     daily_spatial_bias,
     daily_spatial_paired_diff,
     daily_window_average,
+    rapid_adjustment_metrics,
     valid_date_from_init_and_lead,
 )
 
@@ -142,8 +144,8 @@ def _compute_per_year_daily_paired_diff(
                 b_test = test_yr
                 b_ref = ref_yr
 
-            anchor_test = b_test.sel(d=config.baseline_day, drop=True)
-            anchor_ref  = b_ref.sel(d=config.baseline_day,  drop=True)
+            anchor_test = _baseline(b_test, config)
+            anchor_ref  = _baseline(b_ref, config)
 
             d_test = b_test - anchor_test
             d_ref  = b_ref  - anchor_ref
@@ -171,6 +173,7 @@ def run_diagnostics(
     if len(experiments) < 2:
         raise ValueError("Need at least 2 experiments for daily diagnostics.")
     ref_label, test_label = experiments[0], experiments[1]
+    sign_ref_label, sign_test_label = resolve_experiment_roles(experiments)
 
     results: Dict[int, Dict[str, Any]] = {}
 
@@ -231,12 +234,23 @@ def run_diagnostics(
             ref_bias = ref_em
             test_bias = test_em
 
-        ref_anchor = ref_bias.sel(d=config.baseline_day)
-        test_anchor = test_bias.sel(d=config.baseline_day)
+        ref_anchor = _baseline(ref_bias, config)
+        test_anchor = _baseline(test_bias, config)
         ref_ts_d = _area_mean(ref_bias - ref_anchor).mean("Y", skipna=True)
         test_ts_d = _area_mean(test_bias - test_anchor).mean("Y", skipna=True)
         results[init_month]["ref_ts_d"] = ref_ts_d
         results[init_month]["test_ts_d"] = test_ts_d
+        sign_factor = 1.0 if test_label == sign_test_label else -1.0
+        paired_adjustment_by_start = (
+            sign_factor * ((test_bias - test_anchor) - (ref_bias - ref_anchor))
+        ).rename("paired_adjustment_by_start")
+        paired_adjustment_by_start.attrs["sign_convention"] = (
+            "JRA55_FOSIRL - Reanalysis"
+        )
+        results[init_month]["paired_adjustment_by_start"] = paired_adjustment_by_start
+        rapid = rapid_adjustment_metrics(paired_adjustment_by_start)
+        for metric_name, metric in rapid.data_vars.items():
+            results[init_month][metric_name] = metric
 
         # Per-window diagnostics
         for win_name, (df_day, dl_day) in config.window_defs.items():
@@ -256,10 +270,11 @@ def run_diagnostics(
 
                 ref_adj_win  = ref_adj_d.mean(["Y", "d"],  skipna=True)
                 test_adj_win = test_adj_d.mean(["Y", "d"], skipna=True)
-                paired_win   = test_adj_win - ref_adj_win
+                paired_win = sign_factor * (test_adj_win - ref_adj_win)
 
                 paired_by_year = _compute_per_year_daily_paired_diff(
-                    da_test=da_test, da_ref=da_ref,
+                    da_test=data[sign_test_label][init_month],
+                    da_ref=data[sign_ref_label][init_month],
                     obs_da=obs_da, init_month=init_month,
                     config=config, window_def=win_def,
                 )
@@ -283,3 +298,11 @@ def run_diagnostics(
                 warnings.warn(f"Window {win_name} init_month={init_month}: {exc}", stacklevel=2)
 
     return results
+def _baseline(field: xr.DataArray, config: DailyDriftConfig) -> xr.DataArray:
+    """Use the configured complete baseline window, otherwise the anchor day."""
+    if config.baseline_window is not None:
+        first, last = config.baseline_window
+        days = [int(day) for day in field.d.values if first <= int(day) <= last]
+        if days == list(range(first, last + 1)):
+            return field.sel(d=days).mean("d", skipna=True)
+    return field.sel(d=config.baseline_day, drop=True)

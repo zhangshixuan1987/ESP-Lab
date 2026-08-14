@@ -71,6 +71,7 @@ from .drift import (
     absolute_bias,
     adjustment,
     paired_difference,
+    paired_difference_by_start,
     # Skill diagnostics
     compute_skill,
     # Paired bootstrap
@@ -91,6 +92,30 @@ from .drift import (
     build_obs_regional,
     # Pipeline runner
     run_pipeline,
+)
+
+# Two-reference drift calculations (Y is retained throughout).
+from .two_reference_drift import (
+    REGIME_DEFINITIONS,
+    area_weighted_mean,
+    area_weighted_rmse,
+    bootstrap_paired_mean_ci,
+    build_attractor_lookup,
+    build_reference_lookup,
+    classify_drift_regime,
+    compare_drift_skill_relationship,
+    compare_initializations,
+    compute_diagnostics as compute_two_reference_diagnostics,
+    compute_distance_change,
+    compute_early_drift_late_error,
+    compute_ensemble_mean,
+    compute_initialization_adjustment,
+    compute_lead_window_mean,
+    compute_reference_departure,
+    compute_regime_fraction,
+    compute_prediction_skill,
+    compute_spatial_drift_summary,
+    run_pipeline as run_two_reference_pipeline,
 )
 
 __all__ = [
@@ -117,6 +142,7 @@ __all__ = [
     "absolute_bias",
     "adjustment",
     "paired_difference",
+    "paired_difference_by_start",
     "compute_skill",
     "bootstrap_paired_ci",
     "window_summary",
@@ -133,6 +159,27 @@ __all__ = [
     "cache_to_case_array",
     "build_obs_regional",
     "run_pipeline",
+    # Two-reference drift
+    "REGIME_DEFINITIONS",
+    "area_weighted_mean",
+    "area_weighted_rmse",
+    "bootstrap_paired_mean_ci",
+    "build_attractor_lookup",
+    "build_reference_lookup",
+    "classify_drift_regime",
+    "compare_drift_skill_relationship",
+    "compare_initializations",
+    "compute_two_reference_diagnostics",
+    "compute_distance_change",
+    "compute_early_drift_late_error",
+    "compute_ensemble_mean",
+    "compute_initialization_adjustment",
+    "compute_lead_window_mean",
+    "compute_reference_departure",
+    "compute_regime_fraction",
+    "compute_prediction_skill",
+    "compute_spatial_drift_summary",
+    "run_two_reference_pipeline",
     # IC analysis — core
     "COMPONENT_NAMES",
     "DEFAULT_COMPONENTS",
@@ -193,6 +240,8 @@ from .monthly_core import (
     spatial_bias,
     spatial_adjustment,
     spatial_paired_diff,
+    paired_effect_size,
+    paired_fdr_significance,
     window_average,
     # Bootstrap
     bootstrap_spatial_ci,
@@ -246,6 +295,8 @@ __all__ += [
     "spatial_bias",
     "spatial_adjustment",
     "spatial_paired_diff",
+    "paired_effect_size",
+    "paired_fdr_significance",
     "window_average",
     # Monthly core — bootstrap
     "bootstrap_spatial_ci",
@@ -281,6 +332,7 @@ from .daily_core import (
     DailyDriftConfig,
     DEFAULT_DAILY_EXPERIMENT_SPECS,
     DEFAULT_DAILY_WINDOW_DEFS,
+    RECOMMENDED_DAILY_WINDOW_DEFS,
     DailyInventoryStatus,
     DailyGateStatus,
     DailyLeadCoverageResult,
@@ -294,6 +346,7 @@ from .daily_core import (
     daily_spatial_bias,
     daily_spatial_adjustment,
     daily_spatial_paired_diff,
+    rapid_adjustment_metrics,
     daily_window_average,
     bootstrap_daily_spatial_ci,
     daily_significance_mask,
@@ -326,6 +379,7 @@ __all__ += [
     "DailyDriftConfig",
     "DEFAULT_DAILY_EXPERIMENT_SPECS",
     "DEFAULT_DAILY_WINDOW_DEFS",
+    "RECOMMENDED_DAILY_WINDOW_DEFS",
     "DailyInventoryStatus",
     "DailyGateStatus",
     "DailyLeadCoverageResult",
@@ -339,6 +393,7 @@ __all__ += [
     "daily_spatial_bias",
     "daily_spatial_adjustment",
     "daily_spatial_paired_diff",
+    "rapid_adjustment_metrics",
     "daily_window_average",
     "bootstrap_daily_spatial_ci",
     "daily_significance_mask",
@@ -443,4 +498,26 @@ __all__ += [
     "file_fingerprint",
     "load_diagnostic_store",
     "save_diagnostic_store",
+]
+
+# Shared 5a--5f product contract and IC-to-drift attribution
+from .products import (
+    PAIRED_SIGN_CONVENTION,
+    PRODUCT_COLUMNS,
+    PRODUCT_SCHEMA_VERSION,
+    combine_product_bundles,
+    read_product_bundle,
+    resolve_experiment_roles,
+    standardize_product_table,
+    validate_product_table,
+    write_product_bundle,
+)
+from .attribution_core import across_start_attribution, weighted_ic_alignment
+
+__all__ += [
+    "PAIRED_SIGN_CONVENTION", "PRODUCT_COLUMNS", "PRODUCT_SCHEMA_VERSION",
+    "combine_product_bundles", "read_product_bundle", "standardize_product_table",
+    "resolve_experiment_roles",
+    "validate_product_table", "write_product_bundle", "across_start_attribution",
+    "weighted_ic_alignment",
 ]

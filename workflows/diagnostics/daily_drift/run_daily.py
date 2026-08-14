@@ -26,12 +26,18 @@ from . import inventory as _inventory
 from . import plotting as _plotting
 from . import preprocess as _preprocess
 from esp_lab.diagnostics.store import (
+    config_fingerprint,
     diagnostic_store_is_valid,
     diagnostic_store_path,
     dataframe_fingerprint,
     file_fingerprint,
     load_diagnostic_store,
     save_diagnostic_store,
+)
+from esp_lab.diagnostics.products import (
+    PAIRED_SIGN_CONVENTION,
+    drift_results_to_product_table,
+    write_product_bundle,
 )
 
 
@@ -137,9 +143,48 @@ def run(
                     store_path, results, boot_results,
                     config=config, variable=var, workflow="daily_drift",
                     context=store_context,
+                    product_metadata={
+                        "sign_convention": PAIRED_SIGN_CONVENTION,
+                        "baseline": (
+                            f"days {config.baseline_window[0]}-{config.baseline_window[1]} mean"
+                            if config.baseline_window else f"day {config.baseline_day}"
+                        ),
+                        "observation_product": obs_path,
+                        "regridding_method": "linear interpolation to model grid",
+                    },
                 )
                 if verbose:
                     print(f"  Saved diagnostics: {store_path}")
+
+            var_spec = config.get_variable(var)
+            product_table = drift_results_to_product_table(
+                results, boot_results, workflow="5d_daily_spatial",
+                configuration_hash=config_fingerprint(
+                    config, variable=var, context=store_context
+                ),
+                variable=var, units=var_spec.plot_units, component="atm",
+                lead_units="day", baseline=(
+                    f"days {config.baseline_window[0]}-{config.baseline_window[1]} mean"
+                    if config.baseline_window else f"day {config.baseline_day}"
+                ),
+                window_defs=config.window_defs,
+                reference_product=obs_path,
+            )
+            write_product_bundle(
+                store_path, product_table, workflow="5d_daily_spatial",
+                configuration_hash=config_fingerprint(
+                    config, variable=var, context=store_context
+                ),
+                field_paths=sorted(store_path.glob("init_month_*.nc")),
+                metadata={
+                    "baseline_day": config.baseline_day,
+                    "baseline_window": config.baseline_window,
+                    "lead_numbering": "day 1 is first history day after initialization",
+                    "observation_product": obs_path,
+                    "regridding_method": "linear interpolation to model grid",
+                    "native_model_response_retained": True,
+                },
+            )
 
             summary_df = _plotting.run_plotting(
                 results=results,

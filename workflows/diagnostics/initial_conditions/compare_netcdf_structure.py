@@ -184,7 +184,9 @@ def run(
                     f"    [{comp}] common={len(diff.common_vars)} "
                     f"only_ref={len(diff.only_in_ref)} "
                     f"only_test={len(diff.only_in_test)} "
-                    f"dim_mismatch={len(diff.dim_mismatches)}"
+                    f"dim_mismatch={len(diff.dim_mismatches)} "
+                    f"grid/coord_mismatch={len(diff.coord_mismatches)} "
+                    f"unit/attr_mismatch={len(diff.variable_attr_mismatches)}"
                 )
 
         # Write per-date schema CSV
