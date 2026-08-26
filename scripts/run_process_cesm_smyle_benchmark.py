@@ -84,7 +84,7 @@ FIELDS_ALL = ["TREFHT", "TS", "PRECT", "PSL"]
 INIT_MONTHS_ALL = [2, 5, 8, 11]
 
 DATA_DIR_DEFAULT = "/global/cfs/cdirs/e3sm/S2S2D/CESM-SMYLE"
-OUTDIR_DEFAULT = smyle_access.BENCHMARK_OUTDIR_DEFAULT
+OUTDIR_DEFAULT = "/global/cfs/cdirs/e3sm/S2S2D/s2d_diag/CESM-SMYLE"
 FIGDIR_DEFAULT = "/global/cfs/cdirs/e3sm/www/zhan391/esp-lab_diag"
 
 YEAR_START_DEFAULT = 1980

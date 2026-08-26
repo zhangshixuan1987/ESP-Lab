@@ -79,7 +79,6 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from esp_lab.paths import CESM_SMYLE_DIAG_DIR
 
 
 # ---------------------------------------------------------------------------
@@ -830,9 +829,6 @@ def get_monthly_data(
 # Benchmark helpers
 # ---------------------------------------------------------------------------
 
-BENCHMARK_OUTDIR_DEFAULT = str(CESM_SMYLE_DIAG_DIR)
-
-
 def benchmark_filename(
     field: str,
     init_month: int,
@@ -867,7 +863,7 @@ def benchmark_filename(
 def load_benchmark(
     field: str,
     init_month: int,
-    benchmark_dir: str = BENCHMARK_OUTDIR_DEFAULT,
+    benchmark_dir: str | Path,
     nens: int = 20,
     nlead: int = 24,
     freq: str = "seas",
@@ -887,10 +883,9 @@ def load_benchmark(
         Variable name, e.g. 'TREFHT', 'TS', 'PRECT', 'PSL'.
     init_month : int
         Initialization month (2, 5, 8, or 11 for this archive).
-    benchmark_dir : str, optional
+    benchmark_dir : path-like
         CESM-SMYLE diagnostic directory or direct directory containing benchmark
         files.
-        Default: ``esp_lab.paths.CESM_SMYLE_DIAG_DIR``.
     nens : int, optional
         Number of ensemble members encoded in the filename (default 20).
     nlead : int, optional
@@ -914,7 +909,9 @@ def load_benchmark(
     Examples
     --------
     >>> from esp_lab import data_access_cesm_smyle as smyle
-    >>> ds = smyle.load_benchmark("TREFHT", init_month=5)
+    >>> ds = smyle.load_benchmark(
+    ...     "TREFHT", init_month=5, benchmark_dir="/path/to/CESM-SMYLE"
+    ... )
     >>> print(ds)
     """
     fname = benchmark_filename(field, init_month, nens=nens, nlead=nlead, freq=freq)

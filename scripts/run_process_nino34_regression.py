@@ -9,13 +9,12 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from esp_lab.paths import HADISST2_DIAG_DIR, S2D_DIAG_ROOT
-
-
 DEFAULT_SST_FILE = (
     "/global/cfs/cdirs/e3sm/e3sm_diags/obs_for_e3sm_diags/time-series/"
     "HadISST2/sst_186901_202212.nc"
 )
+S2D_DIAG_ROOT = Path("/global/cfs/cdirs/e3sm/S2S2D/s2d_diag")
+HADISST2_DIAG_DIR = S2D_DIAG_ROOT / "HadISST2"
 DEFAULT_DIAG_FILE = str(
     S2D_DIAG_ROOT
     / "JRA55_FOSIRL"

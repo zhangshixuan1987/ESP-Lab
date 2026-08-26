@@ -15,13 +15,22 @@ from esp_lab.diagnostics.store import (
     load_diagnostic_store,
     save_diagnostic_store,
 )
+from workflows.diagnostics.daily_drift.config import PATH_SETTINGS as DAILY_PATH_SETTINGS
 from workflows.diagnostics.daily_drift.config import build_daily_config
 from workflows.diagnostics.daily_drift.diagnostics import run_diagnostics as run_daily
 from workflows.diagnostics.monthly_drift.config import build_monthly_config
-from workflows.diagnostics.monthly_drift.config import DEFAULT_FIGURE_OUTDIR, DEFAULT_OUTPUT_ROOT
+from workflows.diagnostics.monthly_drift.config import (
+    DEFAULT_FIGURE_OUTDIR,
+    DEFAULT_OUTPUT_ROOT,
+    PATH_SETTINGS as MONTHLY_PATH_SETTINGS,
+)
 from workflows.diagnostics.monthly_drift.diagnostics import run_diagnostics as run_monthly
 from workflows.diagnostics.monthly_drift import plotting as monthly_plotting
-from workflows.diagnostics.physical_consistency.config import MEMBERS
+from workflows.diagnostics.physical_consistency.config import (
+    MEMBERS,
+    PATH_SETTINGS as PHYSICAL_PATH_SETTINGS,
+)
+from workflows.diagnostics.unified.config import PATH_SETTINGS as UNIFIED_PATH_SETTINGS
 from workflows.diagnostics.physical_consistency.run_physical import run as run_physical
 from workflows.diagnostics.unified.inventory import run_inventory
 from workflows.diagnostics.unified.run_unified import run as run_unified
@@ -83,6 +92,18 @@ def test_monthly_workflow_uses_fixed_diagnostic_and_figure_roots():
     assert DEFAULT_FIGURE_OUTDIR == Path(
         "/global/cfs/cdirs/e3sm/www/zhan391/esp-lab_diag"
     ) / "leadtime_drift" / "atm" / "monthly_spatial"
+
+
+def test_workflow_configs_declare_explicit_path_roots():
+    expected = {
+        "s2d_diag_root": Path("/global/cfs/cdirs/e3sm/S2S2D/s2d_diag"),
+        "figure_outdir": Path("/global/cfs/cdirs/e3sm/www/zhan391/esp-lab_diag"),
+    }
+
+    assert DAILY_PATH_SETTINGS == expected
+    assert MONTHLY_PATH_SETTINGS == expected
+    assert PHYSICAL_PATH_SETTINGS == expected
+    assert UNIFIED_PATH_SETTINGS == expected
 
 
 def test_land_acc_paths_follow_source_first_layout(tmp_path):

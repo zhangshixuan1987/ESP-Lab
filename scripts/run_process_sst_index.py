@@ -34,7 +34,6 @@ from esp_lab import data_access_e3sm as data_access
 from esp_lab import data_access_obs as obs_access
 from esp_lab import data_access_cesm_smyle as smyle_access
 from esp_lab import stats
-from esp_lab.paths import CESM_SMYLE_DIAG_DIR, E3SMLE_DIAG_DIR, HADISST2_DIAG_DIR
 from esp_lab.utils import spatial_utils as spatial
 from esp_lab.utils import calendar_utils as cal
 from esp_lab.utils.sst_utils import SST_PREPROCESSING_VERSION, prepare_sst
@@ -48,6 +47,10 @@ from esp_lab.diagnostics.regional import compute_weights, compute_regional_mean
 
 LOG = logging.getLogger(__name__)
 SST_INDEX_OUTPUT_VERSION = 2
+S2D_DIAG_ROOT = Path("/global/cfs/cdirs/e3sm/S2S2D/s2d_diag")
+E3SMLE_DIAG_DIR = S2D_DIAG_ROOT
+CESM_SMYLE_DIAG_DIR = S2D_DIAG_ROOT / "CESM-SMYLE"
+HADISST2_DIAG_DIR = S2D_DIAG_ROOT / "HadISST2"
 
 REGIONS = {}
 VALID_REGIONS = ["IOD", "TNI", "ONI", "RONI", "ELI"]

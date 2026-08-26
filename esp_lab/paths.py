@@ -1,36 +1,39 @@
-"""Shared filesystem paths for ESP-Lab diagnostics."""
+"""Shared filesystem paths for ESP-Lab diagnostics.
+
+Path-building helpers require an explicit root so machine-specific
+configuration stays at workflow and script entry points.
+"""
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 
-S2D_DIAG_ROOT = Path(
-    os.environ.get("ESP_LAB_S2D_DIAG_ROOT", "/global/cfs/cdirs/e3sm/S2S2D/s2d_diag")
-)
-FIGURE_OUTDIR = Path(
-    os.environ.get(
-        "ESP_LAB_FIGURE_OUTDIR",
-        "/global/cfs/cdirs/e3sm/www/zhan391/esp-lab_diag",
-    )
-)
+def normalize_root(root: str | Path, *, name: str = "root") -> Path:
+    """Return a usable root path and reject missing or blank configuration."""
+    if root is None:
+        raise ValueError(f"{name} must be explicitly configured")
+    if isinstance(root, str) and not root.strip():
+        raise ValueError(f"{name} must not be blank")
+    return Path(root).expanduser()
 
-E3SMLE_DIAG_DIR = S2D_DIAG_ROOT
-CESM_SMYLE_DIAG_DIR = S2D_DIAG_ROOT / "CESM-SMYLE"
-HADISST2_DIAG_DIR = S2D_DIAG_ROOT / "HadISST2"
-NMME_DIAG_DIR = S2D_DIAG_ROOT / "NMME"
-NMME_FIXED_DIR = NMME_DIAG_DIR / "fixed"
-# Modes-of-variability products are stored below
-# S2D_DIAG_ROOT / <source-or-case> / "modes_variability".
-MODES_VARIABILITY_DIAG_DIR = S2D_DIAG_ROOT
-MULTIMODEL_DIAG_DIR = S2D_DIAG_ROOT / "multimodel"
 
+def join_below(root: str | Path, *parts: str | Path) -> Path:
+    """Join relative components below ``root`` without allowing path escape."""
+    path = normalize_root(root)
+    for part in parts:
+        if isinstance(part, str) and not part.strip():
+            raise ValueError("Path components must not be blank")
+        component = Path(part)
+        if component.is_absolute() or ".." in component.parts:
+            raise ValueError(f"Unsafe path component: {str(part)!r}")
+        path = path / component
+    return path
 
 def leadtime_acc_dir(
     source: str,
-    *parts: str,
-    root: str | Path | None = None,
+    *parts: str | Path,
+    root: str | Path,
 ) -> Path:
     """Return a source-first lead-time ACC diagnostic directory.
 
@@ -38,31 +41,23 @@ def leadtime_acc_dir(
     ``<root>/<case>/leadtime_acc/skill/atm/TREFHT``. Passing ``root`` keeps
     notebook and command-line configurations explicit and machine portable.
     """
-    path = Path(root) if root is not None else S2D_DIAG_ROOT
-    path = path / str(source) / "leadtime_acc"
-    for part in parts:
-        path = path / str(part)
-    return path
+    return join_below(root, source, "leadtime_acc", *parts)
 
 
 def diagnostic_dir(
     source: str,
     diagnostic: str,
-    *parts: str,
-    root: str | Path | None = None,
+    *parts: str | Path,
+    root: str | Path,
 ) -> Path:
     """Return ``<root>/<source>/<diagnostic>/<parts...>``."""
-    path = Path(root) if root is not None else S2D_DIAG_ROOT
-    path = path / str(source) / str(diagnostic)
-    for part in parts:
-        path = path / str(part)
-    return path
+    return join_below(root, source, diagnostic, *parts)
 
 
 def multimodel_diagnostic_dir(
     diagnostic: str,
-    *parts: str,
-    root: str | Path | None = None,
+    *parts: str | Path,
+    root: str | Path,
 ) -> Path:
     """Return a canonical directory for cross-experiment diagnostics."""
     return diagnostic_dir("multimodel", diagnostic, *parts, root=root)
@@ -70,27 +65,16 @@ def multimodel_diagnostic_dir(
 
 def figure_output_dir(
     diagnostic: str,
-    *parts: str,
-    root: str | Path | None = None,
+    *parts: str | Path,
+    root: str | Path,
 ) -> Path:
     """Return a diagnostic-specific directory below the public figure root."""
-    path = Path(root) if root is not None else FIGURE_OUTDIR
-    path = path / str(diagnostic)
-    for part in parts:
-        path = path / str(part)
-    return path
+    return join_below(root, diagnostic, *parts)
 
 
 __all__ = [
-    "S2D_DIAG_ROOT",
-    "FIGURE_OUTDIR",
-    "E3SMLE_DIAG_DIR",
-    "CESM_SMYLE_DIAG_DIR",
-    "HADISST2_DIAG_DIR",
-    "NMME_DIAG_DIR",
-    "NMME_FIXED_DIR",
-    "MODES_VARIABILITY_DIAG_DIR",
-    "MULTIMODEL_DIAG_DIR",
+    "normalize_root",
+    "join_below",
     "leadtime_acc_dir",
     "diagnostic_dir",
     "multimodel_diagnostic_dir",

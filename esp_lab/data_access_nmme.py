@@ -31,7 +31,6 @@ from uuid import uuid4
 import numpy as np
 import xarray as xr
 
-from esp_lab.paths import NMME_FIXED_DIR
 
 _SPLIT_CLIMO_MODELS = {"COLA-RSMAS-CCSM4", "NCEP-CFSv2"}
 _SPLIT_PERIOD_1 = ("1982-01-01", "1998-12-01")
@@ -84,7 +83,7 @@ def _natural_earth_ocean_mask(
     )
 
 
-def nmme_land_mask_path(model: str, fixed_dir: str | Path = NMME_FIXED_DIR) -> Path:
+def nmme_land_mask_path(model: str, fixed_dir: str | Path) -> Path:
     """Return the fixed-field path for one model's NMME land mask."""
     safe_model = model.replace("/", "_")
     return Path(fixed_dir) / f"sftlf.NMME.{safe_model}.nc"
@@ -115,7 +114,7 @@ def load_or_create_nmme_land_mask(
     sst: xr.DataArray,
     *,
     model: str,
-    fixed_dir: str | Path = NMME_FIXED_DIR,
+    fixed_dir: str | Path,
     lon_name: str,
     lat_name: str,
 ) -> tuple[xr.DataArray, Path]:
@@ -297,7 +296,7 @@ def open_nmme_model(
     s_slice: Optional[Tuple[Any, Any]] = ("264", "684"),
     time_var: str = "S",
     apply_sst_land_mask: bool = True,
-    fixed_dir: str | Path = NMME_FIXED_DIR,
+    fixed_dir: str | Path | None = None,
 ) -> xr.Dataset:
     """
     Open one NMME model file and decode its time coordinate.
@@ -318,7 +317,8 @@ def open_nmme_model(
     apply_sst_land_mask : bool, optional
         Apply the Natural Earth land mask when ``field='sst'``, default True.
     fixed_dir : path-like, optional
-        Directory containing reusable per-model NMME land masks.
+        Directory containing reusable per-model NMME land masks. When omitted,
+        the Natural Earth mask is computed without writing a cache.
 
     Returns
     -------

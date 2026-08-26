@@ -25,12 +25,15 @@ from esp_lab.diagnostics.two_reference_drift import (
     match_observation_to_valid_time,
     validate_compatible_fields,
 )
-from esp_lab.paths import S2D_DIAG_ROOT
 from esp_lab.utils.calendar_utils import time_set_midmonth
 from esp_lab.utils import regrid_utils as regrid
 
 
 EXPECTED_MONTHLY_LEADS = np.arange(1, 25)
+PATH_SETTINGS = {
+    "s2d_diag_root": Path("/global/cfs/cdirs/e3sm/S2S2D/s2d_diag"),
+}
+S2D_DIAG_ROOT = PATH_SETTINGS["s2d_diag_root"]
 E3SMLE_ROOT = Path("/global/cfs/cdirs/e3sm/S2S2D/E3SMLE")
 E3SMLE_ENSMEAN_ROOT = E3SMLE_ROOT / "ensmean" / "post"
 E3SMLE_ENSSPREAD_ROOT = E3SMLE_ROOT / "ensspread" / "post"

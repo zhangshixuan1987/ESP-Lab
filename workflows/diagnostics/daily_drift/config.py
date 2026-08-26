@@ -39,11 +39,22 @@ from esp_lab.diagnostics.daily_core import (
 )
 from esp_lab.paths import figure_output_dir, multimodel_diagnostic_dir
 
+PATH_SETTINGS = {
+    "s2d_diag_root": Path("/global/cfs/cdirs/e3sm/S2S2D/s2d_diag"),
+    "figure_outdir": Path("/global/cfs/cdirs/e3sm/www/zhan391/esp-lab_diag"),
+}
+
 DEFAULT_OUTPUT_ROOT = multimodel_diagnostic_dir(
-    "leadtime_drift", "atm", "daily_spatial"
+    "leadtime_drift",
+    "atm",
+    "daily_spatial",
+    root=PATH_SETTINGS["s2d_diag_root"],
 )
 DEFAULT_FIGURE_OUTDIR = figure_output_dir(
-    "leadtime_drift", "atm", "daily_spatial"
+    "leadtime_drift",
+    "atm",
+    "daily_spatial",
+    root=PATH_SETTINGS["figure_outdir"],
 )
 
 DATA_DIR = os.environ.get(

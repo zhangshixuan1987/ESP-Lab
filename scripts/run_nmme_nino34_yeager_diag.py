@@ -30,11 +30,13 @@ from esp_lab.diagnostics import (
     DEFAULT_CLIMATOLOGY_END_YEAR,
     DEFAULT_CLIMATOLOGY_START_YEAR,
 )
-from esp_lab.paths import NMME_DIAG_DIR, NMME_FIXED_DIR
 from esp_lab.utils import calendar_utils as cal
 
 
 DEFAULT_NMME_ROOT = Path("/global/cfs/cdirs/e3sm/S2S2D/NMME/data_hindcast_by_member")
+S2D_DIAG_ROOT = Path("/global/cfs/cdirs/e3sm/S2S2D/s2d_diag")
+NMME_DIAG_DIR = S2D_DIAG_ROOT / "NMME"
+NMME_FIXED_DIR = NMME_DIAG_DIR / "fixed"
 DEFAULT_OUTDIR = NMME_DIAG_DIR
 YEAGER_F03_MODELS = [
     "CMC1-CanCM3",

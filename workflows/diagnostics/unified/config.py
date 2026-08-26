@@ -28,8 +28,17 @@ from esp_lab.diagnostics.daily_core import DEFAULT_DAILY_EXPERIMENT_SPECS, RECOM
 from esp_lab.diagnostics.monthly_core import DEFAULT_WINDOW_DEFS as DEFAULT_MONTHLY_WINDOW_DEFS
 from esp_lab.paths import figure_output_dir, multimodel_diagnostic_dir
 
-DEFAULT_OUTPUT_ROOT = multimodel_diagnostic_dir("unified_diagnostics")
-DEFAULT_FIGURE_OUTDIR = figure_output_dir("unified_diagnostics")
+PATH_SETTINGS = {
+    "s2d_diag_root": Path("/global/cfs/cdirs/e3sm/S2S2D/s2d_diag"),
+    "figure_outdir": Path("/global/cfs/cdirs/e3sm/www/zhan391/esp-lab_diag"),
+}
+
+DEFAULT_OUTPUT_ROOT = multimodel_diagnostic_dir(
+    "unified_diagnostics", root=PATH_SETTINGS["s2d_diag_root"]
+)
+DEFAULT_FIGURE_OUTDIR = figure_output_dir(
+    "unified_diagnostics", root=PATH_SETTINGS["figure_outdir"]
+)
 
 DATA_DIR = os.environ.get(
     "ESP_LAB_UNIFIED_DATA_DIR",

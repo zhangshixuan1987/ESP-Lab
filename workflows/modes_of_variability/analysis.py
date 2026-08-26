@@ -49,7 +49,6 @@ from esp_lab import data_access_e3sm as e3sm_access
 from esp_lab import data_access_nmme as nmme_access
 from esp_lab import data_access_obs as obs_access
 from esp_lab import stats
-from esp_lab.paths import CESM_SMYLE_DIAG_DIR, NMME_FIXED_DIR
 from esp_lab.utils import calendar_utils as cal
 from esp_lab.utils import regrid_utils as regrid
 from esp_lab.utils import sst_utils
@@ -57,6 +56,12 @@ from esp_lab.utils import sst_utils
 
 LOG = logging.getLogger(__name__)
 _NUMPY_SVD = np.linalg.svd
+PATH_SETTINGS = {
+    "s2d_diag_root": Path("/global/cfs/cdirs/e3sm/S2S2D/s2d_diag"),
+}
+S2D_DIAG_ROOT = PATH_SETTINGS["s2d_diag_root"]
+CESM_SMYLE_DIAG_DIR = S2D_DIAG_ROOT / "CESM-SMYLE"
+NMME_FIXED_DIR = S2D_DIAG_ROOT / "NMME" / "fixed"
 
 
 def _svd_with_gesvd_fallback(

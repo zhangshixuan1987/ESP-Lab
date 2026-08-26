@@ -16,6 +16,7 @@ from collections.abc import Mapping, Sequence
 
 import numpy as np
 import xarray as xr
+from scipy.stats import rankdata, spearmanr
 
 
 REGIME_DEFINITIONS = {
@@ -664,6 +665,294 @@ def compute_early_drift_late_error(
     return xr.Dataset({"early_drift": early, "late_error": late, "correlation": correlation})
 
 
+def compute_early_error_growth_late_error(
+    forecast_error: xr.DataArray,
+    *,
+    early_leads: Sequence[int] = (1, 2, 3),
+    late_leads: Sequence[int] = (7, 8, 9),
+    lead_dim: str = "L",
+) -> xr.Dataset:
+    """Return baseline error, early error-growth slope, and later RMS error.
+
+    The growth metric is the ordinary least-squares slope of absolute forecast
+    error against lead over ``early_leads``.  Unlike a mean change relative to
+    the first lead, it does not include a structurally zero baseline term.
+    """
+    requested = [int(lead) for lead in early_leads]
+    if len(requested) < 2 or len(set(requested)) < 2:
+        raise ValueError("early_leads must contain at least two distinct leads")
+    if lead_dim not in forecast_error.dims:
+        raise ValueError(f"Forecast error must contain lead dimension {lead_dim!r}")
+    missing = sorted(set(requested) - set(forecast_error[lead_dim].values.tolist()))
+    if missing:
+        raise ValueError(f"Forecast error is missing early leads {missing}")
+
+    absolute_error = abs(forecast_error.sel({lead_dim: requested}))
+    lead = xr.DataArray(
+        np.asarray(requested, dtype=float),
+        dims=(lead_dim,),
+        coords={lead_dim: requested},
+    )
+    valid = absolute_error.notnull()
+    lead_mean = lead.where(valid).mean(lead_dim, skipna=True)
+    error_mean = absolute_error.mean(lead_dim, skipna=True)
+    numerator = (
+        (lead - lead_mean) * (absolute_error - error_mean)
+    ).sum(lead_dim, skipna=True)
+    denominator = ((lead - lead_mean) ** 2).where(valid).sum(lead_dim, skipna=True)
+    count = valid.sum(lead_dim)
+    growth = (numerator / denominator.where(denominator > 0)).where(count >= 2)
+    growth = growth.rename("early_error_growth")
+    growth.attrs.update(forecast_error.attrs)
+    growth.attrs.update(
+        diagnostic="OLS slope of absolute observation error against lead",
+        early_leads=",".join(str(lead_value) for lead_value in requested),
+    )
+
+    baseline = absolute_error.sel({lead_dim: requested[0]}, drop=True).rename(
+        "baseline_error"
+    )
+    baseline.attrs.update(forecast_error.attrs)
+    baseline.attrs.update(
+        diagnostic="absolute observation error at the first early lead",
+        baseline_lead=requested[0],
+    )
+    late_mse = compute_lead_window_mean(forecast_error**2, late_leads, lead_dim=lead_dim)
+    late = np.sqrt(late_mse).rename("late_error")
+    late.attrs.update(forecast_error.attrs)
+    late.attrs["diagnostic"] = "start-specific RMS error over later lead window"
+    baseline, growth, late = xr.align(baseline, growth, late, join="inner", copy=False)
+    return xr.Dataset(
+        {
+            "baseline_error": baseline,
+            "early_error_growth": growth,
+            "late_error": late,
+        }
+    )
+
+
+def _circular_block_indices(
+    rng: np.random.Generator, n_samples: int, block_length: int
+) -> np.ndarray:
+    """Draw one circular moving-block bootstrap sample."""
+    starts = rng.integers(0, n_samples, size=int(np.ceil(n_samples / block_length)))
+    offsets = np.arange(block_length)
+    return ((starts[:, None] + offsets[None, :]) % n_samples).reshape(-1)[:n_samples]
+
+
+def _standardized_conditional_slope(
+    predictor: np.ndarray, baseline: np.ndarray, outcome: np.ndarray
+) -> float:
+    values = np.column_stack((predictor, baseline, outcome)).astype(float, copy=False)
+    scales = values.std(axis=0, ddof=1)
+    if values.shape[0] < 4 or np.any(~np.isfinite(scales)) or np.any(scales == 0):
+        return np.nan
+    standardized = (values - values.mean(axis=0)) / scales
+    design = np.column_stack((np.ones(values.shape[0]), standardized[:, :2]))
+    if np.linalg.matrix_rank(design) < design.shape[1]:
+        return np.nan
+    coefficients = np.linalg.lstsq(design, standardized[:, 2], rcond=None)[0]
+    return float(coefficients[1])
+
+
+def _row_correlation(first: np.ndarray, second: np.ndarray) -> np.ndarray:
+    """Return Pearson correlations between corresponding matrix rows."""
+    first_anomaly = first - first.mean(axis=1, keepdims=True)
+    second_anomaly = second - second.mean(axis=1, keepdims=True)
+    denominator = np.sqrt(
+        np.sum(first_anomaly**2, axis=1) * np.sum(second_anomaly**2, axis=1)
+    )
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.sum(first_anomaly * second_anomaly, axis=1) / denominator
+
+
+def _row_standardized_conditional_slope(
+    predictor: np.ndarray, baseline: np.ndarray, outcome: np.ndarray
+) -> np.ndarray:
+    """Return standardized partial-regression slopes for matrix rows."""
+    predictor_outcome = _row_correlation(predictor, outcome)
+    predictor_baseline = _row_correlation(predictor, baseline)
+    baseline_outcome = _row_correlation(baseline, outcome)
+    denominator = 1.0 - predictor_baseline**2
+    with np.errstate(divide="ignore", invalid="ignore"):
+        slopes = (
+            predictor_outcome - predictor_baseline * baseline_outcome
+        ) / denominator
+    slopes[np.isclose(denominator, 0.0)] = np.nan
+    return slopes
+
+
+def _leave_one_out_r2(
+    predictor: np.ndarray, baseline: np.ndarray, outcome: np.ndarray
+) -> float:
+    predictions = np.full(outcome.shape, np.nan, dtype=float)
+    for held_out in range(outcome.size):
+        training = np.arange(outcome.size) != held_out
+        design = np.column_stack(
+            (np.ones(training.sum()), predictor[training], baseline[training])
+        )
+        if np.linalg.matrix_rank(design) < design.shape[1]:
+            continue
+        coefficients = np.linalg.lstsq(design, outcome[training], rcond=None)[0]
+        predictions[held_out] = np.dot(
+            [1.0, predictor[held_out], baseline[held_out]], coefficients
+        )
+    valid = np.isfinite(predictions)
+    if valid.sum() < 2:
+        return np.nan
+    denominator = np.sum((outcome[valid] - outcome[valid].mean()) ** 2)
+    if denominator == 0:
+        return np.nan
+    return float(1.0 - np.sum((outcome[valid] - predictions[valid]) ** 2) / denominator)
+
+
+def characterize_conditional_relationship(
+    predictor: xr.DataArray,
+    baseline: xr.DataArray,
+    outcome: xr.DataArray,
+    *,
+    start_dim: str = "Y",
+    log_baseline: bool = True,
+    log_outcome: bool = True,
+    n_bootstrap: int = 2000,
+    confidence: float = 0.95,
+    block_length: int = 4,
+    seed: int = 42,
+) -> xr.Dataset:
+    """Characterize an association after controlling for baseline magnitude.
+
+    The primary estimate is the standardized coefficient of ``predictor`` in
+    a two-predictor OLS model containing ``baseline``.  Percentile confidence
+    intervals use a circular moving-block bootstrap over ordered starts.
+    Spearman correlation is included as an outlier-resistant unadjusted
+    sensitivity statistic, and predictive value is measured by leave-one-out
+    cross-validated R-squared.
+    """
+    predictor, baseline, outcome = xr.align(
+        predictor, baseline, outcome, join="exact", copy=False
+    )
+    for name, field in (
+        ("predictor", predictor), ("baseline", baseline), ("outcome", outcome)
+    ):
+        if field.dims != (start_dim,):
+            raise ValueError(f"{name} must have only dimension {start_dim!r}; got {field.dims}")
+    if n_bootstrap < 1:
+        raise ValueError("n_bootstrap must be positive")
+    if not 0.0 < confidence < 1.0:
+        raise ValueError("confidence must lie between zero and one")
+    if block_length < 1:
+        raise ValueError("block_length must be positive")
+
+    x = np.asarray(predictor.values, dtype=float)
+    z = np.asarray(baseline.values, dtype=float)
+    y = np.asarray(outcome.values, dtype=float)
+    valid = np.isfinite(x) & np.isfinite(z) & np.isfinite(y)
+    if log_baseline:
+        valid &= z > 0
+    if log_outcome:
+        valid &= y > 0
+    x, z, y = x[valid], z[valid], y[valid]
+    if log_baseline:
+        z = np.log(z)
+    if log_outcome:
+        y = np.log(y)
+    if x.size < 4:
+        raise ValueError("Conditional relationship requires at least four valid starts")
+    block_length = min(int(block_length), x.size)
+
+    slope = _standardized_conditional_slope(x, z, y)
+    rho = float(spearmanr(x, y).statistic)
+    cv_r2 = _leave_one_out_r2(x, z, y)
+    rng = np.random.default_rng(seed)
+    indices = np.stack(
+        [
+            _circular_block_indices(rng, x.size, block_length)
+            for _ in range(n_bootstrap)
+        ]
+    )
+    sampled_x, sampled_z, sampled_y = x[indices], z[indices], y[indices]
+    bootstrap_slopes = _row_standardized_conditional_slope(
+        sampled_x, sampled_z, sampled_y
+    )
+    bootstrap_rhos = _row_correlation(
+        rankdata(sampled_x, axis=1), rankdata(sampled_y, axis=1)
+    )
+    alpha = (1.0 - confidence) / 2.0
+    quantiles = (alpha, 1.0 - alpha)
+    slope_ci = np.nanquantile(bootstrap_slopes, quantiles)
+    rho_ci = np.nanquantile(bootstrap_rhos, quantiles)
+    result = xr.Dataset(
+        {
+            "standardized_slope": xr.DataArray(slope),
+            "standardized_slope_ci_lower": xr.DataArray(slope_ci[0]),
+            "standardized_slope_ci_upper": xr.DataArray(slope_ci[1]),
+            "spearman_correlation": xr.DataArray(rho),
+            "spearman_ci_lower": xr.DataArray(rho_ci[0]),
+            "spearman_ci_upper": xr.DataArray(rho_ci[1]),
+            "cross_validated_r2": xr.DataArray(cv_r2),
+            "n_starts": xr.DataArray(x.size),
+        }
+    )
+    result.attrs.update(
+        model="standardized outcome ~ standardized predictor + standardized baseline",
+        outcome_transform="log" if log_outcome else "none",
+        baseline_transform="log" if log_baseline else "none",
+        uncertainty="circular moving-block bootstrap over ordered initialization years",
+        block_length=block_length,
+        n_bootstrap=int(n_bootstrap),
+        confidence=float(confidence),
+        random_seed=int(seed),
+    )
+    return result
+
+
+def bootstrap_block_mean_ci(
+    values: xr.DataArray,
+    *,
+    start_dim: str = "Y",
+    n_bootstrap: int = 2000,
+    confidence: float = 0.95,
+    block_length: int = 4,
+    seed: int = 42,
+) -> xr.Dataset:
+    """Return a circular moving-block bootstrap interval for a one-dimensional mean."""
+    if values.dims != (start_dim,):
+        raise ValueError(f"values must have only dimension {start_dim!r}; got {values.dims}")
+    finite = np.asarray(values.values, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if finite.size < 2:
+        raise ValueError("Block-bootstrap mean requires at least two valid starts")
+    if n_bootstrap < 1 or block_length < 1:
+        raise ValueError("n_bootstrap and block_length must be positive")
+    if not 0.0 < confidence < 1.0:
+        raise ValueError("confidence must lie between zero and one")
+    block_length = min(int(block_length), finite.size)
+    rng = np.random.default_rng(seed)
+    estimates = np.asarray(
+        [
+            finite[_circular_block_indices(rng, finite.size, block_length)].mean()
+            for _ in range(n_bootstrap)
+        ]
+    )
+    alpha = (1.0 - confidence) / 2.0
+    lower, upper = np.quantile(estimates, (alpha, 1.0 - alpha))
+    result = xr.Dataset(
+        {
+            "estimate": xr.DataArray(finite.mean()),
+            "ci_lower": xr.DataArray(lower),
+            "ci_upper": xr.DataArray(upper),
+        }
+    )
+    result.attrs.update(
+        uncertainty="circular moving-block bootstrap over ordered initialization years",
+        block_length=block_length,
+        n_bootstrap=int(n_bootstrap),
+        confidence=float(confidence),
+        random_seed=int(seed),
+    )
+    return result
+
+
 def compare_drift_skill_relationship(
     fosirl: xr.Dataset, reanalysis: xr.Dataset, *, start_dim: str = "Y"
 ) -> xr.Dataset:
@@ -674,20 +963,85 @@ def compare_drift_skill_relationship(
     delta_drift = compare_initializations(
         fosirl["early_drift"], reanalysis["early_drift"]
     ).rename("delta_drift")
-    delta_skill = compare_initializations(
+    delta_error = compare_initializations(
         fosirl["late_error"], reanalysis["late_error"]
-    ).rename("delta_skill")
-    delta_drift, delta_skill = xr.align(delta_drift, delta_skill, join="exact")
-    correlation = xr.corr(delta_drift, delta_skill, dim=start_dim).rename(
+    ).rename("delta_error")
+    delta_drift, delta_error = xr.align(delta_drift, delta_error, join="exact")
+    correlation = xr.corr(delta_drift, delta_error, dim=start_dim).rename(
         "paired_drift_skill_correlation"
     )
     correlation.attrs = {
         "units": "1",
         "diagnostic": "Pearson correlation of paired experiment differences across starts",
     }
+    valid = delta_drift.notnull() & delta_error.notnull()
+    concordance = (
+        ((delta_drift * delta_error) > 0).where(valid).mean(start_dim, skipna=True)
+    ).rename("concordance_fraction")
+    concordance.attrs = {
+        "units": "1",
+        "diagnostic": (
+            "fraction of starts for which paired early-drift and later-error "
+            "differences have the same sign"
+        ),
+        "tie_handling": "zero differences are counted as non-concordant",
+    }
     return xr.Dataset(
-        {"delta_drift": delta_drift, "delta_skill": delta_skill, "correlation": correlation}
+        {
+            "delta_drift": delta_drift,
+            "delta_error": delta_error,
+            "correlation": correlation,
+            "concordance_fraction": concordance,
+        }
     )
+
+
+def bootstrap_paired_correlation_ci(
+    first: xr.DataArray,
+    second: xr.DataArray,
+    *,
+    start_dim: str = "Y",
+    n_bootstrap: int = 2000,
+    confidence: float = 0.95,
+    seed: int = 42,
+) -> xr.Dataset:
+    """Bootstrap a paired Pearson correlation by resampling starts together."""
+    first, second = xr.align(first, second, join="exact", copy=False)
+    if start_dim not in first.dims or start_dim not in second.dims:
+        raise ValueError(f"Both inputs must contain {start_dim!r}")
+    n_starts = first.sizes[start_dim]
+    if n_starts < 3:
+        raise ValueError("Paired correlation bootstrap requires at least three starts")
+    if n_bootstrap < 1:
+        raise ValueError("n_bootstrap must be positive")
+    if not 0.0 < confidence < 1.0:
+        raise ValueError("confidence must lie between zero and one")
+
+    rng = np.random.default_rng(seed)
+    indices = xr.DataArray(
+        rng.integers(0, n_starts, size=(n_bootstrap, n_starts)),
+        dims=("bootstrap", "sample"),
+    )
+    sampled_first = first.isel({start_dim: indices})
+    sampled_second = second.isel({start_dim: indices})
+    sampled = xr.corr(sampled_first, sampled_second, dim="sample")
+    alpha = (1.0 - confidence) / 2.0
+    estimate = xr.corr(first, second, dim=start_dim).rename("estimate")
+    lower = sampled.quantile(alpha, dim="bootstrap", skipna=True).drop_vars(
+        "quantile"
+    ).rename("ci_lower")
+    upper = sampled.quantile(1.0 - alpha, dim="bootstrap", skipna=True).drop_vars(
+        "quantile"
+    ).rename("ci_upper")
+    result = xr.Dataset({"estimate": estimate, "ci_lower": lower, "ci_upper": upper})
+    result.attrs.update(
+        bootstrap_dimension=start_dim,
+        n_bootstrap=int(n_bootstrap),
+        confidence=float(confidence),
+        random_seed=int(seed),
+        resampling="paired initialization years with replacement",
+    )
+    return result
 
 
 def bootstrap_paired_mean_ci(
@@ -792,17 +1146,21 @@ __all__ = [
     "REGIME_DEFINITIONS",
     "area_weighted_mean",
     "area_weighted_rmse",
+    "bootstrap_block_mean_ci",
     "build_attractor_lookup",
+    "bootstrap_paired_correlation_ci",
     "bootstrap_paired_mean_ci",
     "build_obs_lookup",
     "build_reference_lookup",
     "classify_drift_regime",
+    "characterize_conditional_relationship",
     "compare_initializations",
     "compare_drift_skill_relationship",
     "compute_diagnostics",
     "compute_distance_change",
     "compute_ensemble_mean",
     "compute_early_drift_late_error",
+    "compute_early_error_growth_late_error",
     "compute_initialization_adjustment",
     "compute_lead_window_mean",
     "compute_reference_departure",

@@ -8,6 +8,10 @@ import numpy as np
 import matplotlib.path as mpath
 import matplotlib.ticker as mticker
 
+# Backward compatibility for existing MOV notebooks. New code should import
+# these generic helpers directly from esp_lab.utils.filename_utils.
+from .filename_utils import figure_filename, safe_token
+
 try:
     import cartopy.crs as ccrs
     import cartopy.feature as cfeature
@@ -602,22 +606,6 @@ def configure_gridlines(
         gridliner.yformatter = LATITUDE_FORMATTER
 
     return gridliner
-
-# -----------------------------------------------------------------------------
-# General notebook/workflow helpers
-# -----------------------------------------------------------------------------
-def safe_token(value):
-    """Return a filesystem-safe token for figure/file names."""
-    import re
-
-    return re.sub(r"[^A-Za-z0-9]+", "_", str(value)).strip("_").lower()
-
-
-def figure_filename(*parts, ext="png"):
-    """Build a consistent figure filename from descriptive tokens."""
-    clean = ["fig"] + [safe_token(part) for part in parts if str(part).strip()]
-    return "_".join(clean) + f".{ext.lstrip('.').lower()}"
-
 
 def save_figure(fig, figpath, *, mode, metric, title="", caption="", dpi=150, **extra):
     """Save a figure and upsert its entry in the figures.json manifest.

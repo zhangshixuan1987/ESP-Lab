@@ -9,8 +9,11 @@ import xarray as xr
 
 from esp_lab.diagnostics.two_reference_drift import (
     area_weighted_rmse,
+    bootstrap_block_mean_ci,
+    bootstrap_paired_correlation_ci,
     bootstrap_paired_mean_ci,
     classify_drift_regime,
+    characterize_conditional_relationship,
     compare_initializations,
     compute_diagnostics,
     compute_lead_window_mean,
@@ -21,6 +24,7 @@ from esp_lab.diagnostics.two_reference_drift import (
     regional_subset,
     build_attractor_lookup,
     compute_early_drift_late_error,
+    compute_early_error_growth_late_error,
     compare_drift_skill_relationship,
     run_pipeline,
 )
@@ -266,7 +270,70 @@ def test_regional_regime_frequency_and_start_specific_drift_skill():
     assert metrics.early_drift.dims == ("Y",)
     assert float(metrics.correlation) == pytest.approx(-1.0)
     paired = compare_drift_skill_relationship(metrics * 2, metrics)
-    assert set(paired.data_vars) == {"delta_drift", "delta_skill", "correlation"}
+    assert set(paired.data_vars) == {
+        "delta_drift", "delta_error", "correlation", "concordance_fraction"
+    }
+    assert float(paired.correlation) == pytest.approx(-1.0)
+    assert float(paired.concordance_fraction) == pytest.approx(0.0)
+
+    interval = bootstrap_paired_correlation_ci(
+        xr.DataArray([1.0, 2.0, 3.0, 4.0], dims="Y"),
+        xr.DataArray([2.0, 4.0, 6.0, 8.0], dims="Y"),
+        n_bootstrap=100,
+    )
+    assert set(interval.data_vars) == {"estimate", "ci_lower", "ci_upper"}
+    assert float(interval.estimate) == pytest.approx(1.0)
+    assert float(interval.ci_lower) == pytest.approx(1.0)
+    assert float(interval.ci_upper) == pytest.approx(1.0)
+
+
+def test_error_growth_and_conditional_relationship_statistics():
+    error = xr.DataArray(
+        [[1.0, 2.0, 3.0, 4.0, 4.0], [2.0, 2.0, 2.0, 3.0, 3.0]],
+        dims=("Y", "L"),
+        coords={"Y": [2000, 2001], "L": [1, 2, 3, 4, 5]},
+    )
+    metrics = compute_early_error_growth_late_error(
+        error, early_leads=[1, 2, 3], late_leads=[4, 5]
+    )
+    np.testing.assert_allclose(metrics.baseline_error, [1.0, 2.0])
+    np.testing.assert_allclose(metrics.early_error_growth, [1.0, 0.0])
+    np.testing.assert_allclose(metrics.late_error, [4.0, 3.0])
+
+    years = np.arange(2000, 2008)
+    predictor = xr.DataArray(
+        [-2.0, -1.5, -1.0, -0.5, 0.5, 1.0, 1.5, 2.0],
+        dims="Y", coords={"Y": years},
+    )
+    baseline = xr.DataArray(
+        [1.0, 1.4, 1.1, 1.6, 1.2, 1.8, 1.3, 2.0],
+        dims="Y", coords={"Y": years},
+    )
+    outcome = np.exp(2.0 + 0.4 * predictor + 0.1 * np.log(baseline))
+    relationship = characterize_conditional_relationship(
+        predictor, baseline, outcome, n_bootstrap=100, block_length=2, seed=7
+    )
+    assert set(relationship.data_vars) == {
+        "standardized_slope",
+        "standardized_slope_ci_lower",
+        "standardized_slope_ci_upper",
+        "spearman_correlation",
+        "spearman_ci_lower",
+        "spearman_ci_upper",
+        "cross_validated_r2",
+        "n_starts",
+    }
+    assert float(relationship.standardized_slope) > 0
+    assert float(relationship.standardized_slope_ci_lower) > 0
+    assert float(relationship.cross_validated_r2) == pytest.approx(1.0)
+    assert int(relationship.n_starts) == 8
+
+    mean_interval = bootstrap_block_mean_ci(
+        xr.DataArray([1.0, 2.0, 3.0, 4.0], dims="Y"),
+        n_bootstrap=100, block_length=1, seed=7,
+    )
+    assert float(mean_interval.estimate) == pytest.approx(2.5)
+    assert float(mean_interval.ci_lower) < 2.5 < float(mean_interval.ci_upper)
 
 
 def test_prepared_reference_loader_inspects_schema_and_validates_hindcast(tmp_path):

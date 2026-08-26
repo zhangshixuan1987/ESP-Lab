@@ -21,7 +21,7 @@ import numpy as np
 import xarray as xr
 
 from esp_lab import data_access_e3sm, land_skill, stats
-from esp_lab.paths import S2D_DIAG_ROOT, leadtime_acc_dir
+from esp_lab.paths import leadtime_acc_dir
 from esp_lab.utils import mapplot_utils as maps
 from esp_lab.utils import mov_utils as mov
 
@@ -31,6 +31,7 @@ SOURCE_FIELD = "H2OSNO"
 REFERENCE_PRODUCT = "C3S_SWE"
 GRID_TAG = "1x1deg_cell_centered"
 EVALUATION_PROTOCOL = "monthly_delta_swe_init1980-2018_clim1981-2010_v1"
+S2D_DIAG_ROOT = Path("/global/cfs/cdirs/e3sm/S2S2D/s2d_diag")
 
 RUN = {
     "years": (1980, 2018),

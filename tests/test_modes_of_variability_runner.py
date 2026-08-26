@@ -7,7 +7,6 @@ import numpy as np
 import xarray as xr
 import cftime
 
-from esp_lab.paths import NMME_DIAG_DIR, NMME_FIXED_DIR
 from workflows.modes_of_variability import analysis as modes_analysis
 from scripts.run_process_modes_of_variability import (
     add_skill_lead_subset,
@@ -191,7 +190,9 @@ def test_nmme_products_use_canonical_uppercase_directory(tmp_path):
 
 
 def test_nmme_fixed_fields_live_under_canonical_nmme_directory():
-    assert NMME_FIXED_DIR == NMME_DIAG_DIR / "fixed"
+    assert modes_analysis.NMME_FIXED_DIR == (
+        modes_analysis.S2D_DIAG_ROOT / "NMME" / "fixed"
+    )
 
 
 def test_nmme_fields_are_materialized_one_model_at_a_time(monkeypatch):

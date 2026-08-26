@@ -53,11 +53,22 @@ DATA_DIR = os.environ.get(
 )
 
 # Durable diagnostic products and public figures live outside the checkout.
+PATH_SETTINGS = {
+    "s2d_diag_root": Path("/global/cfs/cdirs/e3sm/S2S2D/s2d_diag"),
+    "figure_outdir": Path("/global/cfs/cdirs/e3sm/www/zhan391/esp-lab_diag"),
+}
+
 DEFAULT_OUTPUT_ROOT = multimodel_diagnostic_dir(
-    "leadtime_drift", "atm", "monthly_spatial"
+    "leadtime_drift",
+    "atm",
+    "monthly_spatial",
+    root=PATH_SETTINGS["s2d_diag_root"],
 )
 DEFAULT_FIGURE_OUTDIR = figure_output_dir(
-    "leadtime_drift", "atm", "monthly_spatial"
+    "leadtime_drift",
+    "atm",
+    "monthly_spatial",
+    root=PATH_SETTINGS["figure_outdir"],
 )
 
 INIT_YEARS:  List[int] = list(range(1980, 1987))   # 1980–1986
