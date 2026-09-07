@@ -357,6 +357,7 @@ def test_prepared_reference_loader_inspects_schema_and_validates_hindcast(tmp_pa
         "Reanalysis", 5, "TREFHT", path=path, hindcast=values
     ) as loaded:
         assert set(loaded.data_vars) == {"X_obs", "X_att"}
+        assert loaded.X_obs.attrs["units"] == loaded.X_att.attrs["units"] == "degC"
         np.testing.assert_array_equal(loaded.valid_time, valid_time)
 
     with pytest.raises(ValueError, match="lacks the required.*sigma_att"):
