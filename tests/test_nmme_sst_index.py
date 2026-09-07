@@ -7,8 +7,8 @@ import xarray as xr
 from esp_lab import data_access_nmme as nmme_access
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "run_nmme_nino34_yeager_diag.py"
-SPEC = importlib.util.spec_from_file_location("run_nmme_nino34_yeager_diag", SCRIPT)
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "run_process_nmme_sst_index.py"
+SPEC = importlib.util.spec_from_file_location("run_process_nmme_sst_index", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(MODULE)

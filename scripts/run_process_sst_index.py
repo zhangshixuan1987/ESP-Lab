@@ -20,11 +20,8 @@ import sys
 import time
 import warnings
 from pathlib import Path
-from typing import Dict, Any, List
 import numpy as np
 import xarray as xr
-import cftime
-import pandas as pd
 import dask
 
 # Insert repo root to sys.path
@@ -44,6 +41,17 @@ from esp_lab.diagnostics import (
     S2DConfig,
 )
 from esp_lab.diagnostics.regional import compute_weights, compute_regional_mean
+from esp_lab.diagnostics.sst_index import (
+    REGIONS,
+    VALID_REGIONS,
+    compute_eli_latlon_sst,
+    compute_model_anom,
+    compute_model_std,
+    compute_obs_anom,
+    compute_obs_std,
+    derive_indices,
+    required_base_regions,
+)
 
 LOG = logging.getLogger(__name__)
 SST_INDEX_OUTPUT_VERSION = 2
@@ -51,15 +59,6 @@ S2D_DIAG_ROOT = Path("/global/cfs/cdirs/e3sm/S2S2D/s2d_diag")
 E3SMLE_DIAG_DIR = S2D_DIAG_ROOT
 CESM_SMYLE_DIAG_DIR = S2D_DIAG_ROOT / "CESM-SMYLE"
 HADISST2_DIAG_DIR = S2D_DIAG_ROOT / "HadISST2"
-
-REGIONS = {}
-VALID_REGIONS = ["IOD", "TNI", "ONI", "RONI", "ELI"]
-ELI_LAT_MIN = -5.0
-ELI_LAT_MAX = 5.0
-ELI_LON_MIN = 120.0
-ELI_LON_MAX = 290.0
-TC_LAT_HALF = 5.0
-
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
@@ -245,250 +244,8 @@ def _smyle_output_paths(root: str | Path) -> tuple[Path, Path]:
     )
 
 
-def get_required_base_regions(regions_list: List[str]) -> List[str]:
-    req = set()
-    for r in regions_list:
-        if r in ["Nino12", "Nino3", "Nino3.4", "Nino4", "TNA", "TSA", "PACWRAMPOOL", "AtlNino", "AtlMDR"]:
-            req.add(r)
-        elif r == "IOD":
-            req.add("IOD_West")
-            req.add("IOD_East")
-        elif r == "TNI":
-            req.add("Nino12")
-            req.add("Nino4")
-        elif r == "ONI":
-            req.add("Nino3.4")
-        elif r == "RONI":
-            req.add("Nino3.4")
-            req.add("TropicalMean")
-        elif r == "ELI":
-            continue
-        elif r in REGIONS:
-            req.add(r)
-    return list(req)
-
-
-def _latlon_mask(lat_coord: xr.DataArray, lon_coord: xr.DataArray, lat_min: float, lat_max: float, lon_min: float, lon_max: float) -> xr.DataArray:
-    lat_dim = lat_coord.dims[0]
-    lon_dim = lon_coord.dims[0]
-    lat_da = xr.DataArray(lat_coord.values, dims=(lat_dim,), coords={lat_dim: lat_coord.values})
-    lon_da = xr.DataArray(np.mod(lon_coord.values, 360.0), dims=(lon_dim,), coords={lon_dim: lon_coord.values})
-    lon2d, lat2d = xr.broadcast(lon_da, lat_da)
-    mask = (lat2d >= lat_min) & (lat2d <= lat_max) & (lon2d >= lon_min) & (lon2d <= lon_max)
-    return mask.transpose(lat_dim, lon_dim)
-
-
-def _lon2d(lat_coord: xr.DataArray, lon_coord: xr.DataArray) -> xr.DataArray:
-    lat_dim = lat_coord.dims[0]
-    lon_dim = lon_coord.dims[0]
-    lon_da = xr.DataArray(np.mod(lon_coord.values, 360.0), dims=(lon_dim,), coords={lon_dim: lon_coord.values})
-    lon2d, _ = xr.broadcast(lon_da, lat_coord)
-    return lon2d.transpose(lat_dim, lon_dim)
-
-
-def compute_eli_latlon_sst(
-    sst: xr.DataArray,
-    *,
-    lat_name: str = "lat",
-    lon_name: str = "lon",
-    oceanmask: xr.DataArray | None = None,
-) -> xr.DataArray:
-    """Compute ELI from a regridded lat/lon SST field."""
-    lat_coord = sst[lat_name]
-    lon_coord = sst[lon_name]
-    lat_dim = lat_coord.dims[0]
-    lon_dim = lon_coord.dims[0]
-
-    eq_mask = _latlon_mask(lat_coord, lon_coord, ELI_LAT_MIN, ELI_LAT_MAX, ELI_LON_MIN, ELI_LON_MAX)
-    tropics_mask = _latlon_mask(lat_coord, lon_coord, -TC_LAT_HALF, TC_LAT_HALF, 0.0, 360.0)
-    if oceanmask is not None:
-        oceanmask = oceanmask.transpose(lat_dim, lon_dim)
-        eq_mask = eq_mask & oceanmask
-        tropics_mask = tropics_mask & oceanmask
-
-    weights = xr.DataArray(
-        np.cos(np.deg2rad(lat_coord.values)),
-        dims=(lat_dim,),
-        coords={lat_dim: lat_coord.values},
-    )
-    weights2d, _ = xr.broadcast(weights, sst[lon_name])
-    weights2d = weights2d.transpose(lat_dim, lon_dim)
-    lon2d = _lon2d(lat_coord, lon_coord)
-
-    tropics_weights = weights2d.where(tropics_mask, 0.0)
-    tc = sst.weighted(tropics_weights).mean((lat_dim, lon_dim), skipna=True)
-
-    warm_weights = weights2d.where(eq_mask & (sst > tc), 0.0)
-    den = warm_weights.sum((lat_dim, lon_dim), skipna=True)
-    num = (warm_weights * lon2d).sum((lat_dim, lon_dim), skipna=True)
-    eli = (num / den).astype("float32").where(den > 0).rename("eli")
-    eli.attrs.update(
-        {
-            "long_name": "Equatorial Longitude Index",
-            "units": "degrees_east",
-            "region": "ELI",
-            "description": (
-                "Area-weighted centroid longitude of warm SST cells "
-                "(SST > tropical-mean SST) in the equatorial Pacific "
-                f"(lat {ELI_LAT_MIN}-{ELI_LAT_MAX} deg, lon {ELI_LON_MIN}-{ELI_LON_MAX} deg)."
-            ),
-            "eli_input_grid": "regridded_latlon",
-            "eli_lat_min": ELI_LAT_MIN,
-            "eli_lat_max": ELI_LAT_MAX,
-            "eli_lon_min": ELI_LON_MIN,
-            "eli_lon_max": ELI_LON_MAX,
-            "tc_lat_half": TC_LAT_HALF,
-        }
-    )
-    return eli
-
-
-def compute_model_anom(da: xr.DataArray, da_time: xr.DataArray, climy0: int, climy1: int) -> xr.DataArray:
-    da_anom, _ = stats.remove_drift(da, da_time, climy0, climy1)
-    return da_anom
-
-
-def compute_model_std(da_anom: xr.DataArray, da_time: xr.DataArray, climy0: int, climy1: int) -> xr.DataArray:
-    d1 = cftime.DatetimeNoLeap(climy0, 1, 1, 0, 0, 0)
-    d2 = cftime.DatetimeNoLeap(climy1, 12, 31, 23, 59, 59)
-    da_anom_clim = da_anom.where((da_time >= d1) & (da_time <= d2))
-    dims_to_reduce = [dim for dim in ["Y", "M"] if dim in da_anom.dims]
-    sigma = da_anom_clim.std(dim=dims_to_reduce)
-    sigma = sigma.where(sigma > 0, 1.0)
-    return da_anom / sigma
-
-
-def compute_obs_anom(da: xr.DataArray, climy0: int, climy1: int) -> xr.DataArray:
-    d1 = cftime.DatetimeNoLeap(climy0, 1, 1, 0, 0, 0)
-    d2 = cftime.DatetimeNoLeap(climy1, 12, 31, 23, 59, 59)
-    da_clim_period = da.sel(time=slice(d1, d2))
-    climo = da_clim_period.groupby("time.month").mean("time")
-    anom = da.groupby("time.month") - climo
-    return anom
-
-
-def compute_obs_std(da_anom: xr.DataArray, climy0: int, climy1: int) -> xr.DataArray:
-    d1 = cftime.DatetimeNoLeap(climy0, 1, 1, 0, 0, 0)
-    d2 = cftime.DatetimeNoLeap(climy1, 12, 31, 23, 59, 59)
-    da_anom_clim = da_anom.sel(time=slice(d1, d2))
-    sigma = da_anom_clim.std("time")
-    sigma = sigma.where(sigma > 0, 1.0)
-    return da_anom / sigma
-
-
-def derive_indices(computed_vals: Dict[str, xr.DataArray], time_coords: xr.DataArray, climy0: int, climy1: int, is_model: bool = True) -> Dict[str, xr.DataArray]:
-    """Derive SST indices without filling structurally missing input periods.
-
-    The initialized seasonal products retain an eighth lead for a 24-month
-    forecast, but that centered season is missing because its final month is
-    outside the forecast.  The relaxed rolling windows used by ONI, TNI, and
-    RONI must not turn that structural NaN into an apparently valid value.
-    """
-    derived = {}
-    
-    if is_model:
-        def get_anom(da):
-            return compute_model_anom(da, time_coords, climy0, climy1)
-        def get_std(da_anom):
-            return compute_model_std(da_anom, time_coords, climy0, climy1)
-        rolling_dim = "L"
-        time_var = time_coords
-    else:
-        def get_anom(da):
-            return compute_obs_anom(da, climy0, climy1)
-        def get_std(da_anom):
-            return compute_obs_std(da_anom, climy0, climy1)
-        rolling_dim = "time"
-        time_var = time_coords
-        
-    # 1. DMI = anomaly(IOD_West) - anomaly(IOD_East)
-    #
-    # Compute the two anomalies explicitly so the saved standalone IOD product
-    # has the conventional DMI meaning.  Although removing the climatology
-    # after taking the west-minus-east difference is algebraically equivalent,
-    # saving the absolute SST difference here made the file easy to misuse.
-    if "IOD_West" in computed_vals and "IOD_East" in computed_vals:
-        iod_west_anom = get_anom(computed_vals["IOD_West"])
-        iod_east_anom = get_anom(computed_vals["IOD_East"])
-        derived["IOD"] = iod_west_anom - iod_east_anom
-        derived["IOD"].attrs.update({
-            "long_name": "Dipole Mode Index (IOD West SST anomaly minus IOD East SST anomaly)",
-            "region": "IOD",
-            "units": "degC",
-            "index_name": "DMI",
-            "definition": "anomaly(IOD_West SST) - anomaly(IOD_East SST)",
-            "climatology_start_year": climy0,
-            "climatology_end_year": climy1,
-        })
-        
-    # 2. ONI = 3-month running mean of Nino3.4 anomalies
-    if "Nino3.4" in computed_vals:
-        nino34_anom = get_anom(computed_vals["Nino3.4"])
-        oni = nino34_anom.rolling({rolling_dim: 3}, center=True, min_periods=1).mean()
-        oni = oni.where(nino34_anom.notnull())
-        oni.attrs.update({
-            "long_name": "Oceanic Nino Index (3-month running mean of Nino3.4 anomalies)",
-            "region": "Nino3.4",
-            "units": "degC",
-        })
-        derived["ONI"] = oni
-        
-    # 3. TNI = standardized Nino 1+2 minus standardized Nino 4 with 5-month running mean
-    if "Nino12" in computed_vals and "Nino4" in computed_vals:
-        nino12_anom = get_anom(computed_vals["Nino12"])
-        nino4_anom = get_anom(computed_vals["Nino4"])
-        
-        nino12_std = get_std(nino12_anom)
-        nino4_std = get_std(nino4_anom)
-        
-        diff = nino12_std - nino4_std
-        tni = diff.rolling({rolling_dim: 5}, center=True, min_periods=1).mean()
-        tni = tni.where(nino12_anom.notnull() & nino4_anom.notnull())
-        tni.attrs.update({
-            "long_name": "Trans-Niño Index (standardized Nino12 minus standardized Nino4 with 5-month running mean)",
-            "region": "TNI",
-            "units": "1",
-        })
-        derived["TNI"] = tni
-        
-    # 4. RONI = 3-month running mean of (Nino3.4 anomalies minus TropicalMean anomalies), scaled to match Nino3.4 variance
-    if "Nino3.4" in computed_vals and "TropicalMean" in computed_vals:
-        nino34_anom = get_anom(computed_vals["Nino3.4"])
-        trop_anom = get_anom(computed_vals["TropicalMean"])
-        
-        diff = nino34_anom - trop_anom
-        diff_3m = diff.rolling({rolling_dim: 3}, center=True, min_periods=1).mean()
-        nino34_3m = nino34_anom.rolling({rolling_dim: 3}, center=True, min_periods=1).mean()
-        valid_roni_input = nino34_anom.notnull() & trop_anom.notnull()
-        diff_3m = diff_3m.where(valid_roni_input)
-        nino34_3m = nino34_3m.where(nino34_anom.notnull())
-        
-        d1 = cftime.DatetimeNoLeap(climy0, 1, 1, 0, 0, 0)
-        d2 = cftime.DatetimeNoLeap(climy1, 12, 31, 23, 59, 59)
-        
-        if is_model:
-            nino_clim = nino34_3m.where((time_var >= d1) & (time_var <= d2))
-            diff_clim = diff_3m.where((time_var >= d1) & (time_var <= d2))
-            dims_to_reduce = [dim for dim in ["Y", "M"] if dim in nino_clim.dims]
-            std_nino = nino_clim.std(dim=dims_to_reduce)
-            std_diff = diff_clim.std(dim=dims_to_reduce)
-        else:
-            nino_clim = nino34_3m.sel(time=slice(d1, d2))
-            diff_clim = diff_3m.sel(time=slice(d1, d2))
-            std_nino = nino_clim.std("time")
-            std_diff = diff_clim.std("time")
-            
-        ratio = std_nino / std_diff
-        ratio = ratio.fillna(1.0).where(std_diff > 0, 1.0)
-        roni = (diff_3m * ratio).where(valid_roni_input)
-        roni.attrs.update({
-            "long_name": "Relative Oceanic Nino Index",
-            "region": "RONI",
-            "units": "degC",
-        })
-        derived["RONI"] = roni
-        
-    return derived
+def get_required_base_regions(regions_list):
+    return required_base_regions(regions_list, REGIONS)
 
 
 def process_e3sm(args: argparse.Namespace) -> None:

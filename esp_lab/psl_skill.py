@@ -181,6 +181,39 @@ def retain_complete_seasonal_leads(
     )
 
 
+def subset_hindcast_initialization_years(
+    data: xr.DataArray,
+    valid_time: xr.DataArray,
+    year0: int,
+    year1: int,
+) -> tuple[xr.DataArray, xr.DataArray]:
+    """Select a complete, inclusive initialization-year cohort.
+
+    The cohort is derived from the first verification lead.  Selection is
+    applied through the shared ``Y`` coordinate so later-lead verification
+    dates remain unchanged.
+    """
+    if year1 < year0:
+        raise ValueError(f"year1 ({year1}) must be greater than or equal to year0 ({year0})")
+    if "Y" not in data.dims or "Y" not in valid_time.dims:
+        raise ValueError(f"Expected a Y dimension; data={data.dims}, time={valid_time.dims}")
+    if not data["Y"].identical(valid_time["Y"]):
+        raise ValueError("data and valid_time must have identical Y coordinates")
+
+    first_lead_time = valid_time.isel(L=0) if "L" in valid_time.dims else valid_time
+    init_year = first_lead_time.dt.year
+    mask = np.asarray((init_year >= year0) & (init_year <= year1), dtype=bool)
+    selected_y = np.asarray(valid_time["Y"].values)[mask]
+    expected_years = np.arange(year0, year1 + 1)
+    selected_years = np.asarray(init_year.values)[mask].astype(int)
+    if not np.array_equal(selected_years, expected_years):
+        raise ValueError(
+            f"Expected every initialization year from {year0} through {year1}; "
+            f"found {selected_years.tolist()}."
+        )
+    return data.sel(Y=selected_y), valid_time.sel(Y=selected_y)
+
+
 def psl_reference(
     index_name: str,
     external_dir: str | Path | None = None,

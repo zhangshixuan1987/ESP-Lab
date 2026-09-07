@@ -75,6 +75,46 @@ def test_retain_complete_seasonal_leads_rejects_mismatched_coordinates():
         psl_skill.retain_complete_seasonal_leads(data, valid_time)
 
 
+def test_subset_hindcast_initialization_years_preserves_later_valid_times():
+    years = np.arange(1999, 2004)
+    valid_time = xr.DataArray(
+        [
+            [
+                cftime.DatetimeNoLeap(int(year), 11, 15),
+                cftime.DatetimeNoLeap(int(year + 1), 2, 15),
+            ]
+            for year in years
+        ],
+        dims=("Y", "L"),
+        coords={"Y": years, "L": [1, 4]},
+    )
+    data = xr.DataArray(
+        np.arange(10).reshape(5, 2),
+        dims=("Y", "L"),
+        coords=valid_time.coords,
+    )
+
+    selected, selected_time = psl_skill.subset_hindcast_initialization_years(
+        data, valid_time, 2000, 2002
+    )
+
+    assert selected.Y.values.tolist() == [2000, 2001, 2002]
+    assert selected_time.isel(Y=-1, L=-1).item() == cftime.DatetimeNoLeap(2003, 2, 15)
+
+
+def test_subset_hindcast_initialization_years_rejects_incomplete_cohort():
+    years = [2000, 2002]
+    valid_time = xr.DataArray(
+        [cftime.DatetimeNoLeap(year, 5, 15) for year in years],
+        dims="Y",
+        coords={"Y": years},
+    )
+    data = xr.DataArray([1.0, 2.0], dims="Y", coords={"Y": years})
+
+    with pytest.raises(ValueError, match="Expected every initialization year"):
+        psl_skill.subset_hindcast_initialization_years(data, valid_time, 2000, 2002)
+
+
 def test_observation_agreement_removes_local_monthly_climatology():
     time = [
         cftime.DatetimeNoLeap(year, month, 15)
