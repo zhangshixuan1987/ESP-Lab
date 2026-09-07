@@ -749,6 +749,8 @@ def load_drift_references(
             if spread_name != "sigma_att":
                 rename_map[spread_name] = "sigma_att"
         result = raw[selected_names].rename(rename_map)
+        for source_name, canonical_name in rename_map.items():
+            result[canonical_name].attrs.update(raw[source_name].attrs)
         if "valid_time" in raw.coords:
             result = result.assign_coords(valid_time=raw["valid_time"])
         elif "time" in raw and tuple(raw["time"].dims) == ("Y", "L"):
