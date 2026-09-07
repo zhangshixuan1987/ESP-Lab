@@ -27,7 +27,9 @@ def test_ncl_five_annual_samples_and_offset_invariance():
     np.testing.assert_allclose(result.observation_std, np.std(np.arange(5), ddof=1))
     np.testing.assert_allclose(result.model_index[0], np.arange(5) * 2 + 15)
     assert (result.paired_sample_count == 5).all()
-    np.testing.assert_allclose(compute_initial_shock_index(model + 100, obs.assign_attrs(units='degC')) .std_ratio, 2)
+    np.testing.assert_allclose(
+        compute_initial_shock_index((model + 100).assign_attrs(units="degC"), obs).std_ratio, 2
+    )
 
 
 def test_ensemble_mean_precedes_std():

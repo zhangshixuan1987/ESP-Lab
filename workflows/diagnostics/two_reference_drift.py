@@ -781,6 +781,7 @@ def load_drift_references(
                 hindcast_field.mean("M", skipna=True) if "M" in hindcast_field.dims
                 else hindcast_field
             )
+            hindcast_mean = hindcast_mean.assign_attrs(hindcast_field.attrs)
             validate_compatible_fields(hindcast_mean, result.X_obs, result.X_att)
             hindcast_time = None
             if isinstance(hindcast, xr.Dataset) and "time" in hindcast:
