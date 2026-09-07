@@ -24,7 +24,6 @@ caption: Contribute to esp-lab
 hidden:
 ---
 
-index.rst
 changelog.md
 GitHub Repo <https://github.com/CESM-ESPWG/ESP-Lab>
 GitHub discussions <https://github.com/CESM-ESPWG/ESP-Lab/discussions>

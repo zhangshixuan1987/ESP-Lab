@@ -5,6 +5,10 @@ on:
     - cron: '0 0 * * *' # Daily “At 00:00” UTC
   workflow_dispatch: # allows you to trigger the workflow run manually
 
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   upstream-dev:
     name: upstream-dev
@@ -29,7 +33,7 @@ jobs:
           environment-file: ci/upstream-dev-environment.yml
           mamba-version: '*'
           use-mamba: true
-          miniforge-variant: Mambaforge
+          miniforge-variant: Miniforge3
 
       - name: Install esp-lab
         id: install

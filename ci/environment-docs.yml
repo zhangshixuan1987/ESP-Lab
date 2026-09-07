@@ -3,17 +3,31 @@ channels:
   - conda-forge
   - nodefaults
 dependencies:
+  - cartopy
+  - cf-units
+  - cf_xarray
   - cftime
+  - dask
+  - dask-jobqueue
+  - distributed
+  - eofs
+  - esmpy
   - furo
   - jupyterlab
+  - matplotlib
   - myst-nb
+  - netcdf4
   - numpy
+  - pandas
   - pip
-  - python=3.10
+  - python>=3.10
+  - regionmask
+  - scipy
   - sphinx-autobuild
   - sphinx-copybutton
   - sphinx-inline-tabs
-  - xarray
+  - xarray>=2023.1
+  - xesmf
   - xskillscore
   - pip:
       - sphinxext-opengraph

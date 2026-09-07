@@ -7,8 +7,9 @@ include pyproject.toml
 
 recursive-include docs/source *
 include docs/Makefile docs/make.bat
-recursive-include esp-lab *.yaml
-recursive-include esp-lab *.py
+recursive-include esp_lab *.yaml
+recursive-include esp_lab *.py
+recursive-include workflows *.yaml
 recursive-exclude * __pycache__
 recursive-exclude * *.py[co]
 prune tests*

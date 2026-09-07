@@ -3,8 +3,27 @@ channels:
   - conda-forge
   - nodefaults
 dependencies:
+  - cartopy
+  - cf-units
+  - cf_xarray
   - cftime
-  - pytest-cov
+  - dask
+  - dask-jobqueue
+  - distributed
+  - eofs
+  - esmpy
+  - matplotlib
+  - netcdf4
+  - numpy
+  - pandas
+  - pip
+  - pcmdi_metrics
   - pre-commit
-  - xarray
-  - xskillscore
+  - pytest
+  - pytest-cov
+  - python>=3.10
+  - regionmask
+  - scipy
+  - xarray>=2023.1
+  - xesmf
+  - xskillscore>=0.0.24

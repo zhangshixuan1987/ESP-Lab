@@ -30,6 +30,45 @@ import cftime
 import xskillscore as xs
 
 
+def _year_from_climatology_bound(bound):
+    """Return a year integer from int, string, datetime64, or cftime bounds."""
+    if hasattr(bound, "year"):
+        return int(bound.year)
+    if isinstance(bound, (int, np.integer)):
+        return int(bound)
+    if isinstance(bound, np.datetime64):
+        return int(np.datetime_as_string(bound, unit="Y"))
+    return int(str(bound)[:4])
+
+
+def _climatology_mean_by_year(da, time_name, climy0, climy1):
+    """Compute a climatology mean using calendar-agnostic year bounds."""
+    y0 = _year_from_climatology_bound(climy0)
+    y1 = _year_from_climatology_bound(climy1)
+    years = da[time_name].dt.year
+    return da.where((years >= y0) & (years <= y1), drop=True).mean(time_name)
+
+
+def _deduplicate_index(da, dim):
+    """Collapse duplicate coordinate labels along dim before xarray alignment."""
+    if dim not in da.dims or dim not in da.coords:
+        return da
+    index = da.get_index(dim)
+    if index.is_unique:
+        return da
+    return da.groupby(dim).mean(dim)
+
+
+def _single_chunk_core_dim(da, dim):
+    """Ensure Dask-backed xarray objects have one chunk along a core dim."""
+    if dim not in da.dims or da.chunks is None:
+        return da
+    axis = da.get_axis_num(dim)
+    if len(da.chunks[axis]) <= 1:
+        return da
+    return da.chunk({dim: -1})
+
+
 def cor_ci_bootyears(ts1, ts2, seed=None, nboots=1000, conf=95):
     """
     Determine confidence intervals for correlation scores.
@@ -158,6 +197,8 @@ def leadtime_skill_seas(mod_da, mod_time, obs_da, detrend=False):
         obs_ts = obs_da.sel(season=seasons[ens_time_month]).rename({'year': 'time'})
         ens_ts = ens_ts.assign_coords(time=("time", ens_time_year))
         a, b = xr.align(ens_ts, obs_ts)
+        a = _single_chunk_core_dim(a, 'time')
+        b = _single_chunk_core_dim(b, 'time')
         # perform linear detrending if detrend is set to True
         if detrend:
             a = detrend_linear(a, 'time')
@@ -250,6 +291,8 @@ def leadtime_skill_seas_resamp(mod_da, mod_time, obs_da, sampsize, N, detrend=Fa
             obs_ts = obs_da.sel(season=seasons[ens_time_month]).rename({'year': 'time'})
             ens_ts = ens_ts.assign_coords(time=("time", ens_time_year))
             a, b = xr.align(ens_ts, obs_ts)
+            a = _single_chunk_core_dim(a, 'time')
+            b = _single_chunk_core_dim(b, 'time')
             # perform linear detrending if detrend is set to True
             if detrend:
                 a = detrend_linear(a, 'time')
@@ -314,8 +357,8 @@ def remove_drift(da, da_time, y1, y2):
     d1 = cftime.DatetimeNoLeap(y1, 1, 1, 0, 0, 0)
     d2 = cftime.DatetimeNoLeap(y2, 12, 31, 23, 59, 59)
 
-    # mask data array outside of selected time
-    masked_period = da.where((da_time > d1) & (da_time < d2))
+    # mask data array outside of selected time (INCLUSIVE of endpoints)
+    masked_period = da.where((da_time >= d1) & (da_time <= d2))
     
     # compute lead-time dependent climatology
     if ('M' in masked_period.dims):
@@ -372,6 +415,8 @@ def compute_skill_annual(mod_da,mod_time,obs_da,nleadavg=1,nleads=1,resamp=0,det
         ens_time_year = mod_time.isel(L=leadisel).mean('L')
         ens_ts = ens_ts.assign_coords(time=("time",ens_time_year.data))
         a,b = xr.align(ens_ts,obs_ts)
+        a = _single_chunk_core_dim(a,'time')
+        b = _single_chunk_core_dim(b,'time')
         b = b - b.mean('time')
         if detrend:
                 a = detrend_linear(a,'time')
@@ -408,7 +453,20 @@ def compute_skill_annual(mod_da,mod_time,obs_da,nleadavg=1,nleads=1,resamp=0,det
     s2t  = xr.concat(s2t_list,lvalsda)
     return xr.Dataset({'corr':corr,'pval':pval,'rmse':rmse,'msss':msss,'rpc':rpc,'sig_obs':sigo,'sig_sig':sigs,'sig_tot':sigt,'s2t':s2t})
 
-def compute_skill_seasonal(mod_da,mod_time,obs_da,climy0,climy1,nleadavg=1,nleads=1,resamp=0,detrend=False,monthly=False):
+def compute_skill_seasonal(
+    mod_da,
+    mod_time,
+    obs_da,
+    climy0=None,
+    climy1=None,
+    nleadavg=1,
+    nleads=1,
+    resamp=0,
+    detrend=False,
+    monthly=False,
+    is_anomaly=False,
+    target_years_by_lead=None,
+):
     """
     Computes a suite of deterministic skill metrics given two DataArrays
     corresponding to model and observations, which must share the same
@@ -423,10 +481,10 @@ def compute_skill_seasonal(mod_da,mod_time,obs_da,climy0,climy1,nleadavg=1,nlead
         a hindcast time DataArray dimensioned (Y,L). Assumes mod_time.dt.month & mod_time.dt.year exist.
     obs_da: DataArray
         a monthly or seasonally-averaged OBS DataArray dimensioned (time,...)
-    climy0: int
-        start year of climatology for computing anomalies
-    climy1: int
-        end year of climatology for computing anomalies    
+    climy0: int (optional)
+        start year of climatology for computing anomalies. Required if is_anomaly=False.
+    climy1: int (optional)
+        end year of climatology for computing anomalies. Required if is_anomaly=False.
     nleadavg : int (optional)
         sets temporal smoothing (e.g., nleadavg=3 to verify 3-year average fields).
     nleads : int (optional)
@@ -439,6 +497,13 @@ def compute_skill_seasonal(mod_da,mod_time,obs_da,climy0,climy1,nleadavg=1,nlead
     monthly : bool (optional)
         set to True if mod_da and obs_da are monthly means (skill will be computed for each lead month
         instead of each lead season)
+    is_anomaly : bool (optional)
+        If True, assumes obs_da is already anomaly data and skips climo removal. Default False.
+    target_years_by_lead : mapping, optional
+        Explicit target-year cohort for each lead coordinate. When supplied,
+        model and observation samples are restricted to these years after
+        time alignment. This supports fair multi-model comparisons using an
+        identical valid cohort separately for every initialization and lead.
 
     Returns
     -------
@@ -447,6 +512,8 @@ def compute_skill_seasonal(mod_da,mod_time,obs_da,climy0,climy1,nleadavg=1,nlead
     """
     corr_list = []; pval_list = []; rmse_list = []; msss_list = []; rpc_list = []
     sigobs_list = []; sigsig_list = []; sigtot_list = []; s2t_list = []
+    sample_count_list = []; valid_sample_count_list = []
+    target_start_list = []; target_end_list = []
     
     # convert L to leadtime values:
     if (monthly):
@@ -460,17 +527,46 @@ def compute_skill_seasonal(mod_da,mod_time,obs_da,climy0,climy1,nleadavg=1,nlead
         ens_time_year = mod_time.isel(L=leadisel).mean('L').dt.year
         ens_time_month = mod_time.isel(L=leadisel).mean('L').dt.month.data[0]
         ens_ts = ens_ts.assign_coords(time=("time",ens_time_year.data))
+        ens_ts = _deduplicate_index(ens_ts, 'time')
         obsisel = obs_da.time.dt.month==ens_time_month
         obs_seas = obs_da.isel(time=obsisel)
-        obs_seas = obs_seas - obs_seas.sel(time=slice(climy0,climy1)).mean('time')
+        if not is_anomaly:
+            if climy0 is None or climy1 is None:
+                raise ValueError("climy0 and climy1 must be provided if is_anomaly=False")
+            obs_seas = obs_seas - _climatology_mean_by_year(obs_seas, 'time', climy0, climy1)
         obs_seas = obs_seas.assign_coords(time=("time",obs_seas.time.dt.year.data))
+        obs_seas = _deduplicate_index(obs_seas, 'time')
         if (nleadavg>1):
             obs_seas = obs_seas.rolling(time=nleadavg,min_periods=nleadavg, center=True).mean().dropna('time',how='all')
         a,b = xr.align(ens_ts,obs_seas)
+        lead_value = int(lvalsda.values[i])
+        if target_years_by_lead is not None:
+            requested_years = np.asarray(
+                target_years_by_lead.get(lead_value, []), dtype=int
+            )
+            available_years = np.intersect1d(a.time.values, b.time.values)
+            selected_years = np.intersect1d(available_years, requested_years)
+            a = a.sel(time=selected_years)
+            b = b.sel(time=selected_years)
+        else:
+            selected_years = np.asarray(a.time.values, dtype=int)
+        if selected_years.size < 3:
+            raise ValueError(
+                f"Lead {lead_value} has only {selected_years.size} common "
+                "target-year samples; at least three are required."
+            )
+        a = _single_chunk_core_dim(a,'time')
+        b = _single_chunk_core_dim(b,'time')
         if detrend:
                 a = detrend_linear(a,'time')
                 b = detrend_linear(b,'time')
         amean = a.mean('M')
+        # The scalar sample_count records the requested global target-year
+        # cohort. Keep the paired count at every grid cell as well so local
+        # missing data are visible in the cached result.
+        valid_sample_count_list.append(
+            (amean.notnull() & b.notnull()).sum('time').astype('int16')
+        )
         sigobs = b.std('time')
         sigsig = amean.std('time')
         if (resamp>0):
@@ -491,6 +587,9 @@ def compute_skill_seasonal(mod_da,mod_time,obs_da,climy0,climy1,nleadavg=1,nlead
         sigsig_list.append(sigsig)
         sigtot_list.append(sigtot)
         s2t_list.append(sigsig/sigtot)
+        sample_count_list.append(int(selected_years.size))
+        target_start_list.append(int(selected_years.min()))
+        target_end_list.append(int(selected_years.max()))
     corr = xr.concat(corr_list,lvalsda)
     pval = xr.concat(pval_list,lvalsda)
     rmse = xr.concat(rmse_list,lvalsda)
@@ -500,7 +599,320 @@ def compute_skill_seasonal(mod_da,mod_time,obs_da,climy0,climy1,nleadavg=1,nlead
     sigs = xr.concat(sigsig_list,lvalsda)
     sigt = xr.concat(sigtot_list,lvalsda)
     s2t  = xr.concat(s2t_list,lvalsda)
-    return xr.Dataset({'corr':corr,'pval':pval,'rmse':rmse,'msss':msss,'rpc':rpc,'sig_obs':sigo,'sig_sig':sigs,'sig_tot':sigt,'s2t':s2t})
+    valid_n = xr.concat(valid_sample_count_list,lvalsda)
+    return xr.Dataset({
+        'corr':corr,
+        'pval':pval,
+        'rmse':rmse,
+        'msss':msss,
+        'rpc':rpc,
+        'sig_obs':sigo,
+        'sig_sig':sigs,
+        'sig_tot':sigt,
+        's2t':s2t,
+        'sample_count': xr.DataArray(sample_count_list, dims='L', coords={'L': lvalsda}),
+        'valid_sample_count': valid_n,
+        'target_year_start': xr.DataArray(target_start_list, dims='L', coords={'L': lvalsda}),
+        'target_year_end': xr.DataArray(target_end_list, dims='L', coords={'L': lvalsda}),
+    })
+
+
+def common_valid_target_years_seasonal(
+    model_indices,
+    model_times,
+    obs_da,
+    leads,
+    *,
+    require_all_members=False,
+):
+    """Return identical valid target-year cohorts for several hindcasts.
+
+    The intersection is computed independently for each lead. A model year is
+    valid when its verification time is defined and its ensemble index has
+    finite data. By default at least one member must be present; with
+    ``require_all_members=True`` every member must contain some finite spatial
+    data. The matching observed month/year must also contain a finite value.
+    """
+    if set(model_indices) != set(model_times):
+        raise ValueError("model_indices and model_times must have identical keys.")
+    if not model_indices:
+        raise ValueError("At least one model is required for sample intersection.")
+
+    obs_year = np.asarray(obs_da.time.dt.year.values, dtype=int)
+    obs_month = np.asarray(obs_da.time.dt.month.values, dtype=int)
+    obs_finite = obs_da.notnull()
+    for dim in tuple(dim for dim in obs_finite.dims if dim != "time"):
+        obs_finite = obs_finite.any(dim)
+    obs_finite = np.asarray(obs_finite.values, dtype=bool)
+
+    result = {}
+    for lead in map(int, leads):
+        target_months = set()
+        common_years = None
+        for model in model_indices:
+            index = model_indices[model].sel(L=lead)
+            valid_time = model_times[model].sel(L=lead)
+            years = np.asarray(valid_time.dt.year.values, dtype=int)
+            months = np.asarray(valid_time.dt.month.values, dtype=int)
+            target_months.update(np.unique(months).tolist())
+
+            finite = index.notnull()
+            spatial_dims = tuple(
+                dim for dim in finite.dims if dim not in ("Y", "M")
+            )
+            if spatial_dims:
+                finite = finite.any(spatial_dims)
+            if "M" in finite.dims:
+                finite = (
+                    finite.all("M")
+                    if require_all_members
+                    else finite.any("M")
+                )
+            model_years = set(years[np.asarray(finite.values, dtype=bool)].tolist())
+            common_years = (
+                model_years if common_years is None else common_years & model_years
+            )
+
+        if len(target_months) != 1:
+            raise ValueError(
+                f"Lead {lead} has inconsistent target months across models: "
+                f"{sorted(target_months)}"
+            )
+        target_month = target_months.pop()
+        observed_years = set(
+            obs_year[(obs_month == target_month) & obs_finite].tolist()
+        )
+        selected = sorted((common_years or set()) & observed_years)
+        result[lead] = selected
+    return result
+
+
+def compute_skill_seasonal_batch(
+    mod_da,
+    mod_time,
+    obs_da,
+    climy0=None,
+    climy1=None,
+    member_indices_all=None,
+    nleadavg=1,
+    nleads=1,
+    detrend=False,
+    monthly=False,
+    is_anomaly=False,
+    metrics=None,
+):
+    """
+    Batch compute seasonal skill for many resampled member selections.
+
+    Parameters are the same as compute_skill_seasonal with an added
+    member_indices_all array shaped (iteration, ens_size). ``metrics`` can
+    restrict the returned variables to reduce memory use for large batches.
+    """
+    if member_indices_all is None:
+        raise ValueError("member_indices_all must be provided")
+    member_indices_all = np.asarray(member_indices_all)
+    if member_indices_all.ndim != 2:
+        raise ValueError("member_indices_all must be 2D (iteration, ens_size)")
+
+    available_metrics = (
+        "corr", "pval", "rmse", "msss", "rpc",
+        "sig_obs", "sig_sig", "sig_tot", "s2t",
+    )
+    requested_metrics = available_metrics if metrics is None else tuple(metrics)
+    requested_metric_set = set(requested_metrics)
+    unknown_metrics = requested_metric_set - set(available_metrics)
+    if unknown_metrics:
+        raise ValueError(f"Unknown metrics: {sorted(unknown_metrics)}")
+
+    n_iterations = member_indices_all.shape[0]
+    corr_list = []; pval_list = []; rmse_list = []; msss_list = []; rpc_list = []
+    sigobs_list = []; sigsig_list = []; sigtot_list = []; s2t_list = []
+
+    if (monthly):
+        lvals = np.arange(nleadavg)*12
+    else:
+        lvals = np.arange(nleadavg)*4
+    lvalsda = xr.DataArray(mod_da.isel(L=slice(0,nleads)).L,dims="L",name="L")
+
+    for i in range(nleads):
+        leadisel = lvals + i
+        ens_ts = mod_da.isel(L=leadisel).mean('L').rename({'Y':'time'})
+        ens_time_year = mod_time.isel(L=leadisel).mean('L').dt.year
+        ens_time_month = mod_time.isel(L=leadisel).mean('L').dt.month.data[0]
+        ens_ts = ens_ts.assign_coords(time=("time",ens_time_year.data))
+        ens_ts = _deduplicate_index(ens_ts, 'time')
+        obsisel = obs_da.time.dt.month==ens_time_month
+        obs_seas = obs_da.isel(time=obsisel)
+        if not is_anomaly:
+            if climy0 is None or climy1 is None:
+                raise ValueError("climy0 and climy1 must be provided if is_anomaly=False")
+            obs_seas = obs_seas - _climatology_mean_by_year(obs_seas, 'time', climy0, climy1)
+        obs_seas = obs_seas.assign_coords(time=("time",obs_seas.time.dt.year.data))
+        obs_seas = _deduplicate_index(obs_seas, 'time')
+        if (nleadavg>1):
+            obs_seas = obs_seas.rolling(time=nleadavg,min_periods=nleadavg, center=True).mean().dropna('time',how='all')
+        a,b = xr.align(ens_ts,obs_seas)
+        a = _single_chunk_core_dim(a,'time')
+        b = _single_chunk_core_dim(b,'time')
+        if detrend:
+            a = detrend_linear(a,'time')
+            b = detrend_linear(b,'time')
+
+        needs_sigtot = bool({"rpc", "sig_tot", "s2t"} & requested_metric_set)
+        member_indexer = xr.DataArray(
+            member_indices_all,
+            dims=("iteration", "sample_member"),
+            coords={"iteration": np.arange(n_iterations)},
+        )
+        sample = a.isel(M=member_indexer)
+        amean = sample.mean("sample_member")
+        b_broadcast = b.expand_dims(iteration=amean.iteration)
+
+        r = None
+        sigobs = None
+        sigsig = None
+        sigtot = None
+        if {"corr", "rpc"} & requested_metric_set:
+            r = xs.pearson_r(amean,b_broadcast,dim='time')
+        if {"rmse", "sig_obs"} & requested_metric_set:
+            sigobs = b.std('time')
+        if {"rpc", "sig_sig", "s2t"} & requested_metric_set:
+            sigsig = amean.std('time')
+        if needs_sigtot:
+            sigtot = sample.std('time').mean("sample_member")
+
+        if "corr" in requested_metrics:
+            corr_list.append(r)
+        if "rpc" in requested_metrics:
+            rpc_list.append((r/(sigsig/sigtot)).where(r>0))
+        if "rmse" in requested_metrics:
+            rmse_list.append(xs.rmse(amean,b_broadcast,dim='time')/sigobs)
+        if "msss" in requested_metrics:
+            msss_list.append(1-(xs.mse(amean,b_broadcast,dim='time')/b.var('time')))
+        if "pval" in requested_metrics:
+            pval_list.append(xs.pearson_r_eff_p_value(amean,b_broadcast,dim='time'))
+        if "sig_obs" in requested_metrics:
+            sigobs_list.append(sigobs)
+        if "sig_sig" in requested_metrics:
+            sigsig_list.append(sigsig)
+        if "sig_tot" in requested_metrics:
+            sigtot_list.append(sigtot)
+        if "s2t" in requested_metrics:
+            s2t_list.append(sigsig/sigtot)
+
+    metric_lists = {
+        "corr": corr_list,
+        "pval": pval_list,
+        "rmse": rmse_list,
+        "msss": msss_list,
+        "rpc": rpc_list,
+        "sig_obs": sigobs_list,
+        "sig_sig": sigsig_list,
+        "sig_tot": sigtot_list,
+        "s2t": s2t_list,
+    }
+    return xr.Dataset({
+        name: xr.concat(metric_lists[name], lvalsda)
+        for name in requested_metrics
+    })
+
+
+def prepare_skill_seasonal_lead(
+    mod_da,
+    mod_time,
+    obs_da,
+    lead_index,
+    climy0=None,
+    climy1=None,
+    detrend=False,
+    is_anomaly=False,
+):
+    """Align and optionally detrend one seasonal lead for repeated scoring."""
+    ens_ts = mod_da.isel(L=lead_index).rename({"Y": "time"})
+    ens_time = mod_time.isel(L=lead_index)
+    ens_ts = ens_ts.assign_coords(time=("time", ens_time.dt.year.data))
+    ens_ts = _deduplicate_index(ens_ts, "time")
+
+    verification_month = ens_time.dt.month.data[0]
+    obs_seas = obs_da.isel(time=obs_da.time.dt.month == verification_month)
+    if not is_anomaly:
+        if climy0 is None or climy1 is None:
+            raise ValueError(
+                "climy0 and climy1 must be provided if is_anomaly=False"
+            )
+        obs_seas = obs_seas - _climatology_mean_by_year(
+            obs_seas, "time", climy0, climy1
+        )
+    obs_seas = obs_seas.assign_coords(
+        time=("time", obs_seas.time.dt.year.data)
+    )
+    obs_seas = _deduplicate_index(obs_seas, "time")
+
+    model_aligned, obs_aligned = xr.align(ens_ts, obs_seas)
+    model_aligned = _single_chunk_core_dim(model_aligned, "time")
+    obs_aligned = _single_chunk_core_dim(obs_aligned, "time")
+    if detrend:
+        model_aligned = detrend_linear(model_aligned, "time")
+        obs_aligned = detrend_linear(obs_aligned, "time")
+    return model_aligned, obs_aligned
+
+
+def compute_resampled_nrmse_prepared(
+    model_aligned,
+    obs_aligned,
+    member_indices_all,
+):
+    """Compute nRMSE samples from already aligned and detrended lead inputs."""
+    member_indices_all = np.asarray(member_indices_all)
+    if member_indices_all.ndim != 2:
+        raise ValueError("member_indices_all must be 2D (iteration, ens_size)")
+    if "M" not in model_aligned.dims:
+        raise ValueError("model_aligned must contain an M dimension")
+    if member_indices_all.size == 0:
+        raise ValueError("member_indices_all must not be empty")
+    if (
+        member_indices_all.min() < 0
+        or member_indices_all.max() >= model_aligned.sizes["M"]
+    ):
+        raise IndexError("member_indices_all contains an out-of-range member")
+
+    # Fancy indexing creates one read task per sampled member and iteration.
+    # A compact selection-weight matrix gives the same ensemble means while
+    # allowing Dask to read each model chunk once per iteration batch.
+    selection_counts = np.zeros(
+        (member_indices_all.shape[0], model_aligned.sizes["M"]),
+        dtype=np.float32,
+    )
+    iteration_index = np.repeat(
+        np.arange(member_indices_all.shape[0]),
+        member_indices_all.shape[1],
+    )
+    np.add.at(
+        selection_counts,
+        (iteration_index, member_indices_all.ravel()),
+        1.0,
+    )
+    selection_weights = xr.DataArray(
+        selection_counts / member_indices_all.shape[1],
+        dims=("iteration", "M"),
+        coords={
+            "iteration": np.arange(member_indices_all.shape[0]),
+            "M": model_aligned["M"],
+        },
+    )
+    ensemble_mean = xr.dot(
+        model_aligned,
+        selection_weights,
+        dim="M",
+    )
+    ensemble_mean = ensemble_mean.transpose(
+        "iteration",
+        *(dim for dim in model_aligned.dims if dim != "M"),
+    )
+    obs_broadcast = obs_aligned.expand_dims(iteration=ensemble_mean.iteration)
+    return xs.rmse(
+        ensemble_mean, obs_broadcast, dim="time"
+    ) / obs_aligned.std("time")
 
 
 def compute_resampskill_annual(mod_da,mod_time,obs_da,nleadavg=1,nleads=1,detrend=False,resamp=0,mean=True):
@@ -553,6 +965,8 @@ def compute_resampskill_annual(mod_da,mod_time,obs_da,nleadavg=1,nleads=1,detren
             ens_time_year = mod_time.isel(L=lvals+i).mean('L').data
             ens_ts = ens_ts.assign_coords(time=("time",ens_time_year))
             a,b = xr.align(ens_ts,obs_ts)
+            a = _single_chunk_core_dim(a,'time')
+            b = _single_chunk_core_dim(b,'time')
             b = b - b.mean('time')
             if detrend:
                 a = detrend_linear(a,'time')
@@ -591,7 +1005,7 @@ def compute_resampskill_annual(mod_da,mod_time,obs_da,nleadavg=1,nleads=1,detren
         dsout = dsout.mean('iteration')
     return dsout
 
-def compute_resampskill_seasonal(mod_da,mod_time,obs_da,climy0,climy1,nleadavg=1,nleads=1,detrend=False,resamp=0,mean=True,monthly=False):
+def compute_resampskill_seasonal(mod_da,mod_time,obs_da,climy0=None,climy1=None,nleadavg=1,nleads=1,detrend=False,resamp=0,mean=True,monthly=False, is_anomaly=False):
     """
     Computes a suite of deterministic skill metrics given two DataArrays
     corresponding to model and observations, which must share the same
@@ -611,10 +1025,10 @@ def compute_resampskill_seasonal(mod_da,mod_time,obs_da,climy0,climy1,nleadavg=1
         a hindcast time DataArray dimensioned (Y,L). Assumes mod_time.dt.month & mod_time.dt.year exist.
     obs_da: DataArray
         a monthly or seasonally-averaged OBS DataArray dimensioned (time,...)
-    climy0: int
-        start year of climatology for computing anomalies
-    climy1: int
-        end year of climatology for computing anomalies    
+    climy0: int (optional)
+        start year of climatology for computing anomalies. Required if is_anomaly=False.
+    climy1: int (optional)
+        end year of climatology for computing anomalies. Required if is_anomaly=False.
     nleadavg : int (optional)
         sets temporal smoothing (e.g., nleadavg=3 to verify 3-year average fields).
     nleads : int (optional)
@@ -629,6 +1043,8 @@ def compute_resampskill_seasonal(mod_da,mod_time,obs_da,climy0,climy1,nleadavg=1
     monthly : bool (optional)
         set to True if mod_da and obs_da are monthly means (skill will be computed for each lead month
         instead of each lead season)
+    is_anomaly : bool (optional)
+        If True, assumes obs_da is already anomaly data and skips climo removal. Default False.
 
     Returns
     -------
@@ -652,13 +1068,20 @@ def compute_resampskill_seasonal(mod_da,mod_time,obs_da,climy0,climy1,nleadavg=1
             ens_time_year = mod_time.isel(L=leadisel).mean('L').dt.year
             ens_time_month = mod_time.isel(L=leadisel).mean('L').dt.month.data[0]
             ens_ts = ens_ts.assign_coords(time=("time",ens_time_year.data))
+            ens_ts = _deduplicate_index(ens_ts, 'time')
             obsisel = obs_da.time.dt.month==ens_time_month
             obs_seas = obs_da.isel(time=obsisel)
-            obs_seas = obs_seas - obs_seas.sel(time=slice(climy0,climy1)).mean('time')
+            if not is_anomaly:
+                if climy0 is None or climy1 is None:
+                    raise ValueError("climy0 and climy1 must be provided if is_anomaly=False")
+                obs_seas = obs_seas - _climatology_mean_by_year(obs_seas, 'time', climy0, climy1)
             obs_seas = obs_seas.assign_coords(time=("time",obs_seas.time.dt.year.data))
+            obs_seas = _deduplicate_index(obs_seas, 'time')
             if (nleadavg>1):
                 obs_seas = obs_seas.rolling(time=nleadavg,min_periods=nleadavg, center=True).mean().dropna('time',how='all')
             a,b = xr.align(ens_ts,obs_seas)
+            a = _single_chunk_core_dim(a,'time')
+            b = _single_chunk_core_dim(b,'time')
             if detrend:
                 a = detrend_linear(a,'time')
                 b = detrend_linear(b,'time')
@@ -697,5 +1120,3 @@ def compute_resampskill_seasonal(mod_da,mod_time,obs_da,climy0,climy1,nleadavg=1
     if (mean):
         dsout = dsout.mean('iteration')
     return dsout
-
-

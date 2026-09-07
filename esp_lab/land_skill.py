@@ -1,0 +1,1211 @@
+"""Lead-time ACC skill utilities for E3SM land variables.
+
+This module supports ``jupyter/1b_refactor_lnd_leadtime_acc_skill_map.ipynb``
+using the execution and cache contracts established by the atmospheric workflow.
+It deliberately leaves the observational product configurable: snow water
+equivalent, total water storage, and soil moisture generally require different
+reference products and masks.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Mapping, Sequence
+
+import numpy as np
+import xarray as xr
+
+from . import data_access_e3sm, stats
+from .leadtime_skill_cache import canonical_json, provenance_digest
+from .prepared_skill import cache_status
+from .utils import calendar_utils
+
+
+_LAND_SKILL_CACHE_SCHEMA_VERSION = "1"
+LAND_SKILL_REQUIRED_VARIABLES = (
+    "corr",
+    "pval",
+    "sample_count",
+    "valid_sample_count",
+    "target_year_start",
+    "target_year_end",
+)
+
+
+@dataclass(frozen=True)
+class LandVariableSpec:
+    """Metadata and dimensional requirements for a supported land field."""
+
+    field: str
+    long_name: str
+    plot_name: str
+    units: str
+    vertical_dim: str | None = None
+
+
+LAND_VARIABLES: Mapping[str, LandVariableSpec] = {
+    "H2OSNO": LandVariableSpec(
+        "H2OSNO", "snow water equivalent", "Snow water equivalent", "mm"
+    ),
+    "TWS": LandVariableSpec(
+        "TWS", "total water storage", "Total water storage", "mm"
+    ),
+    "H2OSOI": LandVariableSpec(
+        "H2OSOI",
+        "volumetric soil water",
+        "Soil moisture",
+        "mm3/mm3",
+        vertical_dim="levgrnd",
+    ),
+}
+
+
+def land_depth_token(
+    field: str,
+    depth_range_m: tuple[float, float] | None = None,
+) -> str:
+    """Return a readable filename token for a land-field depth treatment."""
+    if field.upper() != "H2OSOI":
+        return ""
+    if depth_range_m is None or len(depth_range_m) != 2:
+        raise ValueError("H2OSOI requires depth_range_m=(top, bottom)")
+    top, bottom = map(float, depth_range_m)
+    if top < 0 or bottom <= top:
+        raise ValueError("depth_range_m must satisfy 0 <= top < bottom")
+    return f"depth{top:g}-{bottom:g}m_integrated_mm"
+
+
+def staged_land_input_path(
+    root,
+    source: str,
+    field: str,
+    grid_tag: str,
+    *,
+    init_month: int | None = None,
+    depth_range_m: tuple[float, float] | None = None,
+):
+    """Construct one analysis-ready staged land-input path."""
+    from .paths import leadtime_acc_dir
+
+    field = field.upper()
+    source_token = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(source)).strip("_")
+    if not source_token:
+        raise ValueError("source must contain a filename-safe character")
+    depth = land_depth_token(field, depth_range_m)
+    parts = [source_token]
+    if init_month is not None:
+        if not 1 <= int(init_month) <= 12:
+            raise ValueError("init_month must be between 1 and 12")
+        parts[-1] = f"{source_token}{int(init_month):02d}"
+    parts.append(field)
+    if depth:
+        parts.append(depth)
+    grid_token = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(grid_tag)).strip("_")
+    if not grid_token:
+        raise ValueError("grid_tag must contain a filename-safe character")
+    parts.extend(("seasonal", grid_token))
+    directory = leadtime_acc_dir(
+        source_token, "inputs", "land", field, root=root
+    )
+    return directory / ("_".join(parts) + ".nc")
+
+
+def expected_staged_land_input_attrs(field: str, source_kind: str, grid_tag: str):
+    """Return the required contract for one staged land input."""
+    return {
+        "processing_stage": "analysis_ready_land_acc_input_v2",
+        "field": field.upper(),
+        "source_kind": source_kind,
+        "horizontal_grid": grid_tag,
+        "seasonal_convention": "centered_3month_DJF_MAM_JJA_SON",
+    }
+
+
+def validate_staged_land_input(da, path, source_kind: str, grid_tag: str):
+    """Validate the preprocessing contract attached to a staged input."""
+    expected = expected_staged_land_input_attrs(da.name, source_kind, grid_tag)
+    mismatches = {
+        key: (da.attrs.get(key), value)
+        for key, value in expected.items()
+        if da.attrs.get(key) != value
+    }
+    if mismatches:
+        raise ValueError(f"Input contract mismatch in {path}: {mismatches}")
+
+
+def normalized_target_years(target_years_by_lead: Mapping) -> dict[int, list[int]]:
+    """Normalize lead-dependent verification cohorts for stable provenance."""
+    normalized = {
+        int(lead): [int(year) for year in years]
+        for lead, years in target_years_by_lead.items()
+    }
+    if not normalized or any(not years for years in normalized.values()):
+        raise ValueError("each lead must have at least one target year")
+    return dict(sorted(normalized.items()))
+
+
+def land_cohort_token(target_years_by_lead: Mapping) -> str:
+    """Return a readable token plus digest for exact lead-dependent cohorts."""
+    cohorts = normalized_target_years(target_years_by_lead)
+    all_years = [year for years in cohorts.values() for year in years]
+    sample_counts = {len(years) for years in cohorts.values()}
+    count_token = (
+        f"n{next(iter(sample_counts))}perlead"
+        if len(sample_counts) == 1
+        else f"n{min(sample_counts)}-{max(sample_counts)}perlead"
+    )
+    year_token = f"y{min(all_years)}-{max(all_years)}_{count_token}"
+    lead_token = f"l{min(cohorts)}-{max(cohorts)}_nl{len(cohorts)}"
+    digest = provenance_digest(cohorts, length=10)
+    return f"{year_token}_{lead_token}_c{digest}"
+
+
+def expected_land_skill_attrs(
+    *,
+    field: str,
+    init_month: int,
+    climatology_years: tuple[int, int],
+    initialization_years: tuple[int, int],
+    ensemble_members: Sequence[str],
+    target_years_by_lead: Mapping,
+    reference_product: str,
+    reference_data_identity: str,
+    model_data_identity: str,
+    target_grid: str,
+    detrend: bool,
+    evaluation_protocol: str,
+    depth_range_m: tuple[float, float] | None = None,
+) -> dict[str, str | int]:
+    """Build complete expected metadata for a land ACC skill cache."""
+    cohorts = normalized_target_years(target_years_by_lead)
+    clim_start, clim_end = map(int, climatology_years)
+    depth = land_depth_token(field, depth_range_m)
+    return {
+        "land_skill_cache_schema": _LAND_SKILL_CACHE_SCHEMA_VERSION,
+        "cache_kind": "land_leadtime_acc_skill",
+        "field": field.upper(),
+        "initialization_month": int(init_month),
+        "initialization_years": f"{int(initialization_years[0])}-{int(initialization_years[1])}",
+        "climatology": f"{clim_start}-{clim_end}",
+        "detrend": str(bool(detrend)).lower(),
+        "ensemble_members": ",".join(map(str, ensemble_members)),
+        "ensemble_member_count": len(ensemble_members),
+        "reference_product": reference_product,
+        "reference_data_identity": reference_data_identity,
+        "model_data_identity": model_data_identity,
+        "target_grid": target_grid,
+        "evaluation_protocol": evaluation_protocol,
+        "depth_treatment": depth or "not_applicable",
+        "target_years_by_lead": canonical_json(cohorts),
+        "target_years_digest": provenance_digest(cohorts, length=32),
+        "model_climatology_sample_count_by_lead": ",".join(
+            f"{lead}:{sum(clim_start <= year <= clim_end for year in years)}"
+            for lead, years in cohorts.items()
+        ),
+    }
+
+
+def validate_land_skill_dataset(
+    skill: xr.Dataset,
+    expected_attrs: Mapping,
+    target_years_by_lead: Mapping,
+) -> None:
+    """Validate land-skill metadata, variables, leads, and sample cohorts."""
+    missing = [name for name in LAND_SKILL_REQUIRED_VARIABLES if name not in skill]
+    if missing:
+        raise ValueError(f"cached skill is missing variables: {missing}")
+    cohorts = normalized_target_years(target_years_by_lead)
+    expected_leads = list(cohorts)
+    actual_leads = list(map(int, skill.L.values))
+    if actual_leads != expected_leads:
+        raise ValueError(f"cached leads {actual_leads} != expected {expected_leads}")
+    mismatches = {
+        key: (skill.attrs.get(key), value)
+        for key, value in expected_attrs.items()
+        if skill.attrs.get(key) != value
+    }
+    if mismatches:
+        raise ValueError(f"cached metadata mismatch: {mismatches}")
+    for lead, years in cohorts.items():
+        expected = (len(years), min(years), max(years))
+        actual = (
+            int(skill.sample_count.sel(L=lead)),
+            int(skill.target_year_start.sel(L=lead)),
+            int(skill.target_year_end.sel(L=lead)),
+        )
+        if actual != expected:
+            raise ValueError(
+                f"cached cohort mismatch for init={expected_attrs['initialization_month']}, "
+                f"lead={lead}: {actual} != {expected}"
+            )
+
+
+def land_skill_cache_status(path, expected_attrs: Mapping, target_years_by_lead: Mapping):
+    """Return compatibility status for one saved land ACC skill product."""
+    compatible, reason = cache_status(
+        path,
+        expected_attrs=expected_attrs,
+        required_variables=LAND_SKILL_REQUIRED_VARIABLES,
+    )
+    if not compatible:
+        return compatible, reason
+    try:
+        with xr.open_dataset(path) as dataset:
+            validate_land_skill_dataset(dataset, expected_attrs, target_years_by_lead)
+    except (KeyError, TypeError, ValueError, OSError) as exc:
+        return False, str(exc)
+    return True, "compatible"
+
+
+def elm_soil_layer_bounds(depths: xr.DataArray) -> xr.DataArray:
+    """Return ELM layer interfaces after verifying native ``levgrnd`` centers.
+
+    ELM uses an exponentially stretched vertical soil grid. The archived
+    H2OSOI files contain layer centers but not bounds, so bounds may only be
+    reconstructed safely when the coordinates match that documented grid.
+    Unknown grids are rejected instead of being treated as ELM implicitly.
+    """
+    if depths.ndim != 1:
+        raise ValueError("soil depth coordinates must be one-dimensional")
+    if depths.size == 0:
+        raise ValueError("soil depth coordinates must not be empty")
+    values = np.asarray(depths, dtype=float)
+    layer_number = np.arange(1, values.size + 1, dtype=float)
+    expected_centers = 0.025 * (np.exp(0.5 * (layer_number - 0.5)) - 1.0)
+    if not np.allclose(values, expected_centers, rtol=2.0e-5, atol=1.0e-7):
+        raise ValueError(
+            "levgrnd does not match the native ELM soil grid; provide explicit "
+            "soil_layer_bounds_m"
+        )
+    interfaces = 0.025 * (np.exp(0.5 * np.arange(values.size + 1)) - 1.0)
+    return xr.DataArray(
+        np.column_stack([interfaces[:-1], interfaces[1:]]),
+        dims=(depths.dims[0], "bounds"),
+        coords={depths.dims[0]: depths, "bounds": [0, 1]},
+        attrs={"units": "m", "source": "reconstructed native ELM grid"},
+    )
+
+
+def _standardize_layer_bounds(
+    bounds: xr.DataArray | np.ndarray | Sequence[float],
+    depths: xr.DataArray,
+    vertical_dim: str,
+) -> xr.DataArray:
+    values = np.asarray(bounds, dtype=float)
+    nlevels = depths.size
+    if values.shape == (nlevels + 1,):
+        values = np.column_stack([values[:-1], values[1:]])
+    if values.shape != (nlevels, 2):
+        raise ValueError(
+            f"layer bounds must have shape ({nlevels}, 2) or ({nlevels + 1},), "
+            f"got {values.shape}"
+        )
+    if not np.all(np.isfinite(values)) or np.any(values[:, 1] <= values[:, 0]):
+        raise ValueError("layer bounds must be finite and have bottom > top")
+    if np.any(values[1:, 0] < values[:-1, 1] - 1.0e-10):
+        raise ValueError("soil layers must not overlap")
+    return xr.DataArray(
+        values,
+        dims=(vertical_dim, "bounds"),
+        coords={vertical_dim: depths, "bounds": [0, 1]},
+        attrs={"units": "m"},
+    )
+
+
+def depth_weighted_soil_moisture(
+    da: xr.DataArray,
+    depth_range_m: tuple[float, float],
+    *,
+    vertical_dim: str = "levgrnd",
+    layer_bounds_m: xr.DataArray | np.ndarray | Sequence[float] | None = None,
+    min_coverage_fraction: float = 0.999,
+) -> xr.DataArray:
+    """Average volumetric soil moisture over a physical depth interval.
+
+    Each layer is weighted by its geometric overlap with ``depth_range_m``.
+    Missing layers are excluded locally and output is masked wherever their
+    combined thickness covers less than ``min_coverage_fraction`` of the target
+    interval.
+    """
+    if vertical_dim not in da.dims:
+        raise ValueError(f"soil moisture must contain {vertical_dim!r}")
+    if len(depth_range_m) != 2:
+        raise ValueError("depth_range_m must contain (top_m, bottom_m)")
+    top, bottom = map(float, depth_range_m)
+    if not np.isfinite([top, bottom]).all() or top < 0 or bottom <= top:
+        raise ValueError("depth_range_m must satisfy 0 <= top < bottom")
+    if not 0 < min_coverage_fraction <= 1:
+        raise ValueError("min_coverage_fraction must be in (0, 1]")
+
+    depths = da[vertical_dim]
+    if layer_bounds_m is None:
+        if vertical_dim != "levgrnd":
+            raise ValueError("non-ELM vertical grids require explicit layer_bounds_m")
+        bounds = elm_soil_layer_bounds(depths)
+    else:
+        bounds = _standardize_layer_bounds(layer_bounds_m, depths, vertical_dim)
+
+    overlap = np.maximum(
+        0.0,
+        np.minimum(bounds.isel(bounds=1), bottom)
+        - np.maximum(bounds.isel(bounds=0), top),
+    )
+    requested_thickness = bottom - top
+    geometric_coverage = float(overlap.sum()) / requested_thickness
+    if geometric_coverage < min_coverage_fraction:
+        raise ValueError(
+            f"soil layers cover only {geometric_coverage:.3f} of requested "
+            f"{top:g}-{bottom:g} m interval"
+        )
+
+    valid_overlap = overlap.where(da.notnull())
+    covered_thickness = valid_overlap.sum(vertical_dim)
+    safe_covered_thickness = covered_thickness.where(covered_thickness > 0)
+    out = (da * overlap).sum(vertical_dim, skipna=True) / safe_covered_thickness
+    coverage_fraction = covered_thickness / requested_thickness
+    out = out.where(coverage_fraction >= min_coverage_fraction)
+    out.attrs = dict(da.attrs)
+    out.attrs.update(
+        {
+            "depth_top_m": top,
+            "depth_bottom_m": bottom,
+            "vertical_aggregation": "layer-overlap thickness-weighted mean",
+            "minimum_vertical_coverage_fraction": min_coverage_fraction,
+        }
+    )
+    out.name = da.name
+    return out
+
+
+def depth_integrated_soil_water_mm(
+    da: xr.DataArray,
+    depth_range_m: tuple[float, float],
+    *,
+    vertical_dim: str = "levgrnd",
+    layer_bounds_m: xr.DataArray | np.ndarray | Sequence[float] | None = None,
+    min_coverage_fraction: float = 0.999,
+) -> xr.DataArray:
+    """Integrate volumetric soil moisture into water-height equivalent (mm)."""
+    mean = depth_weighted_soil_moisture(
+        da,
+        depth_range_m,
+        vertical_dim=vertical_dim,
+        layer_bounds_m=layer_bounds_m,
+        min_coverage_fraction=min_coverage_fraction,
+    )
+    thickness_m = float(depth_range_m[1]) - float(depth_range_m[0])
+    out = mean * thickness_m * 1000.0
+    out.attrs.update(mean.attrs)
+    out.attrs["units"] = "mm"
+    out.attrs["vertical_aggregation"] = "layer-overlap integrated water equivalent"
+    out.name = da.name
+    return out
+
+
+def get_land_variable_spec(field: str) -> LandVariableSpec:
+    """Return metadata for a supported field, with a useful error if unknown."""
+    try:
+        return LAND_VARIABLES[field.upper()]
+    except (AttributeError, KeyError) as exc:
+        valid = ", ".join(LAND_VARIABLES)
+        raise ValueError(f"Unsupported land field {field!r}. Available fields: {valid}") from exc
+
+
+def mask_c3s_swe_flags(da: xr.DataArray) -> xr.DataArray:
+    """Mask C3S SWE categorical flags while retaining physical zero snow.
+
+    The C3S files encode glacier, mountain, water, and no-data categories as
+    negative values.  Zero means no snow and is a valid SWE observation.
+    """
+    out = da.where(da >= 0)
+    out.attrs = dict(da.attrs)
+    out.attrs.update(
+        {
+            "flag_treatment": "negative C3S categorical flags masked; zero retained",
+            "valid_min": 0.0,
+        }
+    )
+    return out
+
+
+def complete_calendar_seasonal_mean(
+    monthly: xr.DataArray,
+    *,
+    center_months: Sequence[int] = (1, 4, 7, 10),
+    retain_missing: bool = False,
+) -> xr.DataArray:
+    """Form centered 3-month means only from consecutive calendar months.
+
+    Missing timestamps are inserted before rolling, preventing sparse records
+    such as May/October/November from being mistaken for consecutive months.
+    A seasonal value is finite only where all three monthly values exist. By
+    default all-empty seasons are dropped. Set ``retain_missing=True`` to keep
+    their timestamps as explicit missing slices, which is useful when figures
+    must preserve a common seasonal-panel layout across reference products.
+    """
+    if "time" not in monthly.dims:
+        raise ValueError("monthly reference must contain a time dimension")
+    if monthly.indexes["time"].has_duplicates:
+        raise ValueError("monthly reference contains duplicate timestamps")
+    centers = tuple(int(month) for month in center_months)
+    if not centers or any(month < 1 or month > 12 for month in centers):
+        raise ValueError("center_months must contain calendar months in 1..12")
+
+    attrs = dict(monthly.attrs)
+    complete = monthly.sortby("time").resample(time="MS").asfreq()
+    if complete.chunks is not None:
+        complete = complete.chunk({"time": min(24, complete.sizes["time"])})
+    seasonal = complete.rolling(time=3, center=True, min_periods=3).mean()
+    seasonal = seasonal.where(seasonal.time.dt.month.isin(centers), drop=True)
+    if not retain_missing:
+        seasonal = seasonal.dropna("time", how="all")
+    seasonal.attrs.update(attrs)
+    seasonal.attrs.update(
+        {
+            "temporal_average": "centered 3-month seasonal mean",
+            "calendar_completeness": "all three consecutive calendar months required",
+            "available_season_center_months": ",".join(map(str, centers)),
+            "missing_season_representation": (
+                "explicit all-NaN time slices" if retain_missing else "dropped"
+            ),
+        }
+    )
+    return seasonal
+
+
+def complete_calendar_monthly_change(monthly: xr.DataArray) -> xr.DataArray:
+    """Approximate monthly storage change from consecutive monthly means.
+
+    The result at month ``t`` is ``monthly(t) - monthly(t-1)`` and retains the
+    timestamp of ``t``. Missing calendar months are inserted before
+    differencing, so gaps cannot be mistaken for one-month changes.
+    """
+    if "time" not in monthly.dims:
+        raise ValueError("monthly reference must contain a time dimension")
+    if monthly.indexes["time"].has_duplicates:
+        raise ValueError("monthly reference contains duplicate timestamps")
+
+    attrs = dict(monthly.attrs)
+    complete = monthly.sortby("time").resample(time="MS").asfreq()
+    if complete.chunks is not None:
+        complete = complete.chunk({"time": min(24, complete.sizes["time"])})
+    change = complete.diff("time", label="upper")
+    change.attrs.update(attrs)
+    change.attrs.update(
+        {
+            "long_name": "monthly change in snow water equivalent",
+            "change_definition": "SWE(t) - SWE(t-1) from consecutive monthly means",
+            "change_timestamp": "later month t",
+            "change_approximation": "difference of monthly-mean storage values",
+            "calendar_completeness": "both consecutive calendar months required",
+        }
+    )
+    return change
+
+
+def retain_reference_supported_leads(
+    data: xr.DataArray,
+    valid_time: xr.DataArray,
+    reference: xr.DataArray,
+) -> tuple[xr.DataArray, xr.DataArray, list[int]]:
+    """Retain forecast leads whose verification month exists in a reference."""
+    if "L" not in data.dims or "L" not in valid_time.dims:
+        raise ValueError("data and valid_time must both contain an L dimension")
+    if "time" not in reference.dims:
+        raise ValueError("reference must contain a time dimension")
+    if not np.array_equal(np.asarray(data.L), np.asarray(valid_time.L)):
+        raise ValueError("data and valid_time must have identical L coordinates")
+
+    finite = reference.notnull()
+    spatial_dims = tuple(dim for dim in finite.dims if dim != "time")
+    if spatial_dims:
+        finite = finite.any(spatial_dims)
+    if finite.chunks is not None:
+        finite = finite.compute()
+    supported_months = {
+        int(month)
+        for month, valid in zip(reference.time.dt.month.values, finite.values)
+        if bool(valid)
+    }
+
+    keep = []
+    dropped = []
+    for lead in map(int, data.L.values):
+        months = np.unique(valid_time.sel(L=lead).dt.month.values).astype(int)
+        if len(months) != 1:
+            raise ValueError(f"lead {lead} has multiple verification months")
+        (keep if int(months[0]) in supported_months else dropped).append(lead)
+    if not keep:
+        raise ValueError("reference supports none of the forecast verification months")
+    return data.sel(L=keep), valid_time.sel(L=keep), dropped
+
+
+def prepare_land_field(
+    data: xr.Dataset | xr.DataArray,
+    field: str,
+    *,
+    soil_layer: int | None = None,
+    soil_depth_m: float | None = None,
+    soil_depth_range_m: tuple[float, float] | None = None,
+    soil_layer_bounds_m: xr.DataArray | np.ndarray | Sequence[float] | None = None,
+    min_soil_coverage_fraction: float = 0.999,
+    soil_output: str = "volumetric_mean",
+) -> xr.DataArray:
+    """Select and standardize one land field for map-based verification.
+
+    ``H2OSNO`` and ``TWS`` are already two-dimensional map fields. ``H2OSOI``
+    has a ``levgrnd`` dimension, so its vertical treatment must be explicit.
+    Production comparisons should pass ``soil_depth_range_m`` to form an
+    overlap/thickness-weighted mean matching the observation's depth support.
+    Layer-index and nearest-depth selection remain available for exploration.
+
+    Unweighted averaging across soil layers is never performed.
+    """
+    spec = get_land_variable_spec(field)
+    if isinstance(data, xr.Dataset):
+        if spec.field not in data:
+            raise KeyError(f"Dataset does not contain {spec.field!r}")
+        da = data[spec.field]
+    elif isinstance(data, xr.DataArray):
+        da = data
+    else:
+        raise TypeError("data must be an xarray Dataset or DataArray")
+
+    if spec.vertical_dim is None:
+        if any(value is not None for value in (soil_layer, soil_depth_m, soil_depth_range_m)):
+            raise ValueError(f"soil vertical options only apply to H2OSOI, not {spec.field}")
+    else:
+        vdim = spec.vertical_dim
+        if vdim not in da.dims:
+            raise ValueError(f"{spec.field} must contain vertical dimension {vdim!r}")
+        selections = [
+            soil_layer is not None,
+            soil_depth_m is not None,
+            soil_depth_range_m is not None,
+        ]
+        if sum(selections) != 1:
+            raise ValueError(
+                "H2OSOI requires exactly one of soil_layer, soil_depth_m, or "
+                "soil_depth_range_m"
+            )
+
+        if soil_depth_range_m is not None:
+            soil_processors = {
+                "volumetric_mean": depth_weighted_soil_moisture,
+                "water_equivalent_mm": depth_integrated_soil_water_mm,
+            }
+            if soil_output not in soil_processors:
+                raise ValueError(
+                    f"soil_output must be one of {sorted(soil_processors)}, got {soil_output!r}"
+                )
+            da = soil_processors[soil_output](
+                da,
+                soil_depth_range_m,
+                vertical_dim=vdim,
+                layer_bounds_m=soil_layer_bounds_m,
+                min_coverage_fraction=min_soil_coverage_fraction,
+            )
+        elif soil_depth_m is not None:
+            if not np.isfinite(soil_depth_m) or soil_depth_m < 0:
+                raise ValueError("soil_depth_m must be a finite, non-negative depth")
+            da = da.sel({vdim: float(soil_depth_m)}, method="nearest")
+        else:
+            layer = 0 if soil_layer is None else soil_layer
+            if not isinstance(layer, (int, np.integer)):
+                raise TypeError("soil_layer must be an integer index")
+            if not -da.sizes[vdim] <= int(layer) < da.sizes[vdim]:
+                raise IndexError(
+                    f"soil_layer={layer} is outside {vdim} with size {da.sizes[vdim]}"
+                )
+            da = da.isel({vdim: int(layer)})
+
+    out = da.rename(spec.field)
+    out.attrs = dict(da.attrs)
+    out.attrs.setdefault("long_name", spec.long_name)
+    out.attrs.setdefault("units", spec.units)
+    if spec.vertical_dim and spec.vertical_dim in out.coords:
+        depth = float(out[spec.vertical_dim])
+        out.attrs["selected_soil_depth_m"] = depth
+        out.attrs["soil_layer_selection"] = "nearest_depth" if soil_depth_m is not None else "index"
+    return out
+
+
+def load_e3sm_land_monthly(
+    *,
+    data_dir: str,
+    case_prefix: str,
+    members: Sequence[str],
+    init_tags: Sequence[str],
+    field: str,
+    nlead: int = 24,
+    chunks: dict[str, int] | None = None,
+    grid: str = "180x360_aave",
+    freq: str = "monthly",
+    ts_split: str = "2yr",
+    engine: str = "netcdf4",
+    require_all_members: bool = True,
+    verify_coverage: bool = True,
+) -> xr.Dataset:
+    """Load a native E3SM land hindcast as ``(Y, L, M, ...)``.
+
+    This is a thin, land-safe wrapper around :func:`get_monthly_data`; in
+    particular it fixes ``realm='lnd'`` so an atmospheric directory cannot be
+    selected accidentally.
+    """
+    spec = get_land_variable_spec(field)
+    return data_access_e3sm.get_monthly_data(
+        data_dir=data_dir,
+        case_prefix=case_prefix,
+        members=list(members),
+        init_tags=list(init_tags),
+        field=spec.field,
+        nlead=nlead,
+        chunks=chunks,
+        realm="lnd",
+        grid=grid,
+        freq=freq,
+        ts_split=ts_split,
+        engine=engine,
+        require_all_members=require_all_members,
+        verify_field_name=True,
+        verify_coverage=verify_coverage,
+    )
+
+
+def seasonal_land_hindcast(
+    monthly: xr.Dataset | xr.DataArray,
+    field: str,
+    *,
+    soil_layer: int | None = None,
+    soil_depth_m: float | None = None,
+    soil_depth_range_m: tuple[float, float] | None = None,
+    soil_layer_bounds_m: xr.DataArray | np.ndarray | Sequence[float] | None = None,
+    min_soil_coverage_fraction: float = 0.999,
+    soil_output: str = "volumetric_mean",
+) -> xr.DataArray:
+    """Select a land map field and form centered DJF/MAM/JJA/SON means."""
+    return seasonal_land_hindcast_dataset(
+        monthly,
+        field,
+        soil_layer=soil_layer,
+        soil_depth_m=soil_depth_m,
+        soil_depth_range_m=soil_depth_range_m,
+        soil_layer_bounds_m=soil_layer_bounds_m,
+        min_soil_coverage_fraction=min_soil_coverage_fraction,
+        soil_output=soil_output,
+    )[get_land_variable_spec(field).field]
+
+
+def seasonal_land_hindcast_dataset(
+    monthly: xr.Dataset | xr.DataArray,
+    field: str,
+    *,
+    soil_layer: int | None = None,
+    soil_depth_m: float | None = None,
+    soil_depth_range_m: tuple[float, float] | None = None,
+    soil_layer_bounds_m: xr.DataArray | np.ndarray | Sequence[float] | None = None,
+    min_soil_coverage_fraction: float = 0.999,
+    soil_output: str = "volumetric_mean",
+) -> xr.Dataset:
+    """Return a seasonal land field together with its ``(Y, L)`` valid time."""
+    da = prepare_land_field(
+        monthly,
+        field,
+        soil_layer=soil_layer,
+        soil_depth_m=soil_depth_m,
+        soil_depth_range_m=soil_depth_range_m,
+        soil_layer_bounds_m=soil_layer_bounds_m,
+        min_soil_coverage_fraction=min_soil_coverage_fraction,
+        soil_output=soil_output,
+    )
+    work = da.to_dataset(name=da.name)
+    # The E3SM hindcast loader stores verification time as a (Y, L) data
+    # variable rather than a coordinate, so DataArray selection does not carry
+    # it along. Preserve it explicitly for the calendar utility.
+    if "time" not in work and isinstance(monthly, xr.Dataset) and "time" in monthly:
+        work["time"] = monthly["time"]
+    if "time" not in work:
+        raise ValueError("monthly input must provide verification time")
+    seasonal = calendar_utils.mon_to_seas_dask(work)
+    seasonal[da.name].attrs.update(da.attrs)
+    seasonal[da.name].attrs["temporal_average"] = "centered 3-month seasonal mean"
+    seasonal_field, seasonal_time, dropped = retain_valid_seasonal_leads(
+        seasonal[da.name], seasonal["time"]
+    )
+    seasonal = seasonal_field.to_dataset(name=da.name)
+    seasonal["time"] = seasonal_time
+    seasonal[da.name].attrs["dropped_all_missing_leads"] = ",".join(map(str, dropped))
+    return seasonal
+
+
+def monthly_land_hindcast_change_dataset(
+    monthly: xr.Dataset | xr.DataArray,
+    field: str = "H2OSNO",
+) -> xr.Dataset:
+    """Return monthly storage changes and their later-month valid times.
+
+    Lead 1 is dropped because no preceding hindcast month is available. The
+    output at lead ``L`` is the monthly-mean field at ``L`` minus that at
+    ``L-1``. Verification timestamps label the later month.
+    """
+    da = prepare_land_field(monthly, field)
+    if "L" not in da.dims:
+        raise ValueError("monthly hindcast field must contain an L dimension")
+    if isinstance(monthly, xr.Dataset) and "time" in monthly:
+        valid_time = monthly["time"]
+    elif "time" in da.coords:
+        valid_time = da["time"]
+    else:
+        raise ValueError("monthly hindcast input must provide verification time")
+    if not {"Y", "L"}.issubset(valid_time.dims):
+        raise ValueError("verification time must contain Y and L dimensions")
+    if da.sizes["L"] < 2:
+        raise ValueError("at least two monthly leads are required")
+
+    serial_month = valid_time.dt.year * 12 + valid_time.dt.month
+    spacing = serial_month.diff("L")
+    if spacing.chunks is not None:
+        spacing = spacing.compute()
+    if not bool((spacing == 1).all()):
+        raise ValueError("hindcast verification times must be consecutive months")
+
+    change = da.diff("L", label="upper").rename("DELTA_H2OSNO")
+    later_time = valid_time.isel(L=slice(1, None)).assign_coords(L=change.L)
+    change.attrs.update(da.attrs)
+    change.attrs.update(
+        {
+            "long_name": "monthly change in snow water equivalent",
+            "change_definition": "SWE(L) - SWE(L-1) from consecutive monthly means",
+            "change_timestamp": "later forecast month L",
+            "change_approximation": "difference of monthly-mean storage values",
+            "source_field": field,
+        }
+    )
+    out = change.to_dataset(name=change.name)
+    out["time"] = later_time
+    return out
+
+
+def retain_valid_seasonal_leads(
+    data: xr.DataArray,
+    valid_time: xr.DataArray,
+) -> tuple[xr.DataArray, xr.DataArray, list[int]]:
+    """Drop only leads with no finite model values anywhere."""
+    if "L" not in data.dims or "L" not in valid_time.dims:
+        raise ValueError("data and valid_time must both contain an L dimension")
+    if not np.array_equal(np.asarray(data.L), np.asarray(valid_time.L)):
+        raise ValueError("data and valid_time must have identical L coordinates")
+
+    finite = data.notnull()
+    for dim in tuple(dim for dim in finite.dims if dim != "L"):
+        finite = finite.any(dim)
+    if finite.chunks is not None:
+        finite = finite.compute()
+    keep = data.L.where(finite, drop=True)
+    dropped = data.L.where(~finite, drop=True)
+    if keep.size == 0:
+        raise ValueError("no finite seasonal leads are available")
+    return (
+        data.sel(L=keep),
+        valid_time.sel(L=keep),
+        [int(value) for value in dropped.values],
+    )
+
+
+def validate_hindcast_evaluation_setup(
+    forecast: xr.DataArray,
+    valid_time: xr.DataArray,
+    *,
+    init_month: int,
+    initialization_years: tuple[int, int],
+    expected_members: Sequence[str],
+    climatology_years: tuple[int, int],
+    require_complete_member_grid: bool = True,
+) -> dict[int, list[int]]:
+    """Validate the evaluation contract used by the refactored ACC workflow.
+
+    The checks are intentionally stricter than dimensional validation: the
+    requested initialization years and member labels must be exact, every lead
+    must have one verification month and a complete climatology window, and
+    represented grid cells may not silently average fewer members.
+
+    Returns
+    -------
+    dict
+        Target years keyed by seasonal lead.
+    """
+    required = {"Y", "L", "M"}
+    missing = required - set(forecast.dims)
+    if missing:
+        raise ValueError(f"forecast is missing required dimensions: {sorted(missing)}")
+    if set(valid_time.dims) != {"Y", "L"}:
+        raise ValueError("valid_time must have exactly Y and L dimensions")
+    if not np.array_equal(forecast.Y, valid_time.Y):
+        raise ValueError("forecast and valid_time Y coordinates differ")
+    if not np.array_equal(forecast.L, valid_time.L):
+        raise ValueError("forecast and valid_time L coordinates differ")
+
+    y0, y1 = map(int, initialization_years)
+    expected_years = list(range(y0, y1 + 1))
+    labels = [str(value) for value in forecast.Y.values]
+    try:
+        actual_years = [int(value[:4]) for value in labels]
+        actual_months = [int(value[4:6]) for value in labels]
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Y labels must begin with YYYYMM initialization tags") from exc
+    if actual_years != expected_years:
+        raise ValueError(
+            f"initialization years differ: expected {y0}-{y1}, got "
+            f"{actual_years[0] if actual_years else 'empty'}-"
+            f"{actual_years[-1] if actual_years else 'empty'}"
+        )
+    if set(actual_months) != {int(init_month)}:
+        raise ValueError(
+            f"initialization month differs: expected {init_month}, got "
+            f"{sorted(set(actual_months))}"
+        )
+
+    actual_members = [str(value) for value in forecast.M.values]
+    expected_members = [str(value) for value in expected_members]
+    if actual_members != expected_members:
+        raise ValueError(
+            f"ensemble members differ: expected {expected_members}, got {actual_members}"
+        )
+
+    target_years = {}
+    climy0, climy1 = map(int, climatology_years)
+    for lead in map(int, forecast.L.values):
+        times = valid_time.sel(L=lead)
+        years = np.asarray(times.dt.year.values, dtype=int)
+        months = np.asarray(times.dt.month.values, dtype=int)
+        if len(np.unique(months)) != 1:
+            raise ValueError(
+                f"lead {lead} has multiple verification months: "
+                f"{sorted(np.unique(months).tolist())}"
+            )
+        if len(np.unique(years)) != len(expected_years):
+            raise ValueError(f"lead {lead} does not have one unique target year per initialization")
+        clim_count = int(((years >= climy0) & (years <= climy1)).sum())
+        available_clim_years = [
+            year for year in years.tolist() if climy0 <= year <= climy1
+        ]
+        if clim_count != len(available_clim_years) or clim_count < 3:
+            raise ValueError(
+                f"lead {lead} has an invalid model climatology cohort in the "
+                f"{climy0}-{climy1} verification-time window"
+            )
+        target_years[lead] = years.tolist()
+
+    if require_complete_member_grid:
+        member_count = forecast.notnull().sum("M")
+        partial = ((member_count > 0) & (member_count < len(expected_members))).any()
+        if partial.chunks is not None:
+            partial = partial.compute()
+        if bool(partial.item()):
+            raise ValueError(
+                "at least one represented year/lead/grid cell contains fewer "
+                "than the requested ensemble members"
+            )
+
+    return target_years
+
+
+def validate_reference_time_coverage(
+    reference: xr.DataArray,
+    target_years_by_lead: Mapping[int, Sequence[int]],
+    valid_time: xr.DataArray,
+    climatology_years: tuple[int, int],
+) -> None:
+    """Require unique reference seasons for all evaluation and climo years."""
+    if "time" not in reference.dims:
+        raise ValueError("reference must contain time")
+    ref_years = np.asarray(reference.time.dt.year.values, dtype=int)
+    ref_months = np.asarray(reference.time.dt.month.values, dtype=int)
+    pairs = list(zip(ref_years.tolist(), ref_months.tolist()))
+    if len(set(pairs)) != len(pairs):
+        raise ValueError("reference contains duplicate year/month timestamps")
+
+    finite = reference.notnull()
+    spatial_dims = tuple(dim for dim in finite.dims if dim != "time")
+    if spatial_dims:
+        finite = finite.any(spatial_dims)
+    if finite.chunks is not None:
+        finite = finite.compute()
+    available = {
+        (year, month)
+        for year, month, valid in zip(ref_years, ref_months, finite.values)
+        if bool(valid)
+    }
+
+    climy0, climy1 = map(int, climatology_years)
+    for lead, years in target_years_by_lead.items():
+        months = np.unique(valid_time.sel(L=int(lead)).dt.month.values)
+        if len(months) != 1:
+            raise ValueError(f"lead {lead} does not have one verification month")
+        month = int(months[0])
+        required = {(int(year), month) for year in years}
+        required.update((year, month) for year in range(climy0, climy1 + 1))
+        missing = sorted(required - available)
+        if missing:
+            raise ValueError(
+                f"reference lacks {len(missing)} required seasons for lead {lead}: "
+                f"{missing[:5]}"
+            )
+
+
+def validate_land_reference_compatibility(
+    forecast: xr.DataArray,
+    reference: xr.DataArray,
+) -> None:
+    """Reject incompatible grids or soil-depth definitions before scoring."""
+    for coord in ("lat", "lon"):
+        if coord in forecast.coords or coord in reference.coords:
+            if coord not in forecast.coords or coord not in reference.coords:
+                raise ValueError(f"forecast and reference must both contain {coord}")
+            forecast_coord = np.asarray(forecast[coord])
+            reference_coord = np.asarray(reference[coord])
+            if (
+                forecast_coord.shape != reference_coord.shape
+                or not np.array_equal(forecast_coord, reference_coord)
+            ):
+                raise ValueError(f"forecast and reference {coord} coordinates are not identical")
+
+    if forecast.name == "H2OSOI" or reference.name == "H2OSOI":
+        depth_attrs = ("depth_top_m", "depth_bottom_m")
+        for name, data in (("forecast", forecast), ("reference", reference)):
+            missing = [attr for attr in depth_attrs if attr not in data.attrs]
+            if missing:
+                raise ValueError(
+                    f"{name} H2OSOI is missing depth metadata {missing}; "
+                    "vertically harmonize it before computing skill"
+                )
+        for attr in depth_attrs:
+            if not np.isclose(
+                float(forecast.attrs[attr]),
+                float(reference.attrs[attr]),
+                rtol=0.0,
+                atol=1.0e-6,
+            ):
+                raise ValueError(
+                    "forecast and reference H2OSOI depth intervals differ: "
+                    f"forecast={forecast.attrs['depth_top_m']}-"
+                    f"{forecast.attrs['depth_bottom_m']} m, reference="
+                    f"{reference.attrs['depth_top_m']}-"
+                    f"{reference.attrs['depth_bottom_m']} m"
+                )
+        forecast_units = forecast.attrs.get("units")
+        reference_units = reference.attrs.get("units")
+        if forecast_units is None or reference_units is None:
+            raise ValueError("forecast and reference H2OSOI must declare volumetric units")
+        if str(forecast_units).lower() != str(reference_units).lower():
+            raise ValueError(
+                "forecast and reference H2OSOI units differ: "
+                f"{forecast_units!r} versus {reference_units!r}"
+            )
+
+
+def compute_land_acc_skill(
+    forecast: xr.DataArray,
+    valid_time: xr.DataArray,
+    reference: xr.DataArray,
+    climy0: int,
+    climy1: int,
+    *,
+    nleads: int | None = None,
+    detrend: bool = True,
+    reference_is_anomaly: bool = False,
+    target_years_by_lead=None,
+) -> xr.Dataset:
+    """Remove lead-dependent model drift and compute seasonal map skill.
+
+    Inputs must already be on the same horizontal grid and use seasonal means,
+    matching the analysis stage of the reference notebook. The returned
+    Dataset includes ACC as ``corr`` plus p-values and the other deterministic
+    metrics produced by :func:`esp_lab.stats.compute_skill_seasonal`.
+    """
+    required_forecast = {"Y", "L", "M"}
+    missing = required_forecast - set(forecast.dims)
+    if missing:
+        raise ValueError(f"forecast is missing required dimensions: {sorted(missing)}")
+    if not {"Y", "L"}.issubset(valid_time.dims):
+        raise ValueError("valid_time must contain Y and L dimensions")
+    if "time" not in reference.dims:
+        raise ValueError("reference must contain a time dimension")
+    if "levgrnd" in forecast.dims:
+        raise ValueError("forecast still has levgrnd; select an H2OSOI layer first")
+    validate_land_reference_compatibility(forecast, reference)
+    if nleads is None:
+        nleads = int(forecast.sizes["L"])
+    if not 1 <= nleads <= forecast.sizes["L"]:
+        raise ValueError(f"nleads must be between 1 and {forecast.sizes['L']}")
+
+    model_anom, _ = stats.remove_drift(forecast, valid_time, climy0, climy1)
+    skill = stats.compute_skill_seasonal(
+        model_anom,
+        valid_time,
+        reference,
+        climy0,
+        climy1,
+        nleadavg=1,
+        nleads=nleads,
+        resamp=0,
+        detrend=detrend,
+        is_anomaly=reference_is_anomaly,
+        target_years_by_lead=target_years_by_lead,
+    )
+    skill.attrs.update(
+        {
+            "climatology": f"{climy0}-{climy1}",
+            "detrend": str(bool(detrend)).lower(),
+            "metric": "seasonal lead-time ACC",
+        }
+    )
+    if forecast.name:
+        skill.attrs["field"] = forecast.name
+    return skill
+
+
+def compute_land_monthly_acc_skill(
+    forecast_change: xr.DataArray,
+    valid_time: xr.DataArray,
+    reference_change: xr.DataArray,
+    climy0: int,
+    climy1: int,
+    *,
+    detrend: bool = True,
+    target_years_by_lead=None,
+) -> xr.Dataset:
+    """Remove lead-dependent drift and compute monthly ΔSWE map skill."""
+    required = {"Y", "L", "M"}
+    missing = required - set(forecast_change.dims)
+    if missing:
+        raise ValueError(f"forecast change is missing dimensions: {sorted(missing)}")
+    if not {"Y", "L"}.issubset(valid_time.dims):
+        raise ValueError("valid_time must contain Y and L dimensions")
+    if "time" not in reference_change.dims:
+        raise ValueError("reference change must contain time")
+    validate_land_reference_compatibility(forecast_change, reference_change)
+
+    model_anom, _ = stats.remove_drift(
+        forecast_change, valid_time, climy0, climy1
+    )
+    skill = stats.compute_skill_seasonal(
+        model_anom,
+        valid_time,
+        reference_change,
+        climy0,
+        climy1,
+        nleadavg=1,
+        nleads=forecast_change.sizes["L"],
+        resamp=0,
+        detrend=detrend,
+        monthly=True,
+        is_anomaly=False,
+        target_years_by_lead=target_years_by_lead,
+    )
+    skill.attrs.update(
+        {
+            "climatology": f"{climy0}-{climy1}",
+            "detrend": str(bool(detrend)).lower(),
+            "metric": "monthly delta-SWE lead-time ACC",
+            "field": "DELTA_H2OSNO",
+            "change_definition": "SWE(t) - SWE(t-1) from consecutive monthly means",
+        }
+    )
+    return skill
+
+
+def plot_land_acc_maps(
+    skill: xr.Dataset,
+    *,
+    leads: Sequence[int] | None = None,
+    significance_level: float | None = None,
+    ncols: int = 2,
+    cmap: str = "RdBu_r",
+):
+    """Plot ACC maps for selected leads and return ``(figure, axes)``.
+
+    Cartopy and matplotlib are imported lazily so calculation-only workflows do
+    not need to initialize a plotting stack.
+    """
+    import matplotlib.pyplot as plt
+    import cartopy.crs as ccrs
+
+    if "corr" not in skill or "L" not in skill["corr"].dims:
+        raise ValueError("skill must contain corr with an L dimension")
+    if not {"lat", "lon"}.issubset(skill["corr"].dims):
+        raise ValueError("corr must contain lat and lon dimensions")
+    selected = list(skill.L.values if leads is None else leads)
+    if not selected:
+        raise ValueError("at least one lead must be selected")
+    unknown = [lead for lead in selected if lead not in skill.L.values]
+    if unknown:
+        raise KeyError(f"lead values not present in skill: {unknown}")
+    if significance_level is not None and not 0 < significance_level < 1:
+        raise ValueError("significance_level must be between 0 and 1")
+
+    ncols = max(1, min(int(ncols), len(selected)))
+    nrows = int(np.ceil(len(selected) / ncols))
+    projection = ccrs.PlateCarree()
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(5 * ncols, 2.9 * nrows),
+        subplot_kw={"projection": projection},
+        squeeze=False,
+    )
+    mappable = None
+    for ax, lead in zip(axes.ravel(), selected):
+        corr = skill["corr"].sel(L=lead)
+        if significance_level is not None:
+            if "pval" not in skill:
+                raise ValueError("significance masking requires skill['pval']")
+            corr = corr.where(skill["pval"].sel(L=lead) < significance_level)
+        mappable = corr.plot.pcolormesh(
+            ax=ax,
+            transform=projection,
+            cmap=cmap,
+            vmin=-1,
+            vmax=1,
+            add_colorbar=False,
+        )
+        ax.coastlines(linewidth=0.6)
+        ax.set_title(f"Lead {lead}")
+    for ax in axes.ravel()[len(selected) :]:
+        ax.set_visible(False)
+    fig.colorbar(mappable, ax=list(axes.ravel()[: len(selected)]), label="ACC", shrink=0.85)
+    return fig, axes
+
+
+__all__ = [
+    "LAND_SKILL_REQUIRED_VARIABLES",
+    "LAND_VARIABLES",
+    "LandVariableSpec",
+    "compute_land_acc_skill",
+    "compute_land_monthly_acc_skill",
+    "complete_calendar_monthly_change",
+    "depth_integrated_soil_water_mm",
+    "depth_weighted_soil_moisture",
+    "elm_soil_layer_bounds",
+    "get_land_variable_spec",
+    "expected_land_skill_attrs",
+    "expected_staged_land_input_attrs",
+    "land_cohort_token",
+    "land_depth_token",
+    "land_skill_cache_status",
+    "load_e3sm_land_monthly",
+    "mask_c3s_swe_flags",
+    "monthly_land_hindcast_change_dataset",
+    "plot_land_acc_maps",
+    "prepare_land_field",
+    "complete_calendar_seasonal_mean",
+    "retain_reference_supported_leads",
+    "seasonal_land_hindcast",
+    "seasonal_land_hindcast_dataset",
+    "staged_land_input_path",
+    "validate_land_skill_dataset",
+    "validate_staged_land_input",
+    "retain_valid_seasonal_leads",
+    "validate_land_reference_compatibility",
+]
