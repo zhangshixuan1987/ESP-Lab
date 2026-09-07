@@ -5,16 +5,102 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import xarray as xr
 
+from esp_lab.paths import leadtime_acc_dir
+from esp_lab.prepared_skill import cache_status
+from esp_lab.utils.netcdf_utils import atomic_to_netcdf
+
 
 SOURCE_FINGERPRINT_VERSION = "1"
 RESAMPLING_ALGORITHM_VERSION = "numpy_choice_without_replacement_v1"
 _SKILL_CACHE_SCHEMA_VERSION = "2"
+
+
+@dataclass(frozen=True)
+class SkillComparisonCacheLayout:
+    """Construct all paths for one finite-ensemble skill comparison."""
+
+    root: str | Path
+    component: str
+    variable: str
+    climatology_years: tuple[int, int]
+    detrend: bool
+    mode: str
+    iterations: int
+    random_seed: int
+
+    @property
+    def _base(self):
+        start, end = self.climatology_years
+        return f"{self.variable}_clim_{start}_{end}"
+
+    @property
+    def _trend(self):
+        return "detrend" if self.detrend else "nodetrend"
+
+    def _directory(self, source, stage, category):
+        path = leadtime_acc_dir(
+            source, stage, self.component, category, self.variable, root=self.root
+        )
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @staticmethod
+    def _year_token(years):
+        return verification_year_token(years).removeprefix("y")
+
+    def result_paths(self, case_tag, init_month, ensemble_size, years):
+        """Return SMYLE skill, fixed E3SM skill, and superiority paths."""
+        year_token = self._year_token(years)
+        mode = (
+            f"{self.mode}_n{ensemble_size}_iter{self.iterations}_"
+            f"seed{self.random_seed}_{year_token}"
+        )
+        smyle = self._directory("CESM-SMYLE", "comparison", "resampled_skill") / (
+            f"BSMYLE{init_month:02d}_{self._base}_"
+            f"resamp_to_{case_tag}_skill_{self._trend}_{mode}.nc"
+        )
+        e3sm = self._directory(case_tag, "comparison", "fixed_skill") / (
+            f"{case_tag}{init_month:02d}_{self._base}_fixed_skill_"
+            f"{self._trend}_{year_token}.nc"
+        )
+        fraction = self._directory(case_tag, "comparison", "fraction_gt_smyle") / (
+            f"BSMYLE_gt_{case_tag}{init_month:02d}_{self._base}_"
+            f"fraction_{self._trend}_{mode}.nc"
+        )
+        return smyle, e3sm, fraction
+
+    def anomaly_paths(self, case_tag, init_month, years):
+        """Return SMYLE and E3SM comparison-anomaly paths."""
+        year_token = self._year_token(years)
+        smyle = self._directory("CESM-SMYLE", "comparison", "anomalies") / (
+            f"BSMYLE{init_month:02d}_{self._base}_"
+            f"compare_anom_{self._trend}_{year_token}.nc"
+        )
+        e3sm = self._directory(case_tag, "comparison", "anomalies") / (
+            f"{case_tag}{init_month:02d}_{self._base}_compare_anom_"
+            f"{self._trend}_{year_token}.nc"
+        )
+        return smyle, e3sm
+
+    def batch_path(self, smyle_file, batch_start, batch_stop):
+        """Return the cache path for one resampling iteration batch."""
+        source = Path(smyle_file)
+        return self._directory("CESM-SMYLE", "resampling_cache", "resampling") / (
+            f"{source.stem}_batch_{batch_start:03d}_{batch_stop:03d}{source.suffix}"
+        )
+
+    def member_selection_path(self, smyle_file):
+        """Return the deterministic member-selection cache path."""
+        return self._directory(
+            "CESM-SMYLE", "resampling_cache", "member_selections"
+        ) / f"{Path(smyle_file).stem}_member_indices.nc"
 
 
 def year_number(value: Any) -> int:
@@ -289,18 +375,86 @@ def validate_member_selection_dataset(
         raise ValueError("Member-selection checksum does not match metadata")
 
 
+def cache_comparison_anomaly(
+    data,
+    path,
+    *,
+    resource_tracker,
+    variable="anom",
+    chunks=None,
+    force=False,
+    expected_attrs=None,
+    write_options=None,
+):
+    """Write a validated anomaly cache when needed and reopen it lazily."""
+    expected_attrs = dict(expected_attrs or {})
+    compatible, _ = cache_status(
+        path, expected_attrs=expected_attrs, required_variables=(variable,)
+    )
+    if force or not compatible:
+        print(f"Writing cached anomaly: {path}")
+        dataset = data.to_dataset(name=variable)
+        dataset.attrs.update(expected_attrs)
+        atomic_to_netcdf(dataset, path, **dict(write_options or {}))
+
+    print(f"Opening cached anomaly with Dask chunks: {path}")
+    dataset = resource_tracker.track(xr.open_dataset(path, chunks=chunks))
+    return dataset[variable]
+
+
+def load_or_write_member_selection(
+    path,
+    generated_indices,
+    expected_attrs,
+    population_size,
+    *,
+    force=False,
+    write_options=None,
+):
+    """Load a valid deterministic selection cache or atomically replace it."""
+    path = Path(path)
+    if path.exists() and not force:
+        try:
+            with xr.open_dataset(path) as dataset:
+                dataset.load()
+                validate_member_selection_dataset(
+                    dataset,
+                    expected_attrs=expected_attrs,
+                    population_size=population_size,
+                )
+                print(f"Loading deterministic member selections: {path}")
+                return dataset["member_indices"].values.copy()
+        except (OSError, ValueError) as exc:
+            print(f"Ignoring incompatible member selections {path}: {exc}")
+
+    dataset = build_member_selection_dataset(generated_indices, attrs=expected_attrs)
+    atomic_to_netcdf(dataset, path, **dict(write_options or {}))
+    print(f"Writing deterministic member selections: {path}")
+    return generated_indices
+
+
+def acc_superiority_fraction(smyle_corr, e3sm_corr):
+    """Return the fraction of valid SMYLE iterations exceeding E3SM ACC."""
+    valid = smyle_corr.notnull() & e3sm_corr.notnull()
+    return (smyle_corr > e3sm_corr).where(valid).mean("iteration", skipna=True)
+
+
 __all__ = [
     "RESAMPLING_ALGORITHM_VERSION",
     "SOURCE_FINGERPRINT_VERSION",
     "build_member_selection_dataset",
+    "cache_comparison_anomaly",
     "canonical_json",
     "expected_skill_cache_attrs",
     "generate_member_indices",
     "file_inventory_digest",
     "member_indices_checksum",
     "member_selection_attrs",
+    "load_or_write_member_selection",
     "provenance_digest",
     "source_fingerprint",
+    "SkillComparisonCacheLayout",
+    "acc_superiority_fraction",
     "stable_resampling_seed",
     "validate_member_selection_dataset",
     "verification_year_token",

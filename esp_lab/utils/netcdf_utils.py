@@ -12,7 +12,7 @@ from typing import Mapping
 import xarray as xr
 
 
-def cleanup_netcdf_temp_files(path, *, max_age_hours=0.0):
+def cleanup_netcdf_temp_files(path, *, max_age_hours=24.0):
     """Remove stale temporary files created for one NetCDF destination."""
     path = Path(path)
     if max_age_hours < 0:
@@ -42,7 +42,7 @@ def atomic_to_netcdf(
     *,
     encoding: Mapping | None = None,
     cleanup_temporary=True,
-    temp_file_max_age_hours=0.0,
+    temp_file_max_age_hours=24.0,
 ):
     """Write a dataset atomically and return the destination path."""
     path = Path(path)

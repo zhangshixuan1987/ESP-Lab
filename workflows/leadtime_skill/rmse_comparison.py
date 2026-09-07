@@ -9,15 +9,32 @@ in notebooks.
 from __future__ import annotations
 
 import warnings
+from collections.abc import Mapping
 
 import numpy as np
 import xarray as xr
+
+from esp_lab.leadtime_skill_cache import (
+    expected_skill_cache_attrs,
+    generate_member_indices,
+    member_indices_checksum,
+    provenance_digest,
+)
+from esp_lab.paths import leadtime_acc_dir
+from esp_lab.utils.unit_conversion import (
+    convert_kelvin_to_celsius,
+    convert_pa_to_hpa,
+    convert_precip_mps_to_mmday,
+    no_unit_conversion,
+)
 
 
 DIRECT_RMSE_LEADS = (3, 6, 9, 12, 15, 18, 21, 24)
 LEGACY_DIRECT_RMSE_LEADS = (1, 4, 7, 10, 13, 16, 19, 22)
 SEASON_NAMES = ("DJF", "MAM", "JJA", "SON")
 OBS_ALIGNMENT_VERSION = "exact_year_month_nan_boundary_v2"
+DIRECT_RMSE_CALCULATION_VERSION = "ensemble_mean_then_year_rmse_v2"
+RMSE_SIGNIFICANCE_VERSION = "fixed_years_matched_ensemble_v2"
 
 
 def safe_model_name(model):
@@ -88,46 +105,170 @@ def direct_rmse_difference(left, right):
     return xr.Dataset({"rmse_diff": rmse_diff, "rmse_ratio": rmse_ratio})
 
 
+def absolute_rmse_from_skill(skill, *, units=None):
+    """Recover absolute RMSE from the normalized seasonal-skill product."""
+    if "rmse" not in skill or "sig_obs" not in skill:
+        raise KeyError("absolute RMSE requires both 'rmse' and 'sig_obs'")
+    result = (skill["rmse"] * skill["sig_obs"]).rename("rmse")
+    result.attrs.update(long_name="root-mean-square error")
+    if units is not None:
+        result.attrs["units"] = str(units)
+    return result
+
+
+def direct_rmse_cache_attrs(
+    *,
+    source,
+    source_data_identity,
+    case_prefix,
+    variable,
+    init_month,
+    verification_years,
+    observation_product,
+    observation_variable,
+    observation_data_identity,
+    target_grid,
+    regridding_method,
+    ensemble_member_count,
+    lead_values=DIRECT_RMSE_LEADS,
+    unit_conversion_version,
+):
+    """Return the complete compatibility contract for a direct-RMSE cache."""
+    leads = [int(value) for value in lead_values]
+    if not leads:
+        raise ValueError("lead_values must not be empty")
+    attrs = expected_skill_cache_attrs(
+        source=source,
+        source_data_identity=source_data_identity,
+        case_prefix=case_prefix,
+        variable=variable,
+        init_month=init_month,
+        verification_years=verification_years,
+        # Direct RMSE has no drift climatology. A neutral pair keeps the shared
+        # cache contract explicit without pretending a climatology was used.
+        climatology_years=(0, 0),
+        observation_product=observation_product,
+        observation_variable=observation_variable,
+        observation_data_identity=observation_data_identity,
+        target_grid=target_grid,
+        regridding_method=regridding_method,
+        ensemble_member_count=ensemble_member_count,
+        lead_start=min(leads),
+        lead_end=max(leads),
+        detrend=False,
+        unit_conversion_version=unit_conversion_version,
+        cache_kind="direct_rmse",
+    )
+    attrs.update(
+        direct_rmse_calculation_version=DIRECT_RMSE_CALCULATION_VERSION,
+        obs_alignment_version=OBS_ALIGNMENT_VERSION,
+        lead_values=",".join(str(value) for value in leads),
+        ensemble_reduction="mean_M_before_error",
+        verification_reduction="sqrt_mean_squared_error_over_valid_Y",
+    )
+    return attrs
+
+
+def direct_rmse_cache_path(
+    *,
+    root,
+    source,
+    component,
+    variable,
+    init_month,
+    verification_years,
+    expected_attrs: Mapping,
+):
+    """Return a readable provenance-hashed path for one direct-RMSE result."""
+    directory = leadtime_acc_dir(
+        source, "comparison", component, "direct_rmse", variable, root=root
+    )
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / (
+        f"{safe_model_name(source)}_{variable}_direct_rmse_init{int(init_month):02d}_"
+        f"years_{compact_year_tag(verification_years)}_"
+        f"{provenance_digest(dict(expected_attrs), length=12)}.nc"
+    )
+
+
+def rmse_comparison_fraction(left_rmse, right_rmse, *, iteration_dim="iteration"):
+    """Return P(left RMSE < right RMSE), excluding non-finite pairs."""
+    left_rmse, right_rmse = xr.broadcast(left_rmse, right_rmse)
+    valid = left_rmse.notnull() & right_rmse.notnull()
+    wins = (left_rmse < right_rmse).where(valid)
+    if iteration_dim not in wins.dims:
+        raise ValueError(f"comparison requires {iteration_dim!r} dimension")
+    return wins.mean(iteration_dim, skipna=True).where(valid.any(iteration_dim))
+
+
+def build_rmse_significance_dataset(
+    prob_left_lower,
+    *,
+    alpha,
+    left_model,
+    right_model,
+    n_iterations,
+    matched_ensemble_size,
+    member_selection_checksum=None,
+):
+    """Build deterministic two-sided RMSE comparison and robustness fields."""
+    probability = prob_left_lower.astype("float32")
+    valid = probability.notnull()
+    p_two = (2.0 * xr.apply_ufunc(np.minimum, probability, 1.0 - probability))
+    dataset = xr.Dataset(
+        {
+            "prob_left_lower_rmse": probability,
+            "p_two_sided_resampling": p_two.clip(0.0, 1.0).where(valid).astype("float32"),
+            "left_better": (probability >= 1.0 - alpha).where(valid).astype("float32"),
+            "right_better": (probability <= alpha).where(valid).astype("float32"),
+        }
+    )
+    dataset.attrs.update(
+        rmse_significance_version=RMSE_SIGNIFICANCE_VERSION,
+        alpha=float(alpha),
+        left_model=str(left_model),
+        right_model=str(right_model),
+        n_iterations=int(n_iterations),
+        matched_ensemble_size=int(matched_ensemble_size),
+        interpretation="Finite-ensemble sensitivity with verification years held fixed",
+    )
+    if member_selection_checksum is not None:
+        dataset.attrs["member_selection_checksum"] = str(member_selection_checksum)
+    return dataset
+
+
+def valid_area_weighted_fraction(
+    mask,
+    *,
+    valid,
+    area=None,
+    latitude_limit=None,
+):
+    """Return true-area/valid-area, never total-domain area.
+
+    Missing model/observation pairs must be false in neither the numerator nor
+    denominator. ``valid`` therefore stays an explicit required argument.
+    """
+    mask, valid = xr.align(mask, valid, join="exact")
+    valid = valid.fillna(False).astype(bool)
+    if latitude_limit is not None:
+        valid = valid & (abs(mask["lat"]) < float(latitude_limit))
+    if area is None:
+        area = xr.DataArray(
+            np.cos(np.deg2rad(mask["lat"])),
+            dims="lat",
+            coords={"lat": mask["lat"]},
+        )
+    area, _ = xr.broadcast(area, mask)
+    denominator = area.where(valid, 0).sum()
+    numerator = area.where(valid & mask.fillna(False).astype(bool), 0).sum()
+    denominator_value = float(denominator)
+    return float(numerator / denominator) if denominator_value > 0 else np.nan
+
+
 def area_weighted_mask_fraction(mask):
     """Return the cosine-latitude-weighted fraction where a mask is true."""
-    weights = xr.DataArray(
-        np.cos(np.deg2rad(mask["lat"])),
-        dims="lat",
-        coords={"lat": mask["lat"]},
-    )
-    valid = mask.notnull()
-    numerator = xr.where(mask.fillna(False), weights, 0).sum()
-    denominator = xr.where(valid, weights, 0).sum()
-    return float(numerator / denominator) if float(denominator) > 0 else np.nan
-
-
-def convert_kelvin_to_celsius(da):
-    """Convert K to degC while preserving lazy evaluation."""
-    da = da - 273.15
-    da.attrs["units"] = r"$^\circ$C"
-    return da
-
-
-def convert_precip_mps_to_mmday(da):
-    """Convert precipitation from m/s to mm/day while preserving lazy evaluation."""
-    da = da * (1000.0 * 86400.0)
-    da.attrs["units"] = "mm/day"
-    return da
-
-
-def convert_pa_to_hpa(da):
-    """Convert pressure from Pa to hPa while preserving lazy evaluation."""
-    da = da * 1.0e-2
-    da.attrs["units"] = "hPa"
-    return da
-
-
-def no_unit_conversion(da, units=None):
-    """Return a lazy copy and optionally standardize the unit attribute."""
-    da = da * 1.0
-    if units is not None:
-        da.attrs["units"] = units
-    return da
+    return valid_area_weighted_fraction(mask, valid=mask.notnull())
 
 
 def normalize_y_to_year(obj, require_y=False):
@@ -631,6 +772,7 @@ def finite_ensemble_rmse_comparison_memorysafe(
     n_iterations=100,
     seed=42,
     alpha=0.1,
+    member_indices=None,
 ):
     """Compare fixed smaller-ensemble RMSE with resampled larger-ensemble RMSE.
 
@@ -638,7 +780,6 @@ def finite_ensemble_rmse_comparison_memorysafe(
     smaller ensemble fixed and repeatedly sample the larger ensemble down to
     the smaller member count without replacement. Years are not resampled.
     """
-    rng = np.random.default_rng(seed)
     left_err, right_err = xr.align(
         left_err, right_err, join="inner", exclude={"M"}
     )
@@ -653,6 +794,26 @@ def finite_ensemble_rmse_comparison_memorysafe(
 
     larger_side = "left" if left_nmem > right_nmem else "right"
     matched_nmem = min(left_nmem, right_nmem)
+    larger_nmem = max(left_nmem, right_nmem)
+    if member_indices is None:
+        member_indices = generate_member_indices(
+            population_size=larger_nmem,
+            sample_size=matched_nmem,
+            iterations=n_iterations,
+            seed=seed,
+        )
+    member_indices = np.asarray(member_indices, dtype=np.int32)
+    if member_indices.shape != (int(n_iterations), int(matched_nmem)):
+        raise ValueError(
+            "member_indices shape must equal "
+            f"({int(n_iterations)}, {int(matched_nmem)}); got {member_indices.shape}"
+        )
+    if member_indices.size and (
+        member_indices.min() < 0 or member_indices.max() >= larger_nmem
+    ):
+        raise ValueError("member_indices contains an out-of-range member")
+    if any(np.unique(row).size != row.size for row in member_indices):
+        raise ValueError("member_indices must sample without replacement")
     common_leads = np.intersect1d(left_err["L"].values, right_err["L"].values)
     left_err = left_err.sel(L=common_leads)
     right_err = right_err.sel(L=common_leads)
@@ -690,8 +851,7 @@ def finite_ensemble_rmse_comparison_memorysafe(
         )
 
         sampled_rmse = []
-        for _ in range(n_iterations):
-            members = rng.choice(larger.shape[1], matched_nmem, replace=False)
+        for members in member_indices:
             sampled_mean = larger[:, members].mean(axis=1)
             sampled_rmse.append(
                 np.sqrt(_nanmean_preserve_missing(sampled_mean ** 2, axis=0))
@@ -744,6 +904,8 @@ def finite_ensemble_rmse_comparison_memorysafe(
         matched_ensemble_size=int(matched_nmem),
         n_iterations=int(n_iterations),
         alpha=float(alpha),
+        random_seed=int(seed),
+        member_selection_checksum=member_indices_checksum(member_indices),
         interpretation=(
             "Finite-ensemble sensitivity following the ACC comparison method; "
             "limited verification years remain a major uncertainty"

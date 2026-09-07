@@ -1,7 +1,10 @@
 import numpy as np
 import pytest
+import xarray as xr
 
 from esp_lab.leadtime_skill_cache import (
+    SkillComparisonCacheLayout,
+    acc_superiority_fraction,
     build_member_selection_dataset,
     expected_skill_cache_attrs,
     file_inventory_digest,
@@ -180,3 +183,37 @@ def test_verification_year_helpers_accept_integer_and_datetime_coordinates():
     assert verification_year_token(years) == "y2000-2001_ny2"
     with pytest.raises(ValueError, match="verification_years"):
         verification_year_token([])
+
+
+def test_comparison_cache_layout_preserves_readable_provenance(tmp_path):
+    layout = SkillComparisonCacheLayout(
+        root=tmp_path,
+        component="atm",
+        variable="PRECT",
+        climatology_years=(1980, 2000),
+        detrend=True,
+        mode="final",
+        iterations=100,
+        random_seed=42,
+    )
+    smyle, e3sm, fraction = layout.result_paths(
+        "JRA55_FOSIRL", 11, 10, np.arange(1980, 2004)
+    )
+
+    assert "y1980" not in smyle.name
+    assert "1980-2003_ny24" in smyle.name
+    assert "iter100_seed42" in smyle.name
+    assert "fixed_skill_detrend_1980-2003_ny24" in e3sm.name
+    assert fraction.parent.name == "PRECT"
+    assert layout.member_selection_path(smyle).name.endswith("_member_indices.nc")
+
+
+def test_acc_superiority_fraction_ignores_missing_pairs():
+    smyle = xr.DataArray(
+        [[0.8, np.nan], [0.4, 0.7]], dims=("iteration", "point")
+    )
+    e3sm = xr.DataArray([0.5, 0.6], dims="point")
+
+    result = acc_superiority_fraction(smyle, e3sm)
+
+    np.testing.assert_allclose(result, [0.5, 1.0])

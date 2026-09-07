@@ -23,6 +23,7 @@ from . import data_access_e3sm
 from . import data_access_cesm_smyle
 from . import diagnostics
 from . import land_skill
+from . import land_prepared_skill
 from . import psl_skill
 from . import paths
 from .data_access_smyle import get_monthly_data as get_monthly_data_smyle
@@ -39,6 +40,7 @@ __all__ = [
     "data_access_cesm_smyle",
     "diagnostics",
     "land_skill",
+    "land_prepared_skill",
     "psl_skill",
     "paths",
     "get_monthly_data_smyle",

@@ -4,7 +4,9 @@ import time
 import numpy as np
 import pytest
 import xarray as xr
+import cftime
 
+from esp_lab.leadtime_validation import check_remove_drift_sample
 from esp_lab.utils.netcdf_utils import (
     atomic_to_netcdf,
     cleanup_netcdf_temp_files,
@@ -72,3 +74,28 @@ def test_unit_conversions_preserve_lazy_xarray_behavior():
     assert convert_precip_mps_to_mmday(precip).attrs["units"] == "mm/day"
     assert convert_pa_to_hpa(pressure).attrs["units"] == "hPa"
     assert no_unit_conversion(kelvin, units="standardized").attrs["units"] == "standardized"
+
+
+def test_sampled_drift_validation_accepts_consistent_anomaly(capsys):
+    data = xr.DataArray(
+        np.arange(8.0).reshape(2, 2, 2),
+        dims=("Y", "M", "L"),
+        coords={"Y": [2000, 2001], "M": [0, 1], "L": [1, 2]},
+    )
+    verification_time = xr.DataArray(
+        [
+            [cftime.DatetimeNoLeap(2000, 1, 15), cftime.DatetimeNoLeap(2000, 4, 15)],
+            [cftime.DatetimeNoLeap(2001, 1, 15), cftime.DatetimeNoLeap(2001, 4, 15)],
+        ],
+        dims=("Y", "L"),
+        coords={"Y": data.Y, "L": data.L},
+    )
+    climatology = data.mean(("Y", "M"))
+    anomaly = data - climatology
+
+    check_remove_drift_sample(
+        data, verification_time, anomaly, climatology, 2000, 2001,
+        sample={"Y": 0, "M": 0, "L": 0}, name="test",
+    )
+
+    assert "sample reconstruction PASS" in capsys.readouterr().out

@@ -2,9 +2,13 @@ import numpy as np
 import xarray as xr
 
 from workflows.leadtime_skill.rmse_comparison import (
+    absolute_rmse_from_skill,
     area_weighted_mask_fraction,
     bootstrap_rmse_diff_matched_ensemble_memorysafe,
+    build_rmse_significance_dataset,
     compact_year_tag,
+    direct_rmse_cache_attrs,
+    direct_rmse_cache_path,
     direct_rmse_difference,
     finite_ensemble_rmse_comparison_memorysafe,
     lead_label,
@@ -13,6 +17,7 @@ from workflows.leadtime_skill.rmse_comparison import (
     normalize_direct_rmse_leads,
     require_available_lead,
     safe_model_name,
+    valid_area_weighted_fraction,
 )
 
 
@@ -52,6 +57,90 @@ def test_direct_rmse_difference_and_weighted_fraction():
     np.testing.assert_array_equal(result["rmse_diff"], [[[-1.0], [1.0]]])
     np.testing.assert_array_equal(result["rmse_ratio"], [[[0.5], [1.5]]])
     assert np.isclose(area_weighted_mask_fraction(mask), 2.0 / 3.0)
+
+
+def test_valid_area_fraction_excludes_missing_domain_area():
+    mask = xr.DataArray(
+        [[True], [False]],
+        dims=("lat", "lon"),
+        coords={"lat": [0.0, 60.0], "lon": [0.0]},
+    )
+    valid = xr.DataArray(
+        [[True], [False]],
+        dims=("lat", "lon"),
+        coords=mask.coords,
+    )
+
+    assert valid_area_weighted_fraction(mask, valid=valid) == 1.0
+
+
+def test_absolute_rmse_and_significance_preserve_missing_cells():
+    skill = xr.Dataset(
+        {
+            "rmse": ("point", [0.5, np.nan]),
+            "sig_obs": ("point", [4.0, 2.0]),
+        }
+    )
+    absolute = absolute_rmse_from_skill(skill, units="hPa")
+    probability = xr.DataArray([1.0, np.nan], dims="point")
+    significance = build_rmse_significance_dataset(
+        probability,
+        alpha=0.1,
+        left_model="E3SM",
+        right_model="CESM-SMYLE",
+        n_iterations=100,
+        matched_ensemble_size=10,
+        member_selection_checksum="abc",
+    )
+
+    np.testing.assert_allclose(absolute.values[0], 2.0)
+    assert absolute.attrs["units"] == "hPa"
+    assert significance["left_better"].values[0] == 1
+    assert np.isnan(significance["left_better"].values[1])
+    assert significance.attrs["member_selection_checksum"] == "abc"
+
+
+def test_direct_rmse_cache_contract_and_name_are_provenance_aware(tmp_path):
+    kwargs = dict(
+        source="E3SM-FOSIRL",
+        source_data_identity="inventory-sha256:model",
+        case_prefix="case-prefix",
+        variable="PRECT",
+        init_month=11,
+        verification_years=[1980, 1981],
+        observation_product="GPCP",
+        observation_variable="PRECT",
+        observation_data_identity="inventory-sha256:obs",
+        target_grid="latlon_1x1",
+        regridding_method="conservative",
+        ensemble_member_count=10,
+        unit_conversion_version="precip_v1",
+    )
+    attrs = direct_rmse_cache_attrs(**kwargs)
+    path = direct_rmse_cache_path(
+        root=tmp_path,
+        source=kwargs["source"],
+        component="atm",
+        variable=kwargs["variable"],
+        init_month=kwargs["init_month"],
+        verification_years=kwargs["verification_years"],
+        expected_attrs=attrs,
+    )
+
+    assert attrs["cache_kind"] == "direct_rmse"
+    assert attrs["obs_alignment_version"]
+    assert "init11_years_1980-1981_ny2" in path.name
+    changed = dict(attrs, observation_data_identity="inventory-sha256:new")
+    changed_path = direct_rmse_cache_path(
+        root=tmp_path,
+        source=kwargs["source"],
+        component="atm",
+        variable=kwargs["variable"],
+        init_month=kwargs["init_month"],
+        verification_years=kwargs["verification_years"],
+        expected_attrs=changed,
+    )
+    assert changed_path != path
 
 
 def test_make_obs_like_model_leads_uses_season_verification_month():
@@ -196,6 +285,31 @@ def test_finite_ensemble_comparison_resamples_only_larger_ensemble():
     assert result.attrs["matched_ensemble_size"] == 2
     assert result["rmse_diff"].item() == -1.0
     assert result["prob_left_lower_rmse"].item() == 1.0
+
+
+def test_finite_ensemble_accepts_audited_member_selections():
+    coords = {"Y": [1980, 1981], "L": [3], "lat": [0.0], "lon": [0.0]}
+    left = xr.DataArray(
+        np.ones((2, 1, 2, 1, 1)),
+        dims=("Y", "L", "M", "lat", "lon"),
+        coords={**coords, "M": [0, 1]},
+    )
+    right = xr.DataArray(
+        np.full((2, 1, 4, 1, 1), 2.0),
+        dims=("Y", "L", "M", "lat", "lon"),
+        coords={**coords, "M": [0, 1, 2, 3]},
+    )
+    selections = np.array([[0, 1], [2, 3]], dtype=np.int32)
+
+    first = finite_ensemble_rmse_comparison_memorysafe(
+        left, right, n_iterations=2, seed=7, member_indices=selections
+    )
+    second = finite_ensemble_rmse_comparison_memorysafe(
+        left, right, n_iterations=2, seed=999, member_indices=selections
+    )
+
+    xr.testing.assert_equal(first, second)
+    assert first.attrs["member_selection_checksum"]
 
 
 def test_resampling_preserves_an_all_missing_boundary_lead():

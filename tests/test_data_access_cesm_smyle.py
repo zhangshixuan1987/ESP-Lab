@@ -70,3 +70,17 @@ def test_ensure_verification_time_repairs_scrambled_benchmark_dates():
     assert smyle.verification_time_mismatch_count(result, init_month=11) == 0
     assert result.time.isel(Y=0, L=0).item() == cftime.DatetimeNoLeap(1981, 1, 15)
     assert result.attrs["verification_time_repaired_count"] == 6
+
+
+def test_benchmark_path_resolves_standard_diagnostic_layout(tmp_path):
+    filename = smyle.benchmark_filename("TREFHT", 11)
+    expected = tmp_path / "leadtime_acc" / "inputs" / "atm" / "TREFHT" / filename
+    expected.parent.mkdir(parents=True)
+    expected.touch()
+
+    assert smyle.benchmark_path("TREFHT", 11, tmp_path) == expected
+
+
+def test_benchmark_path_reports_all_candidates_when_missing(tmp_path):
+    with pytest.raises(FileNotFoundError, match="Benchmark file not found"):
+        smyle.benchmark_path("TREFHT", 11, tmp_path)

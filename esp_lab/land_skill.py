@@ -1,7 +1,7 @@
 """Lead-time ACC skill utilities for E3SM land variables.
 
-This module extracts the reusable scientific workflow from
-``jupyter/1a_refactor_leadtime_acc_skill_map.ipynb`` for land-model fields.
+This module supports ``jupyter/1b_refactor_lnd_leadtime_acc_skill_map.ipynb``
+using the execution and cache contracts established by the atmospheric workflow.
 It deliberately leaves the observational product configurable: snow water
 equivalent, total water storage, and soil moisture generally require different
 reference products and masks.
@@ -9,6 +9,7 @@ reference products and masks.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
@@ -16,7 +17,20 @@ import numpy as np
 import xarray as xr
 
 from . import data_access_e3sm, stats
+from .leadtime_skill_cache import canonical_json, provenance_digest
+from .prepared_skill import cache_status
 from .utils import calendar_utils
+
+
+_LAND_SKILL_CACHE_SCHEMA_VERSION = "1"
+LAND_SKILL_REQUIRED_VARIABLES = (
+    "corr",
+    "pval",
+    "sample_count",
+    "valid_sample_count",
+    "target_year_start",
+    "target_year_end",
+)
 
 
 @dataclass(frozen=True)
@@ -45,6 +59,203 @@ LAND_VARIABLES: Mapping[str, LandVariableSpec] = {
         vertical_dim="levgrnd",
     ),
 }
+
+
+def land_depth_token(
+    field: str,
+    depth_range_m: tuple[float, float] | None = None,
+) -> str:
+    """Return a readable filename token for a land-field depth treatment."""
+    if field.upper() != "H2OSOI":
+        return ""
+    if depth_range_m is None or len(depth_range_m) != 2:
+        raise ValueError("H2OSOI requires depth_range_m=(top, bottom)")
+    top, bottom = map(float, depth_range_m)
+    if top < 0 or bottom <= top:
+        raise ValueError("depth_range_m must satisfy 0 <= top < bottom")
+    return f"depth{top:g}-{bottom:g}m_integrated_mm"
+
+
+def staged_land_input_path(
+    root,
+    source: str,
+    field: str,
+    grid_tag: str,
+    *,
+    init_month: int | None = None,
+    depth_range_m: tuple[float, float] | None = None,
+):
+    """Construct one analysis-ready staged land-input path."""
+    from .paths import leadtime_acc_dir
+
+    field = field.upper()
+    source_token = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(source)).strip("_")
+    if not source_token:
+        raise ValueError("source must contain a filename-safe character")
+    depth = land_depth_token(field, depth_range_m)
+    parts = [source_token]
+    if init_month is not None:
+        if not 1 <= int(init_month) <= 12:
+            raise ValueError("init_month must be between 1 and 12")
+        parts[-1] = f"{source_token}{int(init_month):02d}"
+    parts.append(field)
+    if depth:
+        parts.append(depth)
+    grid_token = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(grid_tag)).strip("_")
+    if not grid_token:
+        raise ValueError("grid_tag must contain a filename-safe character")
+    parts.extend(("seasonal", grid_token))
+    directory = leadtime_acc_dir(
+        source_token, "inputs", "land", field, root=root
+    )
+    return directory / ("_".join(parts) + ".nc")
+
+
+def expected_staged_land_input_attrs(field: str, source_kind: str, grid_tag: str):
+    """Return the required contract for one staged land input."""
+    return {
+        "processing_stage": "analysis_ready_land_acc_input_v2",
+        "field": field.upper(),
+        "source_kind": source_kind,
+        "horizontal_grid": grid_tag,
+        "seasonal_convention": "centered_3month_DJF_MAM_JJA_SON",
+    }
+
+
+def validate_staged_land_input(da, path, source_kind: str, grid_tag: str):
+    """Validate the preprocessing contract attached to a staged input."""
+    expected = expected_staged_land_input_attrs(da.name, source_kind, grid_tag)
+    mismatches = {
+        key: (da.attrs.get(key), value)
+        for key, value in expected.items()
+        if da.attrs.get(key) != value
+    }
+    if mismatches:
+        raise ValueError(f"Input contract mismatch in {path}: {mismatches}")
+
+
+def normalized_target_years(target_years_by_lead: Mapping) -> dict[int, list[int]]:
+    """Normalize lead-dependent verification cohorts for stable provenance."""
+    normalized = {
+        int(lead): [int(year) for year in years]
+        for lead, years in target_years_by_lead.items()
+    }
+    if not normalized or any(not years for years in normalized.values()):
+        raise ValueError("each lead must have at least one target year")
+    return dict(sorted(normalized.items()))
+
+
+def land_cohort_token(target_years_by_lead: Mapping) -> str:
+    """Return a readable token plus digest for exact lead-dependent cohorts."""
+    cohorts = normalized_target_years(target_years_by_lead)
+    all_years = [year for years in cohorts.values() for year in years]
+    sample_counts = {len(years) for years in cohorts.values()}
+    count_token = (
+        f"n{next(iter(sample_counts))}perlead"
+        if len(sample_counts) == 1
+        else f"n{min(sample_counts)}-{max(sample_counts)}perlead"
+    )
+    year_token = f"y{min(all_years)}-{max(all_years)}_{count_token}"
+    lead_token = f"l{min(cohorts)}-{max(cohorts)}_nl{len(cohorts)}"
+    digest = provenance_digest(cohorts, length=10)
+    return f"{year_token}_{lead_token}_c{digest}"
+
+
+def expected_land_skill_attrs(
+    *,
+    field: str,
+    init_month: int,
+    climatology_years: tuple[int, int],
+    initialization_years: tuple[int, int],
+    ensemble_members: Sequence[str],
+    target_years_by_lead: Mapping,
+    reference_product: str,
+    reference_data_identity: str,
+    model_data_identity: str,
+    target_grid: str,
+    detrend: bool,
+    evaluation_protocol: str,
+    depth_range_m: tuple[float, float] | None = None,
+) -> dict[str, str | int]:
+    """Build complete expected metadata for a land ACC skill cache."""
+    cohorts = normalized_target_years(target_years_by_lead)
+    clim_start, clim_end = map(int, climatology_years)
+    depth = land_depth_token(field, depth_range_m)
+    return {
+        "land_skill_cache_schema": _LAND_SKILL_CACHE_SCHEMA_VERSION,
+        "cache_kind": "land_leadtime_acc_skill",
+        "field": field.upper(),
+        "initialization_month": int(init_month),
+        "initialization_years": f"{int(initialization_years[0])}-{int(initialization_years[1])}",
+        "climatology": f"{clim_start}-{clim_end}",
+        "detrend": str(bool(detrend)).lower(),
+        "ensemble_members": ",".join(map(str, ensemble_members)),
+        "ensemble_member_count": len(ensemble_members),
+        "reference_product": reference_product,
+        "reference_data_identity": reference_data_identity,
+        "model_data_identity": model_data_identity,
+        "target_grid": target_grid,
+        "evaluation_protocol": evaluation_protocol,
+        "depth_treatment": depth or "not_applicable",
+        "target_years_by_lead": canonical_json(cohorts),
+        "target_years_digest": provenance_digest(cohorts, length=32),
+        "model_climatology_sample_count_by_lead": ",".join(
+            f"{lead}:{sum(clim_start <= year <= clim_end for year in years)}"
+            for lead, years in cohorts.items()
+        ),
+    }
+
+
+def validate_land_skill_dataset(
+    skill: xr.Dataset,
+    expected_attrs: Mapping,
+    target_years_by_lead: Mapping,
+) -> None:
+    """Validate land-skill metadata, variables, leads, and sample cohorts."""
+    missing = [name for name in LAND_SKILL_REQUIRED_VARIABLES if name not in skill]
+    if missing:
+        raise ValueError(f"cached skill is missing variables: {missing}")
+    cohorts = normalized_target_years(target_years_by_lead)
+    expected_leads = list(cohorts)
+    actual_leads = list(map(int, skill.L.values))
+    if actual_leads != expected_leads:
+        raise ValueError(f"cached leads {actual_leads} != expected {expected_leads}")
+    mismatches = {
+        key: (skill.attrs.get(key), value)
+        for key, value in expected_attrs.items()
+        if skill.attrs.get(key) != value
+    }
+    if mismatches:
+        raise ValueError(f"cached metadata mismatch: {mismatches}")
+    for lead, years in cohorts.items():
+        expected = (len(years), min(years), max(years))
+        actual = (
+            int(skill.sample_count.sel(L=lead)),
+            int(skill.target_year_start.sel(L=lead)),
+            int(skill.target_year_end.sel(L=lead)),
+        )
+        if actual != expected:
+            raise ValueError(
+                f"cached cohort mismatch for init={expected_attrs['initialization_month']}, "
+                f"lead={lead}: {actual} != {expected}"
+            )
+
+
+def land_skill_cache_status(path, expected_attrs: Mapping, target_years_by_lead: Mapping):
+    """Return compatibility status for one saved land ACC skill product."""
+    compatible, reason = cache_status(
+        path,
+        expected_attrs=expected_attrs,
+        required_variables=LAND_SKILL_REQUIRED_VARIABLES,
+    )
+    if not compatible:
+        return compatible, reason
+    try:
+        with xr.open_dataset(path) as dataset:
+            validate_land_skill_dataset(dataset, expected_attrs, target_years_by_lead)
+    except (KeyError, TypeError, ValueError, OSError) as exc:
+        return False, str(exc)
+    return True, "compatible"
 
 
 def elm_soil_layer_bounds(depths: xr.DataArray) -> xr.DataArray:
@@ -968,6 +1179,7 @@ def plot_land_acc_maps(
 
 
 __all__ = [
+    "LAND_SKILL_REQUIRED_VARIABLES",
     "LAND_VARIABLES",
     "LandVariableSpec",
     "compute_land_acc_skill",
@@ -977,6 +1189,11 @@ __all__ = [
     "depth_weighted_soil_moisture",
     "elm_soil_layer_bounds",
     "get_land_variable_spec",
+    "expected_land_skill_attrs",
+    "expected_staged_land_input_attrs",
+    "land_cohort_token",
+    "land_depth_token",
+    "land_skill_cache_status",
     "load_e3sm_land_monthly",
     "mask_c3s_swe_flags",
     "monthly_land_hindcast_change_dataset",
@@ -986,6 +1203,9 @@ __all__ = [
     "retain_reference_supported_leads",
     "seasonal_land_hindcast",
     "seasonal_land_hindcast_dataset",
+    "staged_land_input_path",
+    "validate_land_skill_dataset",
+    "validate_staged_land_input",
     "retain_valid_seasonal_leads",
     "validate_land_reference_compatibility",
 ]

@@ -860,6 +860,33 @@ def benchmark_filename(
     return f"BSMYLE{init_month:02d}_{field}_N{nens:02d}_M{nlead:02d}_{freq}.nc"
 
 
+def benchmark_path(
+    field: str,
+    init_month: int,
+    benchmark_dir: str | Path,
+    nens: int = 20,
+    nlead: int = 24,
+    freq: str = "seas",
+) -> Path:
+    """Resolve the benchmark file that :func:`load_benchmark` will open."""
+    fname = benchmark_filename(field, init_month, nens=nens, nlead=nlead, freq=freq)
+    benchmark_root = Path(benchmark_dir)
+    candidates = [
+        benchmark_root / "leadtime_acc" / "inputs" / "atm" / field / fname,
+        benchmark_root / "leadtime_acc" / "inputs" / field / fname,
+        benchmark_root / fname,
+    ]
+    fpath = next((path for path in candidates if path.exists()), candidates[0])
+    if not fpath.exists():
+        raise FileNotFoundError(
+            "Benchmark file not found. Checked:\n"
+            + "\n".join(f"  {path}" for path in candidates)
+            + "\n"
+            "Run scripts/run_process_cesm_smyle_benchmark.py to generate it."
+        )
+    return fpath
+
+
 def load_benchmark(
     field: str,
     init_month: int,
@@ -914,21 +941,9 @@ def load_benchmark(
     ... )
     >>> print(ds)
     """
-    fname = benchmark_filename(field, init_month, nens=nens, nlead=nlead, freq=freq)
-    benchmark_root = Path(benchmark_dir)
-    candidates = [
-        benchmark_root / "leadtime_acc" / "inputs" / "atm" / field / fname,
-        benchmark_root / "leadtime_acc" / "inputs" / field / fname,
-        benchmark_root / fname,
-    ]
-    fpath = next((path for path in candidates if path.exists()), candidates[0])
-    if not fpath.exists():
-        raise FileNotFoundError(
-            "Benchmark file not found. Checked:\n"
-            + "\n".join(f"  {path}" for path in candidates)
-            + "\n"
-            "Run scripts/run_process_cesm_smyle_benchmark.py to generate it."
-        )
+    fpath = benchmark_path(
+        field, init_month, benchmark_dir, nens=nens, nlead=nlead, freq=freq
+    )
     if chunks is None:
         # f09_g17 grid is 192 lat × 288 lon; chunk at half-grid
         chunks = {"Y": 3, "L": -1, "M": 2, "lat": 96, "lon": 144}

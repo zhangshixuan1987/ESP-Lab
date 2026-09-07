@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import cftime
 import numpy as np
 import pandas as pd
@@ -5,6 +8,13 @@ import pytest
 import xarray as xr
 
 from esp_lab import land_skill
+
+
+LAND_NOTEBOOK = (
+    Path(__file__).parents[1]
+    / "jupyter"
+    / "1b_refactor_lnd_leadtime_acc_skill_map.ipynb"
+)
 
 
 def _land_dataset():
@@ -293,6 +303,106 @@ def test_validate_grid_rejects_different_coordinate_values():
 
     with pytest.raises(ValueError, match="lat coordinates"):
         land_skill.validate_land_reference_compatibility(forecast, reference)
+
+
+def test_staged_land_input_path_preserves_source_identity(tmp_path):
+    path = land_skill.staged_land_input_path(
+        tmp_path,
+        "JRA55_FOSIRL",
+        "H2OSOI",
+        "1x1deg_cell_centered",
+        init_month=5,
+        depth_range_m=(0.0, 1.6),
+    )
+
+    assert path.parent == (
+        tmp_path / "JRA55_FOSIRL" / "leadtime_acc" / "inputs" / "land" / "H2OSOI"
+    )
+    assert path.name == (
+        "JRA55_FOSIRL05_H2OSOI_depth0-1.6m_integrated_mm_"
+        "seasonal_1x1deg_cell_centered.nc"
+    )
+
+
+def test_land_cohort_token_changes_when_one_lead_cohort_changes():
+    first = {3: [1980, 1981], 6: [1980, 1981]}
+    second = {3: [1980, 1981], 6: [1980, 1982]}
+
+    assert land_skill.land_cohort_token(first) != land_skill.land_cohort_token(second)
+    assert land_skill.land_cohort_token(first).startswith(
+        "y1980-1981_n2perlead_l3-6_nl2"
+    )
+
+
+def test_validate_land_skill_dataset_checks_exact_provenance_and_cohorts():
+    cohorts = {3: [1980, 1981], 6: [1981, 1982]}
+    expected_attrs = land_skill.expected_land_skill_attrs(
+        field="H2OSNO",
+        init_month=11,
+        climatology_years=(1981, 2010),
+        initialization_years=(1980, 2018),
+        ensemble_members=("EN00", "EN01"),
+        target_years_by_lead=cohorts,
+        reference_product="C3S_SWE",
+        reference_data_identity="sha256:reference",
+        model_data_identity="sha256:model",
+        target_grid="1x1deg_cell_centered",
+        detrend=True,
+        evaluation_protocol="protocol",
+    )
+    skill = xr.Dataset(
+        {
+            "corr": ("L", [0.1, 0.2]),
+            "pval": ("L", [0.5, 0.4]),
+            "sample_count": ("L", [2, 2]),
+            "valid_sample_count": ("L", [2, 2]),
+            "target_year_start": ("L", [1980, 1981]),
+            "target_year_end": ("L", [1981, 1982]),
+        },
+        coords={"L": [3, 6]},
+        attrs=expected_attrs,
+    )
+
+    land_skill.validate_land_skill_dataset(skill, expected_attrs, cohorts)
+    skill.attrs["model_data_identity"] = "sha256:changed"
+    with pytest.raises(ValueError, match="metadata mismatch"):
+        land_skill.validate_land_skill_dataset(skill, expected_attrs, cohorts)
+
+
+def test_land_acc_notebook_uses_explicit_reusable_workflow_contract():
+    notebook = json.loads(LAND_NOTEBOOK.read_text())
+    source = "\n".join(
+        "".join(cell.get("source", []))
+        for cell in notebook["cells"]
+        if cell.get("cell_type") == "code"
+    )
+
+    assert "os.environ" not in source
+    assert "def " not in source
+    assert 'detrend=RUN["detrend"]' in source
+    assert "land_skill.land_skill_cache_status" in source
+    assert "land_prepared_skill.prepare_reference_cache" in source
+    assert "land_prepared_skill.prepare_model_cache" in source
+    assert '"auto", "rebuild", "require"' in source
+    assert '"inventory", "snapshot", "revision"' in source
+    assert "Snapshot mode requires prepared_land.mode='require'" in source
+    assert '"smoke_mode": False' in source
+    assert "restart_notebook_cluster" in source
+    assert "close_notebook_resources(globals())" in source
+    assert '"memory_limit": "4GB"' in source
+    assert "atomic_to_netcdf" in source
+    assert "/tmp/esp_lab_1b" not in source
+
+
+def test_all_land_notebook_cells_compile():
+    from IPython.core.interactiveshell import InteractiveShell
+
+    notebook = json.loads(LAND_NOTEBOOK.read_text())
+    shell = InteractiveShell.instance()
+    for index, cell in enumerate(notebook["cells"]):
+        if cell.get("cell_type") == "code":
+            transformed = shell.transform_cell("".join(cell.get("source", [])))
+            compile(transformed, f"land notebook cell {index}", "exec")
 
 
 def test_compute_land_acc_rejects_unselected_soil_levels():
