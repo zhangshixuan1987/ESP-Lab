@@ -209,11 +209,15 @@ def _open_member_sst(
         files,
         combine="by_coords",
         decode_times=False,
-        chunks={"S": 12, "L": -1, "Y": 181, "X": 360},
+        # Respect each archive's on-disk chunks when constructing read tasks.
+        chunks={},
         parallel=False,
     )
     ds = _decode_cf_time(ds, "S")
     ds = ds.sel(S=slice(_date_slice_start(data_start), _date_slice_end(data_end)))
+    # Split downstream masking/reduction tasks after opening, rather than
+    # splitting storage chunks into potentially repeated backend reads.
+    ds["sst"] = ds["sst"].chunk({"S": 1, "L": 3, "Y": 90, "X": 180})
     ds["sst"] = nmme_access.mask_invalid_sst(
         ds["sst"],
         apply_land_mask=apply_land_mask,
