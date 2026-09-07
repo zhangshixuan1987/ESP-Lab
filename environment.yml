@@ -3,19 +3,16 @@ channels:
   - conda-forge
   - nodefaults
 dependencies:
-  - pytest-cov
-  - pre-commit
   - bokeh
   - bottleneck
   - cartopy
-  - click=8.0  # click newer than 8.0 breaks dask 2021.9 (see https://github.com/dask/distributed/issues/6013)
   - climpred
   - cf-units
   - cftime
   - cmocean
-  - dask==2021.9
+  - dask
   - dask-jobqueue
-  - distributed==2021.9
+  - distributed
   - dask-labextension
   - eofs
   - esmpy
@@ -37,11 +34,13 @@ dependencies:
   - pandas
   - pint
   - pip
+  - pcmdi_metrics
   - pop-tools
   - pre-commit
   - pytest
   - pytest-cov
-  - python==3.8
+  - python>=3.10
+  - regionmask
   - scipy
   - seaborn
   - seawater
@@ -49,11 +48,11 @@ dependencies:
   - toolz
   - tqdm
   - watermark
-  - xarray>=0.19
-  - xesmf # xarray interface it ESMF tools
+  - xarray>=2023.1
+  - xesmf # xarray interface to ESMF tools
   - xgcm # General Circulation Model Postprocessing with xarray
   - xhistogram # Fast, flexible, label-aware histograms for numpy and xarray
   - xrft # fourier transforms for xarray data
-  - xskillscore>=0.0.23
+  - xskillscore>=0.0.24
   - zarr
   - ncar-jobqueue

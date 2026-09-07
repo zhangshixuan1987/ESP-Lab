@@ -137,3 +137,11 @@ docs/source/tutorials/dask-worker*
 
 # Vscode
 .vscode/
+
+# Vim swap files
+*.swp
+*.swo
+*.png
+notebooks/
+temp/
+trash/

@@ -1,0 +1,222 @@
+# =============================================================================
+# config.yaml
+# IC Analysis Workflow — User Configuration
+# =============================================================================
+# All user-facing knobs are defined here.  Workflow scripts read this file and
+# override individual values via command-line flags where appropriate.
+#
+# Environment-specific items to verify on NERSC:
+#   1. restart_root — base path containing BruteForce/ and JRA55-FOSIRL/
+#   2. output_root  — where to write output (local or shared NERSC FS)
+# =============================================================================
+
+# -----------------------------------------------------------------------
+# Experiment pair
+# -----------------------------------------------------------------------
+experiments:
+  ref_label: "BruteForce"
+  test_label: "JRA55-FOSIRL"
+
+  # Root directories that directly contain YYYY-MM-DD-00000/ sub-directories.
+  # Override with the ESP_LAB_IC_REF_ROOT / ESP_LAB_IC_TEST_ROOT env vars
+  # if the paths differ across machines.
+  ref_root: "${ESP_LAB_IC_REF_ROOT:/global/cfs/cdirs/e3sm/zhan391/v3.LR.S2D.ENSINT/BruteForce}"
+  test_root: "${ESP_LAB_IC_TEST_ROOT:/global/cfs/cdirs/e3sm/zhan391/v3.LR.S2D.ENSINT/JRA55-FOSIRL}"
+
+# -----------------------------------------------------------------------
+# Ensemble members (shared atmospheric IC)
+# -----------------------------------------------------------------------
+members:
+  - EN00
+  - EN01
+  - EN02
+  - EN03
+  - EN04
+  - EN05
+  - EN06
+  - EN07
+  - EN08
+  - EN09
+
+# -----------------------------------------------------------------------
+# Initialization calendar
+# -----------------------------------------------------------------------
+seasons:
+  - May
+  - November
+
+# Start dates in YYYY-MM-DD-00000 format.
+# May starts (month 05)
+may_start_dates:
+  - "1980-05-01-00000"
+  - "1981-05-01-00000"
+  - "1982-05-01-00000"
+  - "1983-05-01-00000"
+  - "1984-05-01-00000"
+  - "1985-05-01-00000"
+  - "1986-05-01-00000"
+  - "1987-05-01-00000"
+  - "1988-05-01-00000"
+  - "1989-05-01-00000"
+  - "1990-05-01-00000"
+  - "1991-05-01-00000"
+  - "1992-05-01-00000"
+  - "1993-05-01-00000"
+  - "1994-05-01-00000"
+  - "1995-05-01-00000"
+  - "1996-05-01-00000"
+  - "1997-05-01-00000"
+  - "1998-05-01-00000"
+  - "1999-05-01-00000"
+  - "2000-05-01-00000"
+  - "2001-05-01-00000"
+  - "2002-05-01-00000"
+  - "2003-05-01-00000"
+  - "2004-05-01-00000"
+  - "2005-05-01-00000"
+  - "2006-05-01-00000"
+  - "2007-05-01-00000"
+  - "2008-05-01-00000"
+  - "2009-05-01-00000"
+  - "2010-05-01-00000"
+  - "2011-05-01-00000"
+  - "2012-05-01-00000"
+  - "2013-05-01-00000"
+  - "2014-05-01-00000"
+
+# November starts (month 11)
+nov_start_dates:
+  - "1980-11-01-00000"
+  - "1981-11-01-00000"
+  - "1982-11-01-00000"
+  - "1983-11-01-00000"
+  - "1984-11-01-00000"
+  - "1985-11-01-00000"
+  - "1986-11-01-00000"
+  - "1987-11-01-00000"
+  - "1988-11-01-00000"
+  - "1989-11-01-00000"
+  - "1990-11-01-00000"
+  - "1991-11-01-00000"
+  - "1992-11-01-00000"
+  - "1993-11-01-00000"
+  - "1994-11-01-00000"
+  - "1995-11-01-00000"
+  - "1996-11-01-00000"
+  - "1997-11-01-00000"
+  - "1998-11-01-00000"
+  - "1999-11-01-00000"
+  - "2000-11-01-00000"
+  - "2001-11-01-00000"
+  - "2002-11-01-00000"
+  - "2003-11-01-00000"
+  - "2004-11-01-00000"
+  - "2005-11-01-00000"
+  - "2006-11-01-00000"
+  - "2007-11-01-00000"
+  - "2008-11-01-00000"
+  - "2009-11-01-00000"
+  - "2010-11-01-00000"
+  - "2011-11-01-00000"
+  - "2012-11-01-00000"
+  - "2013-11-01-00000"
+  - "2014-11-01-00000"
+
+# -----------------------------------------------------------------------
+# Pilot configuration
+# -----------------------------------------------------------------------
+pilot:
+  # Set pilot_only: true to process only pilot_date (fast validation).
+  # Set to false to process all start_dates in the campaign.
+  pilot_only: true
+  pilot_date: "1980-05-01-00000"
+
+# -----------------------------------------------------------------------
+# Component file patterns
+# -----------------------------------------------------------------------
+components:
+  atm:
+    file_glob: "*.eam.i.*.nc"
+    per_member: true
+    member_pattern: 'EN\d{2}'
+  lnd:
+    file_glob: "*.elm.r.*.nc"
+    per_member: false
+  ocn:
+    file_glob: "*.mpaso.rst.*.nc"
+    per_member: false
+  ice:
+    file_glob: "*.mpassi.rst.*.nc"
+    per_member: false
+  rof:
+    file_glob: "*.mosart.r.*.nc"
+    per_member: false
+  cpl:
+    file_glob: "*.cpl.r.*.nc"
+    per_member: false
+
+# -----------------------------------------------------------------------
+# Hashing policy
+# -----------------------------------------------------------------------
+hashing:
+  # Atmosphere: always hash all members (control check)
+  atm_hash_all_members: true
+  # Non-atmosphere: one hash per start date is sufficient for the first
+  # pass; set to true for a complete per-member audit
+  non_atm_hash_per_member: false
+
+# -----------------------------------------------------------------------
+# Output
+# -----------------------------------------------------------------------
+output:
+  # Explicit Perlmutter roots for durable diagnostics and public figures.
+  output_root: "/global/cfs/cdirs/e3sm/S2S2D/s2d_diag/multimodel/initial_conditions"
+  figure_outdir: "/global/cfs/cdirs/e3sm/www/zhan391/esp-lab_diag/initial_conditions"
+  subdirs:
+    manifests: "manifests"
+    file_comparison: "file_comparison"
+    variable_statistics: "variable_statistics"
+    maps: "maps"
+    profiles: "profiles"
+    campaign_summary: "campaign_summary"
+
+# -----------------------------------------------------------------------
+# NetCDF / Dask
+# -----------------------------------------------------------------------
+dask:
+  cluster_type: "local"   # local | slurm | none
+  workers: 8
+  cores: 4
+  memory: "16GB"
+  walltime: "04:00:00"
+
+netcdf:
+  chunks: {}   # empty = let xarray choose; or e.g. {nCells: 10000}
+  engine: "netcdf4"
+
+# -----------------------------------------------------------------------
+# Scientific diagnostic policy
+# -----------------------------------------------------------------------
+diagnostics:
+  # Used only when an absolute, unit-aware threshold is not supplied below.
+  # The fallback is scale-aware and makes the exceedance metric comparable,
+  # but campaign publications should use reviewed absolute thresholds.
+  default_threshold_sigma_fraction: 0.01
+  constant_field_threshold: 1.0e-10
+
+  # Exact variable-name overrides in native units.  Add entries only after
+  # confirming the restart-file units in Step 2.
+  meaningful_thresholds:
+    atm: {}
+    lnd: {}
+    ocn: {}
+    ice: {}
+    rof: {}
+
+  # Maps and profiles are selected by scientific relevance, not raw RMSE.
+  # Matching is case-insensitive substring matching to tolerate model naming.
+  fingerprint_keywords:
+    lnd: ["h2osoi", "soilwater", "h2osno", "swe", "t_soisno", "t_grnd"]
+    ocn: ["temperature", "salinity", "sst", "ssh"]
+    ice: ["iceconcentration", "aice", "icethickness", "vice", "snowvolume"]
+    rof: ["river", "storage", "volr", "h2o"]

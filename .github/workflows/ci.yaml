@@ -47,7 +47,7 @@ jobs:
           environment-file: ci/environment.yml
           mamba-version: '*'
           use-mamba: true
-          miniforge-variant: Mambaforge
+          miniforge-variant: Miniforge3
 
       - name: Install esp-lab
         run: |
