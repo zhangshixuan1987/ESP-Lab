@@ -21,7 +21,9 @@ def _notebook_source():
 def test_benchmark_notebook_has_a_bounded_restartable_driver():
     source = _notebook_source()
 
-    assert 'Path(esp_lab.__file__).resolve().parent.parent' in source
+    assert '(candidate / "esp_lab").is_dir()' in source
+    assert 'sys.path.insert(0, str(REPO_ROOT))' in source
+    assert 'import esp_lab' not in source
     assert "/global/homes/" not in source
     assert "restart_notebook_cluster" in source
     assert "close_notebook_resources(globals())" in source
