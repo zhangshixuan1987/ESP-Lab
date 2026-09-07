@@ -52,6 +52,11 @@ from esp_lab.diagnostics.sst_index import (
     derive_indices,
     required_base_regions,
 )
+from esp_lab.diagnostics.native_eli import (
+    DEFAULT_MPAS_MESH_FILE,
+    DEFAULT_RAW_SIMULATION_DIR,
+    process_native_eli_case,
+)
 
 LOG = logging.getLogger(__name__)
 SST_INDEX_OUTPUT_VERSION = 2
@@ -185,6 +190,22 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Apply reusable source-grid land masks to SST (default: enabled).",
+    )
+    p.add_argument(
+        "--eli-grid",
+        choices=["regridded", "native", "both"],
+        default="regridded",
+        help="ELI grid type for E3SM: regridded (default), native, or both.",
+    )
+    p.add_argument(
+        "--mesh-file",
+        default=str(DEFAULT_MPAS_MESH_FILE),
+        help=f"Path to MPAS-Ocean mesh file for native ELI. Default: {DEFAULT_MPAS_MESH_FILE}",
+    )
+    p.add_argument(
+        "--e3sm-raw-dir",
+        default=None,
+        help="Root directory for E3SM raw simulation history files (used if --eli-grid is native or both).",
     )
     return p.parse_args()
 
@@ -341,7 +362,7 @@ def process_e3sm(args: argparse.Namespace) -> None:
             dask_dict[f"{r}_mon"] = compute_regional_mean(ds["TS"], weights)
             dask_dict[f"{r}_seas"] = compute_regional_mean(ds_seas["TS"], weights)
             
-        if "ELI" in args.regions:
+        if "ELI" in args.regions and getattr(args, "eli_grid", "regridded") in {"regridded", "both"}:
             dask_dict["ELI_mon"] = compute_eli_latlon_sst(ds["TS"], oceanmask=oceanmask)
             dask_dict["ELI_seas"] = compute_eli_latlon_sst(ds_seas["TS"], oceanmask=oceanmask)
 
@@ -360,7 +381,7 @@ def process_e3sm(args: argparse.Namespace) -> None:
         
         all_mon = {**base_vals_mon, **derived_mon}
         all_seas = {**base_vals_seas, **derived_seas}
-        if "ELI" in args.regions:
+        if "ELI" in args.regions and getattr(args, "eli_grid", "regridded") in {"regridded", "both"}:
             all_mon["ELI"] = computed_vals["ELI_mon"]
             all_seas["ELI"] = computed_vals["ELI_seas"]
         
@@ -368,6 +389,8 @@ def process_e3sm(args: argparse.Namespace) -> None:
         index_encoding = {"sst": {"zlib": True, "complevel": 1}}
         for r in args.regions:
             if r == "ELI":
+                if getattr(args, "eli_grid", "regridded") not in {"regridded", "both"}:
+                    continue
                 outfile_mon = outdir / f"E3SMLE{m:02d}_ELI_N{args.e3sm_nens:02d}_M{args.nlead:02d}.nc"
                 if args.force or not _output_is_current(outfile_mon, args):
                     ds_out_mon = all_mon[r].to_dataset()
@@ -434,6 +457,32 @@ def process_e3sm(args: argparse.Namespace) -> None:
                     ds_out_seas["sst"].attrs["lonlat"] = str(REGIONS[r]["lonlat"])
                 _safe_to_netcdf(ds_out_seas, outfile_seas, encoding=index_encoding, sst_land_mask=args.sst_land_mask)
                 LOG.info(f"Saved E3SM seasonal index for {r}: {outfile_seas}")
+
+    if "ELI" in args.regions and getattr(args, "eli_grid", "regridded") in {"native", "both"}:
+        raw_data_dir = getattr(args, "e3sm_raw_dir", None)
+        if not raw_data_dir:
+            raw_data_dir = (
+                DEFAULT_RAW_SIMULATION_DIR
+                if "FOSIRL" in (args.e3sm_case_prefix or "")
+                else Path("/global/cfs/cdirs/e3sm/S2S2D/simulation")
+            )
+        mesh_path = getattr(args, "mesh_file", DEFAULT_MPAS_MESH_FILE)
+        LOG.info("Processing native MPAS-Ocean ELI for E3SM: %s", args.e3sm_case_prefix)
+        process_native_eli_case(
+            case_prefix=args.e3sm_case_prefix,
+            data_dir=raw_data_dir,
+            outdir=outdir,
+            mesh_path=mesh_path,
+            cache_tag=args.e3sm_cache_tag,
+            display_name=args.e3sm_display_name,
+            init_months=args.init_months,
+            year_start=args.year_start,
+            year_end=args.year_end,
+            nlead=args.nlead,
+            nens=args.e3sm_nens,
+            workers=min(args.workers, 1) if args.workers > 0 else 1,
+            force=args.force,
+        )
 
 
 def process_obs(args: argparse.Namespace) -> None:
