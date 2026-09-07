@@ -695,7 +695,7 @@ def load_drift_references(
     require_matching_masks: bool = True,
     require_attractor_spread: bool = False,
 ) -> xr.Dataset:
-    """Open and validate the prepared output of ``0_run_drift_references``.
+    """Open and validate the prepared output of ``0_run_drift_input`` (or ``ensure_reference``).
 
     The loader inspects known schema aliases and exposes stable canonical names
     ``X_obs`` and ``X_att``.  Set ``require_attractor_spread`` when the consumer
@@ -711,7 +711,7 @@ def load_drift_references(
     if not reference_path.is_file():
         raise FileNotFoundError(
             f"Prepared drift reference does not exist: {reference_path}. "
-            "Run jupyter/0_run_drift_references.ipynb first."
+            "Ensure it with workflows.diagnostics.drift_inputs.ensure_reference or jupyter/preprocessing/drift/0_run_drift_input.ipynb."
         )
     raw = xr.open_dataset(reference_path, chunks={})
     try:
@@ -742,7 +742,7 @@ def load_drift_references(
             raise ValueError(
                 f"Prepared drift reference lacks the required historical ensemble "
                 f"spread (sigma_att): {reference_path}. Rebuild it with "
-                "jupyter/0_run_drift_references.ipynb."
+                "workflows.diagnostics.drift_inputs.ensure_reference or jupyter/preprocessing/drift/0_run_drift_input.ipynb."
             )
         if spread_name is not None:
             selected_names.append(spread_name)
