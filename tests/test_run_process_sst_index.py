@@ -141,3 +141,46 @@ def test_smyle_fixed_mask_is_model_level(tmp_path):
 
     assert timeseries == tmp_path / "CESM-SMYLE" / "sst_index" / "timeseries"
     assert mask == tmp_path / "CESM-SMYLE" / "fixed" / "sftlf.CESM-SMYLE.nc"
+
+
+def test_output_cache_rejects_invalid_regional_content(tmp_path):
+    for name, data in [('nan', [np.nan]), ('inf', [np.inf])]:
+        path = tmp_path / f'{name}_AtlMDR.nc'
+        MODULE._safe_to_netcdf(
+            xr.Dataset({'sst': ('time', data)}), path, sst_land_mask=True
+        )
+        assert not MODULE._output_is_current(path, SimpleNamespace(sst_land_mask=True))
+    path = tmp_path / 'missing_AtlMDR.nc'
+    MODULE._safe_to_netcdf(xr.Dataset({'other': ('time', [1.0])}), path, sst_land_mask=True)
+    assert not MODULE._output_is_current(path, SimpleNamespace(sst_land_mask=True))
+
+
+def test_smyle_ensures_only_missing_benchmark_frequency(tmp_path, monkeypatch):
+    from unittest.mock import Mock
+
+    root = tmp_path / 'benchmarks'
+    root.mkdir()
+    (root / 'mon.nc').touch()
+    def resolve(field, month, directory, **kwargs):
+        assert Path(directory) == root
+        path = root / f"{kwargs['freq']}.nc"
+        if not path.exists():
+            raise FileNotFoundError(path)
+        return path
+    def process(**kwargs):
+        for freq in kwargs['freqs']:
+            (root / f'{freq}.nc').touch()
+        return 'ok'
+    builder = SimpleNamespace(existing_benchmark_issues=Mock(return_value=[]), process_one=Mock(side_effect=process))
+    spec = SimpleNamespace(loader=SimpleNamespace(exec_module=lambda module: None))
+    monkeypatch.setattr(MODULE.importlib.util, 'spec_from_file_location', lambda *a: spec)
+    monkeypatch.setattr(MODULE.importlib.util, 'module_from_spec', lambda s: builder)
+    monkeypatch.setattr(MODULE.smyle_access, 'benchmark_path', resolve)
+    args = SimpleNamespace(smyle_benchmark_dir=root, year_start=1981, year_end=2011,
+                           smyle_nens=20, init_months=[5], nlead=24, force=False,
+                           smyle_data_dir=tmp_path / 'raw')
+    assert MODULE.ensure_smyle_benchmarks(args) == root
+    assert builder.process_one.call_args.kwargs['freqs'] == ['seas']
+    assert builder.process_one.call_args.kwargs['data_dir'] == str(tmp_path / 'raw')
+    MODULE.ensure_smyle_benchmarks(args)
+    assert builder.process_one.call_count == 1

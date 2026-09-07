@@ -165,6 +165,36 @@ def test_cached_product_accepts_legacy_nmme_chunk_signature(tmp_path):
     assert cached_product_matches(path, "field_configuration", expected)
 
 
+def test_cached_smyle_product_accepts_legacy_benchmark_layout(tmp_path):
+    expected = configuration_signature(
+        "smyle", _settings(), _args(), include_mode=False
+    )
+    expected_payload = json.loads(expected)
+    expected_payload["benchmark_inputs"] = [
+        {
+            "init_month": 5,
+            "path": "/data/smyle/leadtime_acc/inputs/atm/PSL/file.nc",
+            "size": 123,
+            "mtime_ns": 456,
+        }
+    ]
+    legacy_payload = json.loads(json.dumps(expected_payload))
+    legacy_payload["benchmark_inputs"][0]["path"] = (
+        "/data/smyle/leadtime_acc/inputs/PSL/file.nc"
+    )
+    path = tmp_path / "legacy-smyle-field.nc"
+    xr.Dataset(
+        {"value": ("x", [1.0])},
+        attrs={"field_configuration": json.dumps(legacy_payload)},
+    ).to_netcdf(path)
+
+    assert cached_product_matches(
+        path,
+        "field_configuration",
+        json.dumps(expected_payload, sort_keys=True, separators=(",", ":")),
+    )
+
+
 def test_nmme_products_use_canonical_uppercase_directory(tmp_path):
     settings = {
         **_settings(),

@@ -189,3 +189,19 @@ def test_compute_reference_skill_accepts_raw_and_anomaly_references():
     assert list(skill.reference.values) == ["HadISST2", "PSL"]
     assert np.all(np.isfinite(skill["corr"].values))
     assert float(skill["corr"].min()) > 0.98
+
+
+def test_november_seasonal_cohort_uses_initialization_year():
+    years = np.arange(1980, 2013)
+    time = xr.DataArray(
+        [[cftime.DatetimeNoLeap(int(y + 1), 1, 15),
+          cftime.DatetimeNoLeap(int(y + 2), 1, 15)] for y in years],
+        dims=('Y', 'L'), coords={'Y': [f'{y}110100' for y in years], 'L': [3, 15]},
+    )
+    data = xr.ones_like(time, dtype=float)
+    selected, selected_time = psl_skill.subset_hindcast_initialization_years(
+        data, time, 1981, 2011
+    )
+    assert selected.Y.values[[0, -1]].tolist() == ['1981110100', '2011110100']
+    assert selected_time.isel(Y=0, L=0).item().year == 1982
+    assert selected_time.isel(Y=-1, L=-1).item().year == 2013

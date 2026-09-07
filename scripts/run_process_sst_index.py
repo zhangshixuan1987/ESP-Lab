@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 
 # Fix GDAL/PROJ library paths for regionmask/pyogrio
@@ -117,6 +118,14 @@ def parse_args() -> argparse.Namespace:
         "--obs-outdir",
         default=str(HADISST2_DIAG_DIR / "sst_index" / "timeseries"),
         help="Output directory for HadISST2 SST index files.",
+    )
+    p.add_argument(
+        "--smyle-benchmark-dir", default=str(CESM_SMYLE_DIAG_DIR),
+        help="Directory in which to ensure gridded SMYLE TS benchmarks.",
+    )
+    p.add_argument(
+        "--smyle-data-dir", default="/global/cfs/cdirs/e3sm/S2S2D/CESM-SMYLE",
+        help="Raw SMYLE archive used to generate missing gridded benchmarks.",
     )
     p.add_argument(
         "--init-months",
@@ -247,11 +256,10 @@ def _output_is_current(path: Path, args: argparse.Namespace) -> bool:
             )
             if not metadata_current:
                 return False
-            # RONI depends on the full-longitude TropicalMean region. Reject
-            # caches produced by the former 0-to-360 zero-width-mask bug.
-            if "RONI" in path.name:
-                return "sst" in dataset and bool(dataset["sst"].notnull().any())
-            return True
+            # Use the same content contract as downstream orchestration so
+            # auto mode actually replaces invalid, correctly versioned files.
+            variable = "eli" if "ELI" in path.name else "sst"
+            return variable in dataset and bool(np.isfinite(dataset[variable]).any())
     except Exception:
         return False
 
@@ -647,9 +655,56 @@ def process_obs(args: argparse.Namespace) -> None:
             LOG.info(f"Saved Obs monthly index for {r}: {outfile_mon}")
 
 
+def ensure_smyle_benchmarks(args: argparse.Namespace) -> Path:
+    """Ensure the gridded TS inputs required by regional SMYLE processing."""
+    root = Path(getattr(args, "smyle_benchmark_dir", CESM_SMYLE_DIAG_DIR))
+    script = Path(__file__).with_name("run_process_cesm_smyle_benchmark.py")
+    spec = importlib.util.spec_from_file_location("sst_smyle_benchmark", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    years = list(range(args.year_start, args.year_end + 1))
+    members = [f"EN{i:02d}" for i in range(1, args.smyle_nens + 1)]
+    for month in args.init_months:
+        stale = []
+        for freq in ("mon", "seas"):
+            try:
+                path = smyle_access.benchmark_path(
+                    "TS", month, root, nens=args.smyle_nens, nlead=args.nlead, freq=freq
+                )
+                issues = module.existing_benchmark_issues(
+                    path, field="TS", init_month=month, years=years,
+                    members=members, nlead=args.nlead, freq=freq,
+                )
+            except (OSError, ValueError, KeyError):
+                issues = ["missing or unreadable"]
+            if issues or args.force:
+                stale.append(freq)
+        if stale:
+            status = module.process_one(
+                field="TS", init_month=month,
+                data_dir=str(getattr(args, "smyle_data_dir", "/global/cfs/cdirs/e3sm/S2S2D/CESM-SMYLE")),
+                outdir=str(root), years=years, members=members, nlead=args.nlead,
+                require_all_members=True, verify_coverage=True, force=True,
+                dry_run=False, run_verify=False, freqs=stale, open_parallel=False,
+            )
+            if status not in {"ok", "skipped"}:
+                raise RuntimeError(f"SMYLE benchmark processing failed for month {month}: {status}")
+            for freq in stale:
+                path = smyle_access.benchmark_path(
+                    "TS", month, root, nens=args.smyle_nens, nlead=args.nlead, freq=freq
+                )
+                issues = module.existing_benchmark_issues(
+                    path, field="TS", init_month=month, years=years,
+                    members=members, nlead=args.nlead, freq=freq,
+                )
+                if issues:
+                    raise RuntimeError(f"Invalid generated SMYLE benchmark {path}: {issues}")
+    return root
+
+
 def process_smyle(args: argparse.Namespace) -> None:
     LOG.info("Processing CESM-SMYLE regional SST Indices...")
-    SMYLE_BENCHMARK_DIR = str(CESM_SMYLE_DIAG_DIR)
+    SMYLE_BENCHMARK_DIR = str(ensure_smyle_benchmarks(args))
     smyle_outdir, smyle_mask_file = _smyle_output_paths(args.smyle_outdir)
     smyle_outdir.mkdir(parents=True, exist_ok=True)
 

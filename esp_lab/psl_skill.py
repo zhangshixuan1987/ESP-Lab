@@ -189,7 +189,8 @@ def subset_hindcast_initialization_years(
 ) -> tuple[xr.DataArray, xr.DataArray]:
     """Select a complete, inclusive initialization-year cohort.
 
-    The cohort is derived from the first verification lead.  Selection is
+    The cohort is derived from verification time minus the one-based monthly
+    lead offset (including seasonal centers such as L=3). Selection is
     applied through the shared ``Y`` coordinate so later-lead verification
     dates remain unchanged.
     """
@@ -201,7 +202,12 @@ def subset_hindcast_initialization_years(
         raise ValueError("data and valid_time must have identical Y coordinates")
 
     first_lead_time = valid_time.isel(L=0) if "L" in valid_time.dims else valid_time
-    init_year = first_lead_time.dt.year
+    lead = float(valid_time.L.isel(L=0)) if "L" in valid_time.dims else 1.0
+    if not np.isfinite(lead) or lead < 1 or not lead.is_integer():
+        raise ValueError("L must contain positive, one-based monthly lead coordinates")
+    init_year = (
+        first_lead_time.dt.year * 12 + first_lead_time.dt.month - 1 - (int(lead) - 1)
+    ) // 12
     mask = np.asarray((init_year >= year0) & (init_year <= year1), dtype=bool)
     selected_y = np.asarray(valid_time["Y"].values)[mask]
     expected_years = np.arange(year0, year1 + 1)

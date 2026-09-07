@@ -194,6 +194,12 @@ def cached_product_matches(path: Path, attribute: str, expected: str) -> bool:
             # Ignore this legacy signature field so products written before
             # chunking was made operational remain reusable.
             payload.pop("nmme_chunks", None)
+            # The benchmark root is recorded separately. Treat the former
+            # inputs/FIELD and canonical inputs/atm/FIELD layouts as the same
+            # source when filename, size, and modification time agree.
+            for record in payload.get("benchmark_inputs", []):
+                if isinstance(record, dict) and record.get("path"):
+                    record["path"] = Path(record["path"]).name
             return json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return value
 
@@ -713,8 +719,92 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--legacy-nao-layout only supports --modes NAO.")
 
 
-def main() -> None:
-    args = modes_analysis.parse_args()
+def configured_mode_settings(
+    args: argparse.Namespace,
+) -> dict[str, dict[str, object]]:
+    """Return mode settings with the run's observation contracts applied."""
+    settings_by_mode = {
+        mode: modes_analysis.mode_settings(mode) for mode in args.modes
+    }
+    for settings in settings_by_mode.values():
+        if settings["field"] == "PSL":
+            settings["obs_product"] = args.psl_obs_product
+            settings["obs_var"] = args.psl_obs_var
+        else:
+            settings["obs_product"] = args.ts_obs_product
+            settings["obs_var"] = args.ts_obs_var
+        settings["obs_years"] = [args.obs_start_year, args.obs_end_year]
+        settings["eof_reference_years"] = [
+            args.eof_reference_start_year,
+            args.eof_reference_end_year,
+        ]
+    return settings_by_mode
+
+
+def expected_product_issues(args: argparse.Namespace) -> list[str]:
+    """Return missing or incompatible products for a configured runner call."""
+    products = expected_products(args)
+    issues: list[str] = []
+    for details in products.values():
+        for path, attribute, signature in (
+            (Path(details["field"]), "field_configuration", details["field_configuration"]),
+            (Path(details["index"]), "index_configuration", details["index_configuration"]),
+        ):
+            if not path.is_file():
+                issues.append(f"missing {path}")
+            elif not cached_product_matches(path, attribute, signature):
+                issues.append(f"incompatible {path}")
+    return issues
+
+
+def expected_products(args: argparse.Namespace) -> dict[str, dict[str, str]]:
+    """Describe the products and signatures expected from one configured call."""
+    args.sources = list(dict.fromkeys(
+        "obs" if source == "era5" else source for source in args.sources
+    ))
+    args.modes = list(dict.fromkeys(mode.upper() for mode in args.modes))
+    validate_args(args)
+    products: dict[str, dict[str, str]] = {}
+    settings_by_mode = configured_mode_settings(args)
+    sources = [source for source in modes_analysis.MODEL_SOURCES if source in args.sources]
+    for mode, settings in settings_by_mode.items():
+        product_specs: list[tuple[str, int | None]] = []
+        if "obs" in args.sources or sources:
+            product_specs.append(("obs", None))
+        product_specs.extend(
+            (source, month) for source in sources for month in args.init_months
+        )
+        for source, init_month in product_specs:
+            output_source = (
+                str(args.e3sm_cache_tag) if source == "e3sm" else source
+            )
+            field_path, index_path = modes_analysis.product_paths(
+                Path(args.outdir), mode, output_source, init_month,
+                modes_analysis.grid_token(args.target_dlat, args.target_dlon),
+                settings, args.legacy_nao_layout,
+            )
+            key = (
+                "era5" if args.legacy_nao_layout and source == "obs"
+                else f"{output_source}_init{init_month:02d}"
+                if args.legacy_nao_layout
+                else f"{mode}:reference" if source == "obs"
+                else f"{mode}:{output_source}_init{init_month:02d}"
+            )
+            products[key] = {
+                "field": str(field_path),
+                "index": str(index_path),
+                "field_configuration": configuration_signature(
+                    source, settings, args, include_mode=False
+                ),
+                "index_configuration": configuration_signature(
+                    source, settings, args, include_mode=True
+                ),
+            }
+    return products
+
+
+def run(args: argparse.Namespace) -> Path | None:
+    """Run preprocessing for an already parsed, programmatic configuration."""
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s: %(message)s",
@@ -729,19 +819,7 @@ def main() -> None:
         dlat=args.target_dlat, dlon=args.target_dlon
     )
     station_definition = modes_analysis.StationNaoDefinition()
-    mode_configs = {mode: modes_analysis.mode_settings(mode) for mode in args.modes}
-    for settings in mode_configs.values():
-        if settings["field"] == "PSL":
-            settings["obs_product"] = args.psl_obs_product
-            settings["obs_var"] = args.psl_obs_var
-        else:
-            settings["obs_product"] = args.ts_obs_product
-            settings["obs_var"] = args.ts_obs_var
-        settings["obs_years"] = [args.obs_start_year, args.obs_end_year]
-        settings["eof_reference_years"] = [
-            getattr(args, "eof_reference_start_year", args.obs_start_year),
-            getattr(args, "eof_reference_end_year", args.obs_end_year),
-        ]
+    mode_configs = configured_mode_settings(args)
     LOG.info("Modes: %s", ", ".join(args.modes))
     LOG.info("Sources: %s", ", ".join(args.sources))
     LOG.info("Output: %s", args.outdir)
@@ -803,9 +881,15 @@ def main() -> None:
 
     if args.dry_run:
         LOG.info("Dry run complete; no manifest was written.")
-        return
+        return None
     manifest = write_manifest(args, mode_configs, products, station_definition)
     LOG.info("Manifest: %s", manifest)
+    return manifest
+
+
+def main(argv: list[str] | None = None) -> Path | None:
+    """Parse command-line arguments and run preprocessing."""
+    return run(modes_analysis.parse_args(argv))
 
 
 if __name__ == "__main__":

@@ -142,7 +142,7 @@ class StationNaoDefinition:
     north_lat: float = 64.1466
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--outdir", required=True)
     parser.add_argument(
@@ -330,7 +330,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--verbose", "-v", action="store_true")
     parser.add_argument("--legacy-nao-layout", action="store_true", help=argparse.SUPPRESS)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # By default, train the observed EOF basis on the same years used for the
     # model hindcast verification.  This avoids an accidental mismatch between

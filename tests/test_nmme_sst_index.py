@@ -219,3 +219,42 @@ def test_nmme_observed_iod_is_west_anomaly_minus_east_anomaly():
     assert result.attrs["index_name"] == "DMI"
     assert result.attrs["climatology_start_year"] == 1981
     assert result.attrs["climatology_end_year"] == 2010
+
+
+def test_combined_timeseries_cache_checks_model_and_mask_contract(tmp_path):
+    path = tmp_path / 'nmme.nc'
+    attrs = dict(region='AtlMDR', climatology_start_year=1981, climatology_end_year=2010,
+                 requested_models='a,b', nmme_sst_land_mask='True',
+                 nmme_sst_mask_version=nmme_access.NMME_SST_MASK_VERSION)
+    ds = xr.Dataset({'sst': (('time', 'model'), [[1., 2.]])},
+                    coords={'time': [0], 'model': ['a', 'b']}, attrs=attrs)
+    ds.to_netcdf(path)
+    kwargs = dict(region='AtlMDR', clim_start=1981, clim_end=2010,
+                  models=['a', 'b'], apply_land_mask=True)
+    assert MODULE.timeseries_is_current(path, **kwargs)[0]
+    assert not MODULE.timeseries_is_current(path, **{**kwargs, 'models': ['a']})[0]
+    assert not MODULE.timeseries_is_current(path, **{**kwargs, 'apply_land_mask': False})[0]
+    ds.attrs.pop('nmme_sst_mask_version')
+    ds.to_netcdf(path, mode='w')
+    assert not MODULE.timeseries_is_current(path, **kwargs)[0]
+
+
+def test_timeseries_writer_preserves_processing_contract(tmp_path):
+    data = xr.DataArray([[[[1.0]]]], dims=('Y', 'L', 'M', 'model'),
+                        coords={'Y': ['2000050100'], 'L': [1], 'M': [0], 'model': ['a']})
+    time = xr.DataArray([[np.datetime64('2000-05-15')]], dims=('Y', 'L'),
+                        coords={'Y': data.Y, 'L': data.L})
+    processed = dict(data_start=2000, data_end=2000, region='AtlMDR',
+                     climatology_start=1981, climatology_end=2010,
+                     requested_models=['a'], apply_land_mask=True,
+                     monthly_dd={m: data for m in MODULE.INIT_MONTHS},
+                     seasonal_dd={m: data for m in MODULE.INIT_MONTHS},
+                     monthly_time={m: time for m in MODULE.INIT_MONTHS},
+                     seasonal_time={m: time for m in MODULE.INIT_MONTHS})
+    directory = MODULE.save_timeseries_outputs(tmp_path, processed)
+    for path in directory.glob('*.nc'):
+        assert MODULE.timeseries_is_current(
+            path, region='AtlMDR', clim_start=1981, clim_end=2010,
+            models=['a'], apply_land_mask=True,
+        )[0]
+    assert len(list(directory.glob('*.nc'))) == 2 * len(MODULE.INIT_MONTHS)
