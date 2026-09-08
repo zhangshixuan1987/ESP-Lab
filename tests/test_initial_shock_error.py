@@ -3,7 +3,7 @@ import pytest
 import xarray as xr
 
 from esp_lab.diagnostics.initial_shock_error import (
-    compute_initial_shock_error_index, plot_rmse_mae,
+    compute_initial_shock_error_index, plot_error_heatmap, plot_rmse_mae,
 )
 
 
@@ -24,6 +24,8 @@ def test_ncl_independent_full_cohort_anomalies_and_errors():
     np.testing.assert_allclose(result.error, [[-1.5, -.5], [.5, 1.5]])
     np.testing.assert_allclose(result.rmse, np.sqrt(1.25))
     np.testing.assert_allclose(result.mae, 1.)
+    np.testing.assert_allclose(result.normalized_rmse, np.sqrt(1.25) / np.sqrt(2.))
+    np.testing.assert_allclose(result.normalized_mae, 1. / np.sqrt(2.))
     assert (result.paired_sample_count == 2).all()
 
 
@@ -55,3 +57,18 @@ def test_plot_has_two_metric_panels():
     assert len(fig.axes) == 4  # two panels and two colorbars
     with pytest.raises(ValueError, match="six increasing"):
         plot_rmse_mae(result, rmse_ranges=(.2, .1), mae_ranges=(.1,) * 6)
+
+
+def test_normalized_error_heatmap_accepts_explicit_levels():
+    import matplotlib.pyplot as plt
+
+    result = compute_initial_shock_error_index(indices()).expand_dims(case=["case"])
+    levels = np.arange(0., 2.01, .2)
+    fig, ax = plt.subplots()
+    returned = plot_error_heatmap(
+        result, variable="normalized_rmse", levels=levels, ax=ax,
+        add_colorbar=False, add_invalid_legend=False,
+    )
+    assert returned is fig
+    np.testing.assert_allclose(ax.images[0].norm.boundaries, levels)
+    plt.close(fig)

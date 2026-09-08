@@ -327,12 +327,20 @@ def plot_normalized_change(
     result: xr.Dataset,
     *,
     variable: str = "signed_normalized_change",
+    levels=None,
     ax=None,
     add_colorbar: bool = True,
     add_invalid_legend: bool = True,
     title: str | None = None,
 ):
-    """Plot signed, absolute, or observation-adjusted normalized change."""
+    """Plot signed, absolute, or observation-adjusted normalized change.
+
+    Parameters
+    ----------
+    levels : array-like, optional
+        Explicit, strictly increasing color-bin boundaries. Variable-specific
+        defaults are used when omitted.
+    """
     import matplotlib.pyplot as plt
     from matplotlib.colors import BoundaryNorm, ListedColormap, TwoSlopeNorm
     from matplotlib.patches import Patch
@@ -364,9 +372,13 @@ def plot_normalized_change(
     if "case" not in values.dims:
         values = values.expand_dims(case=[result.attrs.get("case", "model")])
     values = values.transpose("Y", "case")
-    bounds = settings["bounds"]
+    bounds = np.asarray(settings["bounds"] if levels is None else levels, dtype=float)
+    if bounds.ndim != 1 or bounds.size < 2:
+        raise ValueError("levels must contain at least two one-dimensional boundaries")
+    if not np.isfinite(bounds).all() or not np.all(np.diff(bounds) > 0):
+        raise ValueError("levels must be finite and strictly increasing")
     centers = (bounds[:-1] + bounds[1:]) / 2
-    if bounds[0] < 0:
+    if bounds[0] < 0 < bounds[-1]:
         scale = TwoSlopeNorm(vmin=bounds[0], vcenter=0.0, vmax=bounds[-1])
         colors = plt.colormaps[settings["cmap"]](scale(centers))
     else:
@@ -376,7 +388,7 @@ def plot_normalized_change(
     cmap = ListedColormap(colors)
     invalid_color = "#bdbdbd"
     cmap.set_bad(invalid_color)
-    if bounds[0] < 0:
+    if bounds[0] < 0 < bounds[-1]:
         cmap.set_under("#021a35")
         cmap.set_over("#3b0010")
     else:

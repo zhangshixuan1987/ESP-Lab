@@ -199,3 +199,21 @@ def test_normalized_change_plot(variable):
     assert returned is fig
     assert len(ax.images) == 1
     plt.close(fig)
+
+
+def test_normalized_change_plot_accepts_explicit_levels():
+    import matplotlib.pyplot as plt
+
+    values = xr.DataArray(
+        [[-1.0], [1.5]], dims=("Y", "case"),
+        coords={"Y": [2000, 2001], "case": ["experiment"]},
+    )
+    result = xr.Dataset({"signed_normalized_change": values})
+    levels = np.array([-2.0, -1.0, 0.0, 1.0, 2.0])
+    fig, ax = plt.subplots()
+    plot_normalized_change(
+        result, levels=levels, ax=ax,
+        add_colorbar=False, add_invalid_legend=False,
+    )
+    np.testing.assert_array_equal(ax.images[0].norm.boundaries, levels)
+    plt.close(fig)

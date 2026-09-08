@@ -102,7 +102,16 @@ def test_notebook_cells_smoke_execution(archive_inputs,tmp_path):
     nb=json.loads(notebook.read_text())
     settings['paths']['figure_outdir']=str(tmp_path/'figures')
     settings['dask']={'enabled':False}
-    ns={'WORKFLOW_SETTINGS':settings,'E3SM_CASES':cases,'variable':variable,'field':'TREFHT'}
+    ns={
+        'WORKFLOW_SETTINGS': settings,
+        'E3SM_CASES': cases,
+        'variable': variable,
+        'field': 'TREFHT',
+        'HEATMAP_COLORBAR_LEVELS': {
+            'signed_normalized_change': np.arange(-3.0, 3.0 + 0.5, 0.5),
+            'absolute_normalized_change': np.arange(0.0, 3.0 + 0.25, 0.25),
+        },
+    }
     for i,cell in enumerate(nb['cells']):
         if cell['cell_type']=='code' and i != 3:  # replace only archive configuration
             exec(compile(''.join(cell['source']),f'notebook cell {i}','exec'),ns)
@@ -160,6 +169,8 @@ def test_rmse_mae_archive_cache_and_notebook_smoke(archive_inputs, tmp_path):
     result = error_archive.compute_archive_plan(plan, settings, variable)[5]
     np.testing.assert_allclose(result.rmse, np.sqrt(72.))
     np.testing.assert_allclose(result.mae, 6.)
+    np.testing.assert_allclose(result.normalized_rmse, 1.)
+    np.testing.assert_allclose(result.normalized_mae, 1. / np.sqrt(2.))
     second = error_archive.plan_archive_run(settings, cases, variable)
     assert not second[0]['rebuild'] and not second[0]['error_rebuild']
     xr.testing.assert_allclose(error_archive.compute_archive_plan(second, settings, variable)[5], result)
@@ -168,9 +179,24 @@ def test_rmse_mae_archive_cache_and_notebook_smoke(archive_inputs, tmp_path):
     nb = json.loads(notebook.read_text())
     ns = {'WORKFLOW_SETTINGS': settings, 'E3SM_CASES': cases, 'variable': variable,
           'field': 'TREFHT', 'RMSE_RANGES': NCL_RMSE_RANGES,
-          'MAE_RANGES': NCL_MAE_RANGES}
+          'MAE_RANGES': NCL_MAE_RANGES,
+          'ERROR_HEATMAP_LEVELS': {
+              'normalized_rmse': np.arange(0., 2.0 + .2, .2),
+              'normalized_mae': np.arange(0., 2.0 + .2, .2),
+          },
+          'PLOT_INITIALIZATION_INSPECTION': False}
     for i, cell in enumerate(nb['cells']):
         if cell['cell_type'] == 'code' and i != 3:
             exec(compile(''.join(cell['source']), f'notebook cell {i}', 'exec'), ns)
     assert list((tmp_path / 'figures').glob('*_rmse_mae.png'))
     assert list((tmp_path / 'figures').glob('*_rmse_mae_summary.csv'))
+
+
+def test_rmse_mae_force_compute_refreshes_same_cache(archive_inputs):
+    settings, cases, variable = archive_inputs
+    initial = error_archive.plan_archive_run(settings, cases, variable)
+    error_archive.compute_archive_plan(initial, settings, variable)
+    settings['cache']['force_compute'] = True
+    forced = error_archive.plan_archive_run(settings, cases, variable)
+    assert forced[0]['error_rebuild']
+    assert forced[0]['error_path'] == initial[0]['error_path']
