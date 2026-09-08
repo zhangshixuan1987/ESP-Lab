@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import ExitStack
 import hashlib
+import inspect
 import json
 from pathlib import Path
 
@@ -12,11 +13,23 @@ import xarray as xr
 from esp_lab import data_access_e3sm as e3sm_access
 from esp_lab import data_access_cesm_smyle as smyle_access
 from esp_lab import data_access_obs as obs_access
+from esp_lab.diagnostics import initial_shock
 from esp_lab.diagnostics.initial_shock import VERSION, align_observation_months, compute_initial_shock_index
 from esp_lab.paths import diagnostic_dir
 from esp_lab.utils.netcdf_utils import atomic_to_netcdf, load_netcdf
 
-ARCHIVE_VERSION = 'initial_shock_archive_v1'
+ARCHIVE_VERSION = 'initial_shock_archive_v2'
+
+
+def _scientific_code_digest():
+    """Hash numerical diagnostic code without coupling caches to plot styling."""
+    functions = (
+        initial_shock.align_observation_months,
+        initial_shock._weights,
+        initial_shock.compute_initial_shock_index,
+    )
+    source = '\n'.join(inspect.getsource(function) for function in functions)
+    return hashlib.sha256(source.encode()).hexdigest()
 
 
 def _inventory(paths):
@@ -34,7 +47,9 @@ def _cache_valid(path, digest):
     try:
         with xr.open_dataset(path) as ds:
             required = {'std_ratio', 'model_index', 'observation_index', 'paired_sample_count',
-                        'model_area_fraction', 'observation_area_fraction', 'block_start_time', 'block_end_time'}
+                        'model_area_fraction', 'observation_area_fraction', 'block_start_time', 'block_end_time',
+                        'signed_normalized_change', 'absolute_normalized_change',
+                        'observation_climatology_std', 'observation_climatology_sample_count'}
             return ds.attrs.get('identity_sha256') == digest and required <= set(ds.variables)
     except (OSError, ValueError):
         return False
@@ -56,6 +71,11 @@ def plan_archive_run(settings, cases, variable):
     mode = settings['cache']['mode']
     if mode not in {'auto', 'rebuild', 'require'}:
         raise ValueError('cache.mode must be auto, rebuild, or require')
+    force_compute = settings['cache'].get('force_compute', False)
+    if not isinstance(force_compute, bool):
+        raise ValueError('cache.force_compute must be true or false')
+    if force_compute and mode == 'require':
+        raise ValueError("cache.force_compute cannot be used with cache.mode='require'")
     nlead = settings['run']['nlead']
     metric = settings['metric']
     if metric['start_lead'] + metric['window_months'] > nlead:
@@ -92,11 +112,12 @@ def plan_archive_run(settings, cases, variable):
                     raise ValueError(f'CESM-SMYLE {month:02d}: incomplete years/members/leads; missing={missing}')
             tasks.append(dict(case='CESM-SMYLE', source='CESM-SMYLE', month=month,
                               kind='smyle', loader=loader, model_paths=[str(path)]))
-    # Include local adapter code so changes to time normalization also invalidate caches.
+    # Include adapter and workflow code so scientific preparation changes invalidate
+    # caches. Hash only numerical functions from initial_shock: plot styling must not
+    # force expensive archive data to be recomputed.
     code_paths = [__file__, e3sm_access.__file__, smyle_access.__file__, obs_access.__file__]
-    from esp_lab.diagnostics import initial_shock
-    code_paths.append(initial_shock.__file__)
     code_identity = {str(p): hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in code_paths}
+    code_identity[f'{initial_shock.__file__}::scientific-functions'] = _scientific_code_digest()
     for task in tasks:
         task['years'] = years
         task['obs_path'] = obs_path
@@ -111,7 +132,7 @@ def plan_archive_run(settings, cases, variable):
                                         variable['field'], root=settings['paths']['s2d_diag_root']) /
                            f"init{task['month']:02d}_{task['digest'][:20]}.nc")
         task['cached'] = _cache_valid(Path(task['path']), task['digest'])
-        task['rebuild'] = mode == 'rebuild' or not task['cached']
+        task['rebuild'] = force_compute or mode == 'rebuild' or not task['cached']
     if mode == 'require' and any(t['rebuild'] for t in tasks):
         raise FileNotFoundError('Required initial-shock caches missing: ' + ', '.join(t['path'] for t in tasks if t['rebuild']))
     return tasks
@@ -143,7 +164,8 @@ def compute_archive_plan(plan, settings, variable):
         if _inventory(task['model_paths'] + [task['obs_path']]) != task['inventory']:
             raise RuntimeError('Source files changed after planning; rerun the inventory cell')
         path = Path(task['path'])
-        if settings['cache']['mode'] != 'rebuild' and _cache_valid(path, task['digest']):
+        force_compute = settings['cache'].get('force_compute', False)
+        if not force_compute and settings['cache']['mode'] != 'rebuild' and _cache_valid(path, task['digest']):
             result = load_netcdf(path)
             print(f"Reusing {task['case']} init {task['month']:02d}: {path}")
         else:

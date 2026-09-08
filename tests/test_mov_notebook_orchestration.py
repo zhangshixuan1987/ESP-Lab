@@ -53,14 +53,38 @@ def _settings(tmp_path, **overrides):
     return values
 
 
-def test_notebook_declares_standalone_input_policy():
+def test_notebook_defaults_to_cache_only_analysis_policy():
     source = "\n".join(
         "".join(cell.get("source", []))
         for cell in json.loads(NOTEBOOK.read_text())["cells"]
     )
-    assert 'mov_input_mode = "auto"' in source
+    assert 'mov_input_mode = "require"' in source
+    assert "force_recompute_skill = False" in source
     assert "ensure_mode_products(MOV_INPUT_SETTINGS)" in source
     assert "0_run*` notebook is a prerequisite" in source
+
+
+def test_global_teleconnection_figure_separates_initializations():
+    source = "\n".join(
+        "".join(cell.get("source", []))
+        for cell in json.loads(NOTEBOOK.read_text())["cells"]
+    )
+    assert "build_pattern_cases(*, include_all_initializations=False)" in source
+    assert "build_pattern_cases(include_all_initializations=True)" in source
+    assert "cases_by_initialization = {" in source
+    assert 'f"{month_names[init_month]} initialization: Global {selected_mode} "' in source
+
+
+def test_skill_figure_separates_initializations_into_panels():
+    source = "\n".join(
+        "".join(cell.get("source", []))
+        for cell in json.loads(NOTEBOOK.read_text())["cells"]
+    )
+    assert "skill_panel_specs = [" in source
+    assert "for init_month in init_months" in source
+    assert "nskillcols = len(skill_panel_specs)" in source
+    assert "for col, (method, panel_init_month) in enumerate(skill_panel_specs)" in source
+    assert "for init_month in (panel_init_month,)" in source
 
 
 def test_legacy_mov_drivers_are_grouped_as_optional_preprocessing():
@@ -76,7 +100,7 @@ def test_legacy_mov_drivers_are_grouped_as_optional_preprocessing():
 
 @pytest.mark.parametrize(
     "ensure_mode, expected_runs, forced",
-    [("auto", 3, False), ("require", 0, False), ("rebuild", 3, True)],
+    [("auto", 0, False), ("require", 0, False), ("rebuild", 3, True)],
 )
 def test_core_sources_are_ensured_per_policy(
     tmp_path, monkeypatch, ensure_mode, expected_runs, forced
@@ -111,6 +135,7 @@ def test_core_sources_are_ensured_per_policy(
     assert benchmark_calls == [ensure_mode]
     assert len(processor_args) == expected_runs
     assert report["processor_calls"] == 3
+    assert report["processor_runs"] == expected_runs
     assert teleconnection_calls == [{
         "ensure_mode": ensure_mode,
         "alpha": 0.05,
@@ -122,9 +147,38 @@ def test_core_sources_are_ensured_per_policy(
         assert args.force is forced
     if processor_args:
         assert processor_args[0].sources == ["obs", "smyle"]
-        assert [args.e3sm_cache_tag for args in processor_args[1:]] == [
-            "case_a", "case_b"
-        ]
+        if ensure_mode == "rebuild":
+            assert [args.e3sm_cache_tag for args in processor_args[1:]] == [
+                "case_a", "case_b"
+            ]
+
+
+def test_auto_runs_only_incompatible_processor_call(tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestration, "_ensure_smyle_benchmarks", lambda *args: None)
+    completed = set()
+    processor_args = []
+
+    def call_key(args):
+        return getattr(args, "e3sm_cache_tag", "obs-smyle")
+
+    def issues(args):
+        key = call_key(args)
+        return [f"stale {key}"] if key == "case_a" and key not in completed else []
+
+    def run(args):
+        processor_args.append(args)
+        completed.add(call_key(args))
+
+    monkeypatch.setattr(orchestration.mode_processor, "expected_product_issues", issues)
+    monkeypatch.setattr(orchestration.mode_processor, "run", run)
+    monkeypatch.setattr(orchestration.mode_processor, "expected_products", lambda args: {})
+    monkeypatch.setattr(orchestration.teleconnections, "ensure_products", lambda *args, **kwargs: {})
+
+    report = orchestration.ensure_mode_products(_settings(tmp_path, ensure_mode="auto"))
+
+    assert [call_key(args) for args in processor_args] == ["case_a"]
+    assert report["processor_calls"] == 3
+    assert report["processor_runs"] == 1
 
 
 def test_require_mode_reports_incompatible_products(tmp_path, monkeypatch):

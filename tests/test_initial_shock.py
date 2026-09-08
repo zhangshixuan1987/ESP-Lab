@@ -3,7 +3,8 @@ import pytest
 import xarray as xr
 
 from esp_lab.diagnostics.initial_shock import (
-    align_observation_months, compute_initial_shock_index, plot_std_ratio,
+    align_observation_months, compute_initial_shock_index,
+    plot_normalized_change, plot_std_ratio,
 )
 from workflows.diagnostics.initial_shock import run_initial_shock
 
@@ -41,6 +42,22 @@ def test_ensemble_mean_precedes_std():
     model.loc[dict(M=0)] = obs
     model.loc[dict(M=1)] = -obs
     assert (compute_initial_shock_index(model, obs).std_ratio == 0).all()
+
+
+def test_normalized_lead_year_change_uses_observed_climatology():
+    model, obs = fields(24)
+    obs.loc[dict(Y=1986)] += 2
+    model = xr.concat([obs * 2 + 10, obs * 2 + 20], dim=xr.IndexVariable("M", [0, 1]))
+    model.attrs["units"] = obs.attrs["units"] = "degC"
+    result = compute_initial_shock_index(
+        model, obs, window_months=24, climatology_years=(1981, 1986),
+    )
+    np.testing.assert_allclose(result.observation_climatology_std, np.sqrt(2))
+    assert int(result.observation_climatology_sample_count) == 2
+    np.testing.assert_allclose(result.model_lead_year_change, 2)
+    np.testing.assert_allclose(result.signed_normalized_change, np.sqrt(2))
+    np.testing.assert_allclose(result.absolute_normalized_change, np.sqrt(2))
+    np.testing.assert_allclose(result.excess_normalized_change, 1 / np.sqrt(2))
 
 
 def test_missing_month_invalidates_whole_annual_block():
@@ -123,3 +140,62 @@ def test_cached_workflow_and_plot(tmp_path):
     config['cases']['case2'] = dict(config['cases']['case1'], path=str(tmp_path / 'different_months.nc'))
     with pytest.raises(ValueError, match='different verification months'):
         run_initial_shock(config)
+
+
+def test_plot_distinguishes_below_equal_above_and_invalid():
+    ratio = xr.DataArray(
+        [[.8, 1., 1.2, np.nan]],
+        dims=("Y", "case"), coords={"Y": [2000], "case": ["low", "equal", "high", "invalid"]},
+    )
+    result = xr.Dataset({"std_ratio": ratio})
+    fig = plot_std_ratio(result)
+    image = fig.axes[0].images[0]
+    np.testing.assert_allclose(image.norm.boundaries, np.arange(.4, 3.01, .2))
+    colors = image.cmap(image.norm(np.array([.8, 1., 1.2])))
+    assert len({tuple(color) for color in colors}) == 3
+    assert tuple(image.cmap.get_bad()) not in {tuple(color) for color in colors}
+    assert tuple(image.cmap(image.norm(.2))) != tuple(image.cmap(image.norm(.5)))
+    assert tuple(image.cmap(image.norm(3.2))) != tuple(image.cmap(image.norm(2.9)))
+    assert fig.axes[0].get_legend().get_texts()[0].get_text() == "Invalid / missing"
+
+
+def test_plot_can_compose_multiple_panels():
+    import matplotlib.pyplot as plt
+
+    ratio = xr.DataArray(
+        [[.8], [1.2]], dims=("Y", "case"),
+        coords={"Y": [2000, 2001], "case": ["experiment"]},
+    )
+    result = xr.Dataset({"std_ratio": ratio})
+    fig, axes = plt.subplots(1, 2)
+    for ax, title in zip(axes, ("May initialization", "November initialization")):
+        returned = plot_std_ratio(
+            result, ax=ax, add_colorbar=False, add_invalid_legend=False, title=title,
+        )
+        assert returned is fig
+        assert ax.get_title() == title
+        assert len(ax.images) == 1
+        assert ax.get_legend() is None
+    assert len(fig.axes) == 2
+    plt.close(fig)
+
+
+@pytest.mark.parametrize(
+    "variable", ["signed_normalized_change", "absolute_normalized_change", "excess_normalized_change"],
+)
+def test_normalized_change_plot(variable):
+    import matplotlib.pyplot as plt
+
+    values = xr.DataArray(
+        [[-1.0], [1.5]], dims=("Y", "case"),
+        coords={"Y": [2000, 2001], "case": ["experiment"]},
+    )
+    result = xr.Dataset({variable: values})
+    fig, ax = plt.subplots()
+    returned = plot_normalized_change(
+        result, variable=variable, ax=ax,
+        add_colorbar=False, add_invalid_legend=False,
+    )
+    assert returned is fig
+    assert len(ax.images) == 1
+    plt.close(fig)

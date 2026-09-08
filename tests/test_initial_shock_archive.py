@@ -63,6 +63,23 @@ def test_archive_compute_cache_reuse_and_configuration_change(archive_inputs):
     assert archive.plan_archive_run(settings,cases,variable)[0]['path'] != second[0]['path']
 
 
+def test_plot_source_file_is_excluded_from_cache_identity(archive_inputs, monkeypatch):
+    settings, cases, variable = archive_inputs
+    diagnostic_path = Path(archive.initial_shock.__file__).resolve()
+    read_bytes = Path.read_bytes
+
+    def reject_full_diagnostic_hash(path):
+        if path.resolve() == diagnostic_path:
+            raise AssertionError('Plot and numerical source file was hashed as a whole')
+        return read_bytes(path)
+
+    monkeypatch.setattr(Path, 'read_bytes', reject_full_diagnostic_hash)
+    plan = archive.plan_archive_run(settings, cases, variable)
+    provenance = json.loads(plan[0]['provenance_json'])
+    scientific_key = f'{archive.initial_shock.__file__}::scientific-functions'
+    assert scientific_key in provenance['code']
+
+
 def test_incomplete_archive_stops_before_compute(archive_inputs,monkeypatch):
     settings,cases,variable=archive_inputs
     monkeypatch.setattr(archive.e3sm_access,'nested_file_list_by_init',lambda **kw: ([],[]))
@@ -89,7 +106,8 @@ def test_notebook_cells_smoke_execution(archive_inputs,tmp_path):
     for i,cell in enumerate(nb['cells']):
         if cell['cell_type']=='code' and i != 3:  # replace only archive configuration
             exec(compile(''.join(cell['source']),f'notebook cell {i}','exec'),ns)
-    assert list((tmp_path/'figures').glob('*_std_ratio.png'))
+    assert list((tmp_path/'figures').glob('*_signed_normalized_change.png'))
+    assert list((tmp_path/'figures').glob('*_absolute_normalized_change.png'))
     assert list((tmp_path/'figures').glob('*_summary.csv'))
 
 
@@ -105,6 +123,33 @@ def test_require_reuses_auto_cache(archive_inputs, monkeypatch):
         raise AssertionError('Cache-only run opened raw model data')
     monkeypatch.setattr(archive.e3sm_access, 'get_monthly_data', unexpected_load)
     np.testing.assert_allclose(archive.compute_archive_plan(cached, settings, variable)[5].std_ratio, 2)
+
+
+def test_force_compute_refreshes_same_cache(archive_inputs, monkeypatch):
+    settings, cases, variable = archive_inputs
+    initial = archive.plan_archive_run(settings, cases, variable)
+    archive.compute_archive_plan(initial, settings, variable)
+    original_loader = archive.e3sm_access.get_monthly_data
+    calls = []
+
+    def tracked_loader(**kwargs):
+        calls.append(kwargs)
+        return original_loader(**kwargs)
+
+    monkeypatch.setattr(archive.e3sm_access, 'get_monthly_data', tracked_loader)
+    settings['cache']['force_compute'] = True
+    forced = archive.plan_archive_run(settings, cases, variable)
+    assert forced[0]['rebuild']
+    assert forced[0]['path'] == initial[0]['path']
+    archive.compute_archive_plan(forced, settings, variable)
+    assert len(calls) == 1
+
+
+def test_force_compute_rejects_require_mode(archive_inputs):
+    settings, cases, variable = archive_inputs
+    settings['cache'].update(mode='require', force_compute=True)
+    with pytest.raises(ValueError, match='force_compute'):
+        archive.plan_archive_run(settings, cases, variable)
 
 
 def test_rmse_mae_archive_cache_and_notebook_smoke(archive_inputs, tmp_path):

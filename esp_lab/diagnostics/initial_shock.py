@@ -1,15 +1,16 @@
-"""Windowed variability index from Compute_Std_Index_Initial_Shock_share.ncl.
+"""Lead-year adjustment and legacy variability diagnostics for initial shock.
 
-Use monthly physical fields, before lead-dependent drift removal or detrending.
-The NCL statistic is temporal std(model ensemble-mean global index) / std(obs),
-not ensemble spread and not a direct measure of a discontinuity at initialization.
+The primary 24-month metric is the signed change between the second and first
+12-month global means, normalized by the climatological standard deviation of
+observed annual means. The original NCL temporal-std ratio is retained for
+continuity, but is not ensemble spread or a direct initialization discontinuity.
 """
 from __future__ import annotations
 
 import numpy as np
 import xarray as xr
 
-VERSION = "initial_shock_std_v1"
+VERSION = "initial_shock_std_v2"
 
 
 def align_observation_months(observation, verification_time, *, time_dim="time"):
@@ -73,8 +74,9 @@ def compute_initial_shock_index(
     start_lead: int = 0,
     min_samples: int | None = None,
     min_area_fraction: float = 0.0,
+    climatology_years: tuple[int, int] | list[int] | None = None,
 ) -> xr.Dataset:
-    """Compute one variability ratio for every initialization (Y).
+    """Compute normalized lead-year change and legacy ratio for each initialization.
 
     Inputs: model(Y,L,M,lat,lon) or ensemble mean(Y,L,lat,lon), and aligned
     observation(Y,L,lat,lon), in compatible physical units on the same grid.
@@ -85,8 +87,10 @@ def compute_initial_shock_index(
     Ensemble averaging and block averaging require every member/month to be
     finite. Spatial means independently omit missing cells as in NCL. Statistics
     use paired valid blocks, ddof=1, no detrending, and no lead climatology removal.
-    By default all requested blocks must be valid. Missing/constant observation
-    series produce NaN ratios, accompanied by coverage and validity variables.
+    Normalized change uses the observed first-block means across Y as its
+    climatology, optionally restricted by climatology_years. By default all
+    requested blocks must be valid. Missing/constant observation series produce
+    NaN metrics, accompanied by coverage and validity variables.
     """
     required = {"Y", "L", "lat", "lon"}
     if set(model.dims) not in (required, required | {"M"}) or set(observation.dims) != required:
@@ -111,6 +115,13 @@ def compute_initial_shock_index(
         raise ValueError("min_samples must be between 2 and the number of blocks")
     if not 0 <= min_area_fraction <= 1:
         raise ValueError("min_area_fraction must be between 0 and 1")
+    if climatology_years is not None:
+        if (
+            len(climatology_years) != 2
+            or any(not isinstance(value, (int, np.integer)) for value in climatology_years)
+            or climatology_years[0] > climatology_years[1]
+        ):
+            raise ValueError("climatology_years must be two ordered integer years")
     if not model.attrs.get("units") or model.attrs.get("units") != observation.attrs.get("units"):
         raise ValueError("Convert model and observation to identical explicit units first")
     model, observation = xr.align(model, observation, join="exact")
@@ -141,10 +152,48 @@ def compute_initial_shock_index(
         return np.sqrt(((data - data.mean("L")) ** 2).sum("L") / (n - 1).where(n > 1))
     mstd, ostd = sample_std(m), sample_std(o)
     valid = (n >= min_samples) & (ostd > 0)
+
+    # With a 24-month window the legacy std ratio has only two temporal
+    # samples. Normalize the first-to-second block change by the much more
+    # stable spread of first-block observed annual means across initialization
+    # years. For May (November) starts these are unique May-April
+    # (November-October) annual means.
+    climatology = obs_index.isel(L=0)
+    if climatology_years is not None:
+        year_values = np.asarray(climatology.Y.values)
+        if not np.issubdtype(year_values.dtype, np.number):
+            raise ValueError("climatology_years requires numeric initialization-year coordinates")
+        climatology = climatology.where(
+            (climatology.Y >= climatology_years[0])
+            & (climatology.Y <= climatology_years[1])
+        )
+    climatology_count = climatology.notnull().sum("Y")
+    climatology_mean = climatology.mean("Y", skipna=True)
+    climatology_std = np.sqrt(
+        ((climatology - climatology_mean) ** 2).sum("Y", skipna=True)
+        / (climatology_count - 1).where(climatology_count > 1)
+    )
+    model_change = model_index.isel(L=1) - model_index.isel(L=0)
+    observation_change = obs_index.isel(L=1) - obs_index.isel(L=0)
+    valid_change = model_change.notnull() & (climatology_count > 1) & (climatology_std > 0)
+    signed_change = (model_change / climatology_std.where(climatology_std > 0)).where(valid_change)
+    absolute_change = np.abs(signed_change)
+    excess_change = (
+        (model_change - observation_change) / climatology_std.where(climatology_std > 0)
+    ).where(valid_change & observation_change.notnull())
+
     result = xr.Dataset({
         "std_ratio": (mstd / ostd.where(ostd > 0)).where(valid),
         "model_std": mstd.where(n >= min_samples),
         "observation_std": ostd.where(n >= min_samples),
+        "model_lead_year_change": model_change,
+        "observation_lead_year_change": observation_change,
+        "observation_climatology_std": climatology_std,
+        "observation_climatology_sample_count": climatology_count,
+        "signed_normalized_change": signed_change,
+        "absolute_normalized_change": absolute_change,
+        "excess_normalized_change": excess_change,
+        "valid_normalized_change": valid_change.astype("int8"),
         "paired_sample_count": n,
         "valid_ratio": valid.astype("int8"),
         "model_index": model_index,
@@ -163,38 +212,209 @@ def compute_initial_shock_index(
             result = result.assign_coords({name: (("Y", "block"), values.values)})
     for name in ("model_std", "observation_std", "model_index", "observation_index"):
         result[name].attrs["units"] = units
+    for name in (
+        "model_lead_year_change", "observation_lead_year_change",
+        "observation_climatology_std",
+    ):
+        result[name].attrs["units"] = units
     result.std_ratio.attrs.update(units="1", long_name="Model / observation temporal standard deviation")
+    result.signed_normalized_change.attrs.update(
+        units="1", long_name="Signed model block-2 minus block-1 change normalized by observed climatological std",
+    )
+    result.absolute_normalized_change.attrs.update(
+        units="1", long_name="Absolute model block-2 minus block-1 change normalized by observed climatological std",
+    )
+    result.excess_normalized_change.attrs.update(
+        units="1", long_name="Model minus observed block change normalized by observed climatological std",
+    )
+    result.observation_climatology_sample_count.attrs.update(
+        units="1", long_name="Number of observed annual means in climatological standard deviation",
+    )
+    result.valid_normalized_change.attrs.update(
+        units="1", long_name="Normalized lead-year change validity flag",
+    )
     result.attrs.update(
         diagnostic_version=VERSION, block_months=int(block_months), window_months=int(window_months),
         start_lead_position=int(start_lead), min_samples=int(min_samples), ddof=1,
         ensemble_members=nens, min_area_fraction=float(min_area_fraction),
         detrended="false", spatial_mask="independent finite cells per block",
         averaging_order="ensemble mean; unweighted monthly blocks; area mean; temporal sample std",
-        interpretation="Variability amplitude ratio; does not uniquely identify initialization shock",
+        interpretation=(
+            "Primary metric is signed lead-year change relative to observed climatological variability; "
+            "it does not uniquely isolate initialization shock from observed climate evolution"
+        ),
+        normalized_change_climatology=(
+            "all initialization years" if climatology_years is None
+            else f"{climatology_years[0]}-{climatology_years[1]}"
+        ),
+        normalized_change_denominator="sample std of observed first-block means across initialization years",
     )
     return result
 
 
-def plot_std_ratio(result: xr.Dataset):
-    """Return a case-by-initialization heatmap; NaN denotes an invalid ratio."""
+def plot_std_ratio(
+    result: xr.Dataset,
+    *,
+    ax=None,
+    add_colorbar: bool = True,
+    add_invalid_legend: bool = True,
+    title: str | None = None,
+):
+    """Plot a case-by-initialization heatmap; NaN denotes an invalid ratio.
+
+    Supply ``ax`` and disable the per-axis colorbar/legend when composing
+    multiple initialization months into one figure.
+    """
     import matplotlib.pyplot as plt
-    from matplotlib.colors import BoundaryNorm, ListedColormap
+    from matplotlib.colors import BoundaryNorm, ListedColormap, TwoSlopeNorm
+    from matplotlib.patches import Patch
 
     ratio = result.std_ratio
     if "case" not in ratio.dims:
         ratio = ratio.expand_dims(case=[result.attrs.get("case", "model")])
     ratio = ratio.transpose("Y", "case")
-    colors = ["gray", "white", "white", "orange", "orangered", "red", "darkred"]
+    # A ratio of one is the neutral point.  Use cool colors below one and warm
+    # colors above one so that equally variable, under-variable, and
+    # over-variable cases cannot share the same color.
+    bounds = np.round(np.arange(0.4, 3.0 + 0.2, 0.2), 1)
+    centers = (bounds[:-1] + bounds[1:]) / 2
+    diverging_norm = TwoSlopeNorm(vmin=bounds[0], vcenter=1.0, vmax=bounds[-1])
+    colors = plt.colormaps["RdBu_r"](diverging_norm(centers))
     cmap = ListedColormap(colors)
-    cmap.set_bad("lightgray")
-    bounds = [0, 0.4, 1.0, 1.6, 2.2, 2.8, 3.4, 10]
-    fig, ax = plt.subplots(figsize=(max(5, ratio.sizes["case"] * 1.3), max(3, ratio.sizes["Y"] * .25)))
-    mesh = ax.imshow(ratio.values, aspect="auto", cmap=cmap, norm=BoundaryNorm(bounds, cmap.N, clip=True))
-    ax.set_xticks(np.arange(ratio.sizes["case"]), labels=ratio.case.values, rotation=45, ha="right")
+    invalid_color = "#bdbdbd"
+    cmap.set_bad(invalid_color)
+    # Make out-of-range values visibly different from the adjacent endpoint
+    # bins; these colors also fill the colorbar's extension triangles.
+    cmap.set_under("#021a35")
+    cmap.set_over("#3b0010")
+    owns_figure = ax is None
+    if owns_figure:
+        fig, ax = plt.subplots(
+            figsize=(max(6, ratio.sizes["case"] * 1.5), max(3, ratio.sizes["Y"] * .25))
+        )
+    else:
+        fig = ax.figure
+    mesh = ax.imshow(ratio.values, aspect="auto", cmap=cmap, norm=BoundaryNorm(bounds, cmap.N))
+    ax.set_xticks(np.arange(ratio.sizes["case"]), labels=ratio.case.values, rotation=30, ha="right")
     ax.set_yticks(np.arange(ratio.sizes["Y"]), labels=[str(v) for v in ratio.Y.values])
+    ax.set_xticks(np.arange(-.5, ratio.sizes["case"], 1), minor=True)
+    ax.set_yticks(np.arange(-.5, ratio.sizes["Y"], 1), minor=True)
+    ax.grid(which="minor", color="#d9d9d9", linewidth=.6)
+    ax.tick_params(which="minor", bottom=False, left=False)
     ax.set_ylabel("Initialization")
-    ax.set_title(f"Variability ratio: {result.attrs.get('window_months', '?')} months, "
-                 f"{result.attrs.get('block_months', '?')}-month means")
-    fig.colorbar(mesh, ax=ax, ticks=bounds[1:-1], label="Model std / observed std (1 = equal)", extend="max")
-    fig.tight_layout()
+    ax.set_title(
+        title if title is not None else
+        f"Variability ratio: {result.attrs.get('window_months', '?')} months, "
+        f"{result.attrs.get('block_months', '?')}-month means"
+    )
+    if add_colorbar:
+        colorbar = fig.colorbar(
+            mesh, ax=ax, ticks=bounds,
+            label="Model std / observed std (1 = equal)", extend="both",
+        )
+        colorbar.ax.set_yticklabels([f"{value:.1f}" for value in bounds])
+    if add_invalid_legend:
+        ax.legend(
+            handles=[Patch(facecolor=invalid_color, edgecolor="none", label="Invalid / missing")],
+            loc="upper left", bbox_to_anchor=(1.01, 0), frameon=False, fontsize="small",
+        )
+    if owns_figure:
+        fig.tight_layout()
+    return fig
+
+
+def plot_normalized_change(
+    result: xr.Dataset,
+    *,
+    variable: str = "signed_normalized_change",
+    ax=None,
+    add_colorbar: bool = True,
+    add_invalid_legend: bool = True,
+    title: str | None = None,
+):
+    """Plot signed, absolute, or observation-adjusted normalized change."""
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import BoundaryNorm, ListedColormap, TwoSlopeNorm
+    from matplotlib.patches import Patch
+
+    choices = {
+        "signed_normalized_change": {
+            "bounds": np.arange(-3.0, 3.01, 0.5),
+            "cmap": "RdBu_r", "extend": "both",
+            "label": r"$(M_2-M_1) / \sigma_{obs,clim}$",
+        },
+        "absolute_normalized_change": {
+            "bounds": np.arange(0.0, 3.01, 0.25),
+            "cmap": "YlOrRd", "extend": "max",
+            "label": r"$|M_2-M_1| / \sigma_{obs,clim}$",
+        },
+        "excess_normalized_change": {
+            "bounds": np.arange(-3.0, 3.01, 0.5),
+            "cmap": "RdBu_r", "extend": "both",
+            "label": r"$[(M_2-M_1)-(O_2-O_1)] / \sigma_{obs,clim}$",
+        },
+    }
+    if variable not in choices:
+        raise ValueError(f"variable must be one of {tuple(choices)}")
+    if variable not in result:
+        raise ValueError(f"Result does not contain {variable!r}")
+
+    settings = choices[variable]
+    values = result[variable]
+    if "case" not in values.dims:
+        values = values.expand_dims(case=[result.attrs.get("case", "model")])
+    values = values.transpose("Y", "case")
+    bounds = settings["bounds"]
+    centers = (bounds[:-1] + bounds[1:]) / 2
+    if bounds[0] < 0:
+        scale = TwoSlopeNorm(vmin=bounds[0], vcenter=0.0, vmax=bounds[-1])
+        colors = plt.colormaps[settings["cmap"]](scale(centers))
+    else:
+        colors = plt.colormaps[settings["cmap"]](
+            (centers - bounds[0]) / (bounds[-1] - bounds[0])
+        )
+    cmap = ListedColormap(colors)
+    invalid_color = "#bdbdbd"
+    cmap.set_bad(invalid_color)
+    if bounds[0] < 0:
+        cmap.set_under("#021a35")
+        cmap.set_over("#3b0010")
+    else:
+        cmap.set_over("#4a0000")
+
+    owns_figure = ax is None
+    if owns_figure:
+        fig, ax = plt.subplots(
+            figsize=(max(6, values.sizes["case"] * 1.5), max(3, values.sizes["Y"] * .25))
+        )
+    else:
+        fig = ax.figure
+    mesh = ax.imshow(
+        values.values, aspect="auto", cmap=cmap,
+        norm=BoundaryNorm(bounds, cmap.N),
+    )
+    ax.set_xticks(
+        np.arange(values.sizes["case"]), labels=values.case.values,
+        rotation=30, ha="right",
+    )
+    ax.set_yticks(np.arange(values.sizes["Y"]), labels=[str(value) for value in values.Y.values])
+    ax.set_xticks(np.arange(-.5, values.sizes["case"], 1), minor=True)
+    ax.set_yticks(np.arange(-.5, values.sizes["Y"], 1), minor=True)
+    ax.grid(which="minor", color="#d9d9d9", linewidth=.6)
+    ax.tick_params(which="minor", bottom=False, left=False)
+    ax.set_ylabel("Initialization")
+    ax.set_title(title if title is not None else values.attrs.get("long_name", variable))
+    if add_colorbar:
+        colorbar = fig.colorbar(
+            mesh, ax=ax, ticks=bounds, label=settings["label"],
+            extend=settings["extend"],
+        )
+        colorbar.ax.set_yticklabels([f"{value:g}" for value in bounds])
+    if add_invalid_legend:
+        ax.legend(
+            handles=[Patch(facecolor=invalid_color, edgecolor="none", label="Invalid / missing")],
+            loc="upper left", bbox_to_anchor=(1.01, 0), frameon=False, fontsize="small",
+        )
+    if owns_figure:
+        fig.tight_layout()
     return fig

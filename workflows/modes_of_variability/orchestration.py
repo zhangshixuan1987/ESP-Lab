@@ -188,9 +188,16 @@ def ensure_mode_products(settings: Mapping[str, object]) -> dict[str, object]:
         nmme_models = _discover_nmme_models(effective)
         calls.append(_processor_args(effective, ["obs", "nmme"], nmme_models=nmme_models))
 
+    processor_runs = 0
     if ensure_mode != "require":
         for args in calls:
+            # In auto mode, avoid opening fields and rebuilding the observational
+            # EOF reference when every product for this runner call is already
+            # compatible. Rebuild mode intentionally executes every call.
+            if ensure_mode == "auto" and not mode_processor.expected_product_issues(args):
+                continue
             mode_processor.run(args)
+            processor_runs += 1
     issues = [issue for args in calls for issue in mode_processor.expected_product_issues(args)]
     if issues:
         raise RuntimeError("Modes-of-variability products are unavailable:\n  - " + "\n  - ".join(issues))
@@ -212,6 +219,7 @@ def ensure_mode_products(settings: Mapping[str, object]) -> dict[str, object]:
         "mode": selected_mode,
         "ensure_mode": ensure_mode,
         "processor_calls": len(calls),
+        "processor_runs": processor_runs,
         "nmme_models": nmme_models,
         "teleconnection_products": teleconnection_status,
         "manifest": str(Path(effective["outdir"]) / "_manifests" / "modes_manifest.json"),
