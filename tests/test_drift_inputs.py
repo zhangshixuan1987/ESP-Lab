@@ -24,13 +24,16 @@ class DriftInputsTests(unittest.TestCase):
                                   coords={'Y': [1980, 1981, 1982], 'L': np.arange(1, 25),
                                           'M': [0, 1], 'lat': [-5, 5], 'lon': [190, 210, 240]},
                                   attrs={'units': 'hPa'})
-        ref = self.values.mean('M')
+        ref = self.values.mean('M', keep_attrs=True)
         self.hc_path = self.root / 'hindcast.nc'
         self.ref_path = self.root / 'reference.nc'
         time = xr.DataArray(np.tile(np.arange(24), (3, 1)), dims=('Y', 'L'),
                             coords={'Y': ref.Y, 'L': ref.L})
         xr.Dataset({'PSL': self.values, 'time': time}).to_netcdf(self.hc_path)
-        xr.Dataset({'X_obs': ref + 0.5, 'X_att': ref - 0.3, 'sigma_att': xr.ones_like(ref),
+        obs_ref = (ref + 0.5).assign_attrs(self.values.attrs)
+        att_ref = (ref - 0.3).assign_attrs(self.values.attrs)
+        sigma = xr.ones_like(ref).assign_attrs(self.values.attrs)
+        xr.Dataset({'X_obs': obs_ref, 'X_att': att_ref, 'sigma_att': sigma,
                     'valid_time': time}).to_netcdf(self.ref_path)
 
     def build(self):

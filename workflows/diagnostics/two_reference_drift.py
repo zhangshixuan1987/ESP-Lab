@@ -21,6 +21,7 @@ from esp_lab import data_access_e3sm
 from esp_lab.land_skill import depth_integrated_soil_water_mm
 from esp_lab.diagnostics.two_reference_drift import (
     compute_diagnostics,
+    compute_ensemble_mean,
     match_model_climatology_to_valid_time,
     match_observation_to_valid_time,
     validate_compatible_fields,
@@ -778,7 +779,7 @@ def load_drift_references(
         if hindcast is not None:
             hindcast_field = hindcast[variable] if isinstance(hindcast, xr.Dataset) else hindcast
             hindcast_mean = (
-                hindcast_field.mean("M", skipna=True) if "M" in hindcast_field.dims
+                compute_ensemble_mean(hindcast_field) if "M" in hindcast_field.dims
                 else hindcast_field
             )
             validate_compatible_fields(hindcast_mean, result.X_obs, result.X_att)
