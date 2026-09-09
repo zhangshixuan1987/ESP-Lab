@@ -250,3 +250,72 @@ def ensure_regional_products(output_root, variables, init_months, sources, regio
             workflow.atomic_to_netcdf(product, path)
             print(f'[drift inputs] Saved {path}')
     return pd.DataFrame(rows)
+
+
+DEFAULT_OUTPUT_ROOT = Path(
+    '/global/cfs/cdirs/e3sm/S2S2D/s2d_diag/multimodel/leadtime_drift/two_reference'
+)
+DEFAULT_FIGURE_ROOT = Path('/global/cfs/cdirs/e3sm/www/zhan391/esp-lab_diag')
+
+DEFAULT_VARIABLES = ('TREFHT', 'SST', 'PSL', 'PRECT', 'H2OSOI')
+DEFAULT_INIT_MONTHS = (5, 11)
+DEFAULT_SOURCES = ('JRA55_FOSIRL', 'Reanalysis')
+DEFAULT_SOURCE_LABELS = {'JRA55_FOSIRL': 'FOSIRL', 'Reanalysis': 'Reanalysis'}
+DEFAULT_SOURCE_COLORS = {'JRA55_FOSIRL': 'tab:blue', 'Reanalysis': 'tab:orange'}
+DEFAULT_SOURCE_MARKERS = {'JRA55_FOSIRL': 'o', 'Reanalysis': '^'}
+
+DEFAULT_PLOT_REGIONS = {
+    'TREFHT': ('Nino3.4', 'North_Atlantic'),
+    'SST': ('Nino3.4', 'North_Atlantic'),
+    'PSL': ('Nino3.4', 'North_Atlantic'),
+    'PRECT': ('Nino3.4', 'North_Atlantic'),
+    'H2OSOI': ('Global_land',),
+}
+DEFAULT_REGION_LABELS = {
+    'Nino3.4': 'Niño3.4',
+    'North_Atlantic': 'North Atlantic',
+    'Global_land': 'Global Land',
+}
+DEFAULT_REGION_FILE_LABELS = {
+    'Nino3.4': 'nino34',
+    'North_Atlantic': 'north_atlantic',
+    'Global_land': 'global_land',
+}
+MONTH_NAMES = {5: 'May', 11: 'November'}
+
+
+def regional_product_path(variable, init_month, source, output_root=DEFAULT_OUTPUT_ROOT):
+    """Standard filename and path for regional two-reference diagnostic products."""
+    return Path(output_root) / f'{source}_{variable}_{int(init_month):02d}_regional.nc'
+
+
+def figure_size(width, height, scale=1.0):
+    """Scale (width, height) tuple uniformly by scale factor."""
+    return (width * scale, height * scale)
+
+
+def load_regional_manifest(output_root=DEFAULT_OUTPUT_ROOT,
+                           variables=DEFAULT_VARIABLES,
+                           init_months=DEFAULT_INIT_MONTHS,
+                           sources=DEFAULT_SOURCES,
+                           regions=DEFAULT_PLOT_REGIONS,
+                           mode='auto'):
+    """Ensure regional products are generated, validated, and returned as a sorted manifest."""
+    root = Path(output_root)
+    manifest = ensure_regional_products(
+        root, variables, init_months, sources, regions, mode=mode,
+    )
+    expected_products = len(variables) * len(init_months) * len(sources)
+    if len(manifest) != expected_products:
+        raise ValueError(
+            f'Expected {expected_products} regional products, found {len(manifest)}'
+        )
+    if manifest.duplicated(['variable', 'init_month', 'source']).any():
+        raise ValueError('Regional manifest contains duplicate variable/month/source rows')
+    missing = [
+        Path(p) for p in manifest['path']
+        if not Path(p).is_file() or Path(p).stat().st_size == 0
+    ]
+    if missing:
+        raise FileNotFoundError(f'{len(missing)} required regional products are missing: {missing}')
+    return manifest.sort_values(['variable', 'init_month', 'source'])

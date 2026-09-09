@@ -77,6 +77,26 @@ class DriftInputsTests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             inputs.ensure_regional_products(**self.kw, mode='require')
 
+    def test_load_regional_manifest_and_helpers(self):
+        path = inputs.regional_product_path('PSL', 5, 'JRA55_FOSIRL', output_root=self.kw['output_root'])
+        self.assertEqual(path.name, 'JRA55_FOSIRL_PSL_05_regional.nc')
+        self.assertEqual(inputs.figure_size(10, 5, scale=2.0), (20.0, 10.0))
+
+        with patch.object(inputs, 'default_variable_config', return_value={
+            'PSL': {'component': 'atm', 'include_spread': True}}), \
+             patch.object(inputs, 'ensure_reference', return_value=self.ref_path), \
+             patch.object(inputs.workflow, 'discover_monthly_hindcast', return_value=self.hc_path), \
+             patch.object(inputs.workflow, 'load_drift_references', side_effect=lambda *a, **kw: xr.open_dataset(self.ref_path)):
+            manifest = inputs.load_regional_manifest(
+                output_root=self.kw['output_root'],
+                variables=self.kw['variables'],
+                init_months=self.kw['init_months'],
+                sources=self.kw['sources'],
+                regions=self.kw['regions'],
+            )
+            self.assertEqual(len(manifest), 2)
+            self.assertTrue(all(Path(p).is_file() for p in manifest['path']))
+
 
 if __name__ == '__main__':
     unittest.main()
