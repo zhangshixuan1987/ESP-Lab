@@ -1,26 +1,18 @@
 """
-This module provides utilities to assist in statistics calculations related
-to SMYLE analysis. Functions provide tools to perform linear detrending along
-a particular axis, determine skill metrics based on model and observation
-DataArrays, and generate a distribution of skill scores using a smaller
-ensemble member size.
+This module provides utilities to assist in statistics calculations for E3SM
+subseasonal-to-decadal (S2D) ensemble analysis. Functions provide tools to
+perform linear detrending, determine skill metrics based on model and
+observation DataArrays, and generate a distribution of skill scores using
+a smaller ensemble member size.
 
 Authors
 -------
-    - Steve Yeager
-    - Elizabeth Maroon
-
-Use
----
-    Users wishing to utilize these tools may do so by importing
-    various functions, for example:
-    ::
-        from esp-tools.utils.stat_utils import cor_ci_bootyears
+- Steve Yeager
+- Elizabeth Maroon
 
 Dependencies
 ------------
-    The user must have an activated conda environment which includes
-    xarray, numpy, sys, cftime, and xskillscore.
+Requires xarray, numpy, sys, cftime, and xskillscore.
 """
 
 import xarray as xr

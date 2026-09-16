@@ -712,7 +712,7 @@ def load_drift_references(
     if not reference_path.is_file():
         raise FileNotFoundError(
             f"Prepared drift reference does not exist: {reference_path}. "
-            "Ensure it with workflows.diagnostics.drift_inputs.ensure_reference or jupyter/preprocessing/drift/0_run_drift_input.ipynb."
+            "Ensure it with workflows.diagnostics.drift_inputs.ensure_reference."
         )
     raw = xr.open_dataset(reference_path, chunks={})
     try:
@@ -743,7 +743,7 @@ def load_drift_references(
             raise ValueError(
                 f"Prepared drift reference lacks the required historical ensemble "
                 f"spread (sigma_att): {reference_path}. Rebuild it with "
-                "workflows.diagnostics.drift_inputs.ensure_reference or jupyter/preprocessing/drift/0_run_drift_input.ipynb."
+                "workflows.diagnostics.drift_inputs.ensure_reference."
             )
         if spread_name is not None:
             selected_names.append(spread_name)

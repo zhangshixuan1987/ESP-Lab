@@ -250,7 +250,7 @@ def run(
     if product_rows:
         fingerprint = config_fingerprint(ic_cfg, variable="all_initial_conditions")
         product_table = standardize_product_table(
-            product_rows, workflow="5b_initial_conditions",
+            product_rows, workflow="5i_initial_conditions",
             configuration_hash=fingerprint,
             defaults={
                 "region": "native_grid", "member_aggregation": "per_restart_pair",
@@ -259,7 +259,7 @@ def run(
         )
         write_product_bundle(
             cs_dir / "products", product_table,
-            workflow="5b_initial_conditions", configuration_hash=fingerprint,
+            workflow="5i_initial_conditions", configuration_hash=fingerprint,
             field_paths=sorted(vs_dir.glob("*_diff.nc")),
             metadata={
                 "inventory_status": "candidate_inventory",

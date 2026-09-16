@@ -1,10 +1,10 @@
 import datetime
 
-import esp_lab
-
 import os
 import sys
-sys.path.insert(0, os.path.abspath('../../esp_lab'))
+sys.path.insert(0, os.path.abspath('../..'))
+
+import esp_lab
 
 extensions = [
     'sphinx.ext.autodoc',
@@ -13,13 +13,15 @@ extensions = [
     'sphinx.ext.doctest',
     'sphinx.ext.intersphinx',
     'sphinx.ext.extlinks',
-    'sphinx.ext.intersphinx',
     'sphinx.ext.napoleon',
-    'myst_nb',
-    'sphinxext.opengraph',
+    'myst_parser',
     'sphinx_copybutton',
-    'sphinx_inline_tabs',
 ]
+
+source_suffix = {
+    '.rst': 'restructuredtext',
+    '.md': 'markdown',
+}
 
 autodoc_member_order = 'groupwise'
 
@@ -73,15 +75,21 @@ exclude_patterns = ['_build', '**.ipynb_checkpoints', 'Thumbs.db', '.DS_Store']
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = 'sphinx'
 
-# The theme to use for HTML and HTML Help pages.  See the documentation for
-# a list of builtin themes.
-html_theme = 'furo'
-html_title = ''
+try:
+    import furo  # noqa: F401
+    html_theme = 'furo'
+except ImportError:
+    try:
+        import sphinx_rtd_theme  # noqa: F401
+        html_theme = 'sphinx_rtd_theme'
+    except ImportError:
+        html_theme = 'alabaster'
+html_title = 'ESP-Lab'
 
 html_context = {
-    'github_user': 'TeaganKing',
-    'github_repo': 'esp-lab',
-    'github_version': 'main',
+    'github_user': 'zhangshixuan1987',
+    'github_repo': 'ESP-Lab',
+    'github_version': 'e3sm-esp',
     'doc_path': 'docs',
 }
 html_theme_options = dict(

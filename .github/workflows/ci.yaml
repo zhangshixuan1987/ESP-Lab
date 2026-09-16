@@ -1,8 +1,9 @@
 name: CI
 on:
   push:
+    branches: [ main, e3sm-esp ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, e3sm-esp ]
   schedule:
     - cron: '0 0 * * *' # Daily “At 00:00”
   workflow_dispatch: # allows you to trigger manually
@@ -10,8 +11,6 @@ on:
 jobs:
   skip-duplicate-jobs:
     runs-on: ubuntu-latest
-    if: |
-      github.repository == 'CESM-ESPWG/ESP-Lab'
     outputs:
       should_skip: ${{ steps.skip_check.outputs.should_skip }}
     steps:
@@ -34,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.8', '3.9', '3.10']
+        python-version: ['3.10', '3.11', '3.12']
     steps:
       - uses: actions/checkout@v4
       - uses: conda-incubator/setup-miniconda@v3

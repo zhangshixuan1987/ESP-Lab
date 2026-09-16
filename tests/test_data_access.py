@@ -1,6 +1,4 @@
 import cftime
-from functools import partial
-import glob
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -8,9 +6,7 @@ import xarray as xr
 
 from esp_lab.data_access_smyle import time_set_midmonth
 from esp_lab.data_access_smyle import file_dict
-from esp_lab.data_access_smyle import get_monthly_data
 from esp_lab.data_access_smyle import nested_file_list_by_year
-from esp_lab.data_access_smyle import preprocessor
 
 _TEST_DATA = Path(__file__).parent / "test_data"
 
@@ -30,30 +26,6 @@ def test_file_dict():
     expected = str(_TEST_DATA / 'b.e21.BSMYLE.f09_g17.1986-02.003.pop.h.zsatcalc.198602-198801.nc')
     assert filepaths[1986] == expected
     assert len(filepaths.keys()) == 3
-
-
-def test_get_monthly_data():
-    """
-    Test the get_monthly_data function.
-    """
-    # filetemplate = 'tests/test_data/b.e21.BSMYLE.f09_g17.????-MM.EEE.pop.h.zsatcalc.*.nc'
-    # filetype = '.pop.h.'
-    # ens = 3
-    # firstyear = 1986
-    # lastyear = 1988
-    # stmon = 2
-    # nlead = 24
-    # field = 'zsatcalc'
-    # preproc = preprocessor
-
-    # ds0 = get_monthly_data(filetemplate, filetype, ens, nlead, field,
-    #                  firstyear, lastyear, stmon, preproc)
-
-    # print("ds0 {}".format(ds0))
-
-    # todo: make test
-
-    assert True
 
 
 def test_nested_file_list_by_year():
@@ -84,15 +56,6 @@ def test_bad_nested_file_list_by_year():
     nested_files = nested_file_list_by_year(filetemplate, filetype, ens, start_years, stmon)
 
     assert nested_files[0] == []
-
-
-def test_preprocessor():
-    """
-    Test the preprocessor function.
-    """
-    # todo: make test
-
-    assert True
 
 
 def test_time_set_midmonth():

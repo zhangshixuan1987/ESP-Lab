@@ -25,24 +25,25 @@ CLASSIFIERS = [
     'Programming Language :: Python :: 3.10',
     'Programming Language :: Python :: 3.11',
     'Programming Language :: Python :: 3.12',
+    'Programming Language :: Python :: 3.13',
     'Topic :: Scientific/Engineering',
 ]
 
 setup(
     name='esp-lab',
-    version='1.2.0',
-    description='Utilities for SMYLE Analysis',
+    version='1.3.0',
+    description='Diagnostic and analysis utilities for E3SM S2D ensemble predictions',
     long_description=long_description,
     long_description_content_type='text/markdown',
     python_requires='>=3.10',
-    maintainer='ESP-Lab Team',
+    maintainer='ESP-Lab / E3SM Team',
     maintainer_email='tking@ucar.edu',
     classifiers=CLASSIFIERS,
     url='https://esp-lab.readthedocs.io',
     project_urls={
         'Documentation': 'https://esp-lab.readthedocs.io',
-        'Source': 'https://github.com/CESM-ESPWG/ESP-Lab',
-        'Tracker': 'https://github.com/CESM-ESPWG/ESP-Lab/issues',
+        'Source': 'https://github.com/zhangshixuan1987/ESP-Lab',
+        'Tracker': 'https://github.com/zhangshixuan1987/ESP-Lab/issues',
     },
     packages=find_packages(exclude=('tests',)),
     include_package_data=True,
@@ -50,5 +51,5 @@ setup(
     license='Apache 2.0',
     zip_safe=False,
     entry_points={},
-    keywords='ESP-Lab, SMYLE, Analysis, Earth System Predictions',
+    keywords='ESP-Lab, E3SM, S2D, SMYLE, Earth System Predictions, diagnostics',
 )

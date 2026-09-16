@@ -1,31 +1,44 @@
-# Welcome to esp-lab's documentation!
+# Welcome to ESP-Lab's documentation!
 
+ESP-Lab provides tools and workflows for evaluating Earth System Prediction hindcasts, including lead-time skill maps, RMSE diagnostics, SST indices, modes of variability, equatorial longitude indices (ELI), initial-shock analyses, and interactive diagnostic web galleries across E3SM, CESM-SMYLE, NMME, and observation benchmarks.
 
-## Get in touch
+## Live Diagnostics Gallery
+Browse precomputed diagnostic figures across all forecast leads, initialization seasons, and models in the interactive [ESP-Lab Diagnostics Portal](https://portal.nersc.gov/cfs/e3sm/zhan391/esp-lab_diag/index.html).
 
-- If you encounter any errors or problems with **esp-lab**, please open an issue at the GitHub [main repository](http://github.com/CESM-ESPWG/ESP-Lab/issues).
-- If you have a question like "How do I find x?", ask on [GitHub discussions](https://github.com/CESM-ESPWG/ESP-Lab/discussions). Please include a self-contained reproducible example if possible.
+## Getting in touch
+
+- If you encounter any errors or problems with **ESP-Lab**, please open an issue at the GitHub [repository](https://github.com/zhangshixuan1987/ESP-Lab/issues).
+- For questions, visit the GitHub project page at [zhangshixuan1987/ESP-Lab](https://github.com/zhangshixuan1987/ESP-Lab).
 
 ```{toctree}
 ---
-maxdepth: 1
-hidden:
+maxdepth: 2
+caption: Core Modules & API
 ---
 
-how-to/index.md
-reference/index.md
-
+data_access.rst
+stats.rst
 ```
 
 ```{toctree}
 ---
 maxdepth: 2
-caption: Contribute to esp-lab
-hidden:
+caption: User Guides & Tutorials
+---
+
+how-to/index.md
+tutorials/index.md
+reference/index.md
+```
+
+```{toctree}
+---
+maxdepth: 1
+caption: Project Information
 ---
 
 changelog.md
-GitHub Repo <https://github.com/CESM-ESPWG/ESP-Lab>
-GitHub discussions <https://github.com/CESM-ESPWG/ESP-Lab/discussions>
-
+GitHub Repo <https://github.com/zhangshixuan1987/ESP-Lab>
+Issue Tracker <https://github.com/zhangshixuan1987/ESP-Lab/issues>
+Upstream CESM-ESPWG Repo <https://github.com/CESM-ESPWG/ESP-Lab>
 ```

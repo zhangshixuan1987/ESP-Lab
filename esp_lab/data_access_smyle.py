@@ -1,28 +1,8 @@
 """
-This module provides utilities which support input/output processes.
-Functions in this module can provide methods to return dictionaries
-of filepaths keyed by initialization year, nested lists of files
-for particular start years and ensemble members, and dask arrays
-containing particular hindcast ensembles. This module also provides
-preprocessing which can assist in using intake-esm in conjunction
-with other data_access functions.
-
-Authors
--------
-    - Steve Yeager
-    - Elizabeth Maroon
-
-Use
----
-    Users wishing to utilize these tools may do so by importing
-    various functions, for example:
-    ::
-        from esp-tools.utils.io_utils import file_dict
-
-Dependencies
-------------
-    The user must have an activated conda environment which includes
-    xarray, numpy, glob, and functools.
+This module provides utilities which support input/output processes for legacy SMYLE data.
+Functions in this module provide methods to return dictionaries of filepaths keyed by
+initialization year, nested lists of files for particular start years and ensemble members,
+and xarray datasets containing particular hindcast ensembles.
 """
 
 import cftime

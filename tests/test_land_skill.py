@@ -10,11 +10,8 @@ import xarray as xr
 from esp_lab import land_skill
 
 
-LAND_NOTEBOOK = (
-    Path(__file__).parents[1]
-    / "jupyter"
-    / "1b_refactor_lnd_leadtime_acc_skill_map.ipynb"
-)
+_land_nb_matches = list((Path(__file__).parents[1] / "jupyter").rglob("1b_refactor_lnd_leadtime_acc_skill_map.ipynb"))
+LAND_NOTEBOOK = _land_nb_matches[0] if _land_nb_matches else (Path(__file__).parents[1] / "jupyter" / "1b_refactor_lnd_leadtime_acc_skill_map.ipynb")
 
 
 def _land_dataset():

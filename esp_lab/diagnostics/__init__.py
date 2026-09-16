@@ -1,3 +1,5 @@
+"""Diagnostic modules for ESP-Lab evaluation workflows."""
+
 from .config import (
     DEFAULT_CLIMATOLOGY_END_YEAR,
     DEFAULT_CLIMATOLOGY_START_YEAR,

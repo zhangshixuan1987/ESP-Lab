@@ -6,25 +6,31 @@ archive stored under a per-initialization-date directory tree. The
 interface mirrors ``data_access_e3sm`` so that the two datasets can be
 loaded with near-identical calling code.
 
-Expected directory structure
-----------------------------
-<data_dir>/
-  b.e21.BSMYLE.f09_g17_<YYYYMM>0100/
-    EN01/
-      post/atm/f09_g17/ts/monthly/
-        b.e21.BSMYLE.f09_g17.<YYYY>-<MM>.<EEE>.cam.h0.<FIELD>.<start_YYYYMM>-<end_YYYYMM>.nc
-    EN02/
-      post/atm/f09_g17/ts/monthly/
+Expected CESM-SMYLE directory structure
+---------------------------------------
+::
+
+    <data_dir>/
+      b.e21.BSMYLE.f09_g17_<YYYYMM>0100/
+        EN01/
+          post/atm/f09_g17/ts/monthly/
+            b.e21.BSMYLE.f09_g17.<YYYY>-<MM>.<EEE>.cam.h0.<FIELD>.<start_YYYYMM>-<end_YYYYMM>.nc
+        EN02/
+          post/atm/f09_g17/ts/monthly/
+            ...
         ...
-    ...
 
-Example top-level case directory
----------------------------------
-b.e21.BSMYLE.f09_g17_1980020100
+Example CESM-SMYLE top-level case directory
+-------------------------------------------
+::
 
-Example file (member EN20, init 2018-08)
------------------------------------------
-b.e21.BSMYLE.f09_g17.2018-08.020.cam.h0.TREFHT.201808-202007.nc
+    b.e21.BSMYLE.f09_g17_1980020100
+
+Example CESM-SMYLE file (member EN20, init 2018-08)
+---------------------------------------------------
+::
+
+    b.e21.BSMYLE.f09_g17.2018-08.020.cam.h0.TREFHT.201808-202007.nc
 
 Notes
 -----
@@ -49,23 +55,25 @@ Notes
    ``time_set_midmonth`` logic used by ``data_access_e3sm`` to normalize
    timestamps to the 15th of the represented month.
 
-Typical use
------------
-from esp_lab import data_access_cesm_smyle as smyle_access
+Typical CESM-SMYLE use
+-----------------------
+::
 
-field = "TREFHT"
-data_dir = "/global/cfs/cdirs/e3sm/S2S2D/CESM-SMYLE"
-members = [f"EN{i:02d}" for i in range(1, 21)]   # EN01 … EN20
-init_tags = smyle_access.build_init_tags(range(1980, 2019), [2, 5, 8, 11])
+    from esp_lab import data_access_cesm_smyle as smyle_access
 
-ds = smyle_access.get_monthly_data(
-    data_dir=data_dir,
-    members=members,
-    init_tags=init_tags,
-    field=field,
-    nlead=24,
-)
-# ds has dimensions (Y, L, M, lat, lon)
+    field = "TREFHT"
+    data_dir = "/global/cfs/cdirs/e3sm/S2S2D/CESM-SMYLE"
+    members = [f"EN{i:02d}" for i in range(1, 21)]   # EN01 … EN20
+    init_tags = smyle_access.build_init_tags(range(1980, 2019), [2, 5, 8, 11])
+
+    ds = smyle_access.get_monthly_data(
+        data_dir=data_dir,
+        members=members,
+        init_tags=init_tags,
+        field=field,
+        nlead=24,
+    )
+    # ds has dimensions (Y, L, M, lat, lon)
 """
 
 import re

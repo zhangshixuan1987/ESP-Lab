@@ -1,32 +1,25 @@
 # Workflow package layout
 
-The `workflows` package contains orchestration code. Reusable calculations and
-I/O primitives belong in `esp_lab`.
+The `workflows` package contains high-level orchestration modules directly supporting the `jupyter/` analysis suite (0 through 7). Reusable calculations and data access primitives belong in `esp_lab`.
+
+| Package | Supported Notebooks | Purpose |
+|---|---|---|
+| `leadtime_skill` | `2b` | Lead-time RMSE comparison and multi-model metrics |
+| `modes_of_variability` | `4a`, `4b` | Modes-of-variability processing, EOF projection, and teleconnection analysis |
+| `diagnostics` | `3b`, `4b`, `5c`, `6a`, `6b` | Teleconnections (`sst_teleconnections`, `mov_teleconnections`, `teleconnection_inputs`) and initial-shock archive runners |
+
+Each workflow package maintains configuration, discovery, preprocessing, diagnostics, and plotting together. Generated data, figures, and notebook checkpoints do not belong under this directory.
+
+## Additional Workflow Packages (Current Branch)
 
 | Package | Purpose |
 |---|---|
-| `diagnostics` | Daily/monthly drift, initial-condition, physical-consistency, and integrated diagnostic pipelines |
-| `e3sm_analysis` | E3SM diagnostics and time-series comparisons |
-| `leadtime_skill` | Lead-time skill and RMSE comparison helpers |
-| `modes_of_variability` | Modes-of-variability processing support |
-| `tropical_cyclones` | Tropical-cyclone diagnostics |
+| `diagnostics/initial_conditions` | IC hash audit (SHA-256), variable statistics, spatial plots, cross-component physical consistency, and campaign summary across all start dates |
+| `diagnostics/physical_consistency` | Flux partitioning (EF & Bowen ratio), land-atmosphere coupling, precip–SM lag response, ocean coupling, and apparent surface energy residual |
+| `diagnostics/unified` | Master S2D orchestrator: field drift (Branch A), physical consistency (Branch B), model attractor (Branch C), and IC-to-drift attribution (Branch D) |
+| `diagnostics/daily_drift` | Daily-frequency two-reference drift — discovery, preprocessing, diagnostics, plotting, and CLI runner |
+| `diagnostics/monthly_drift` | Monthly-frequency two-reference drift — same structure as `daily_drift` |
+| `e3sm_analysis` | E3SM time-series diagnostics and multi-experiment comparisons |
+| `tropical_cyclones` | TC track density, lead-time diagnostics, and multi-method comparisons |
 
-Each workflow package should keep configuration, discovery, preprocessing,
-diagnostics, plotting, and its command-line runner together when those layers
-are needed. Generated data, figures, notebook checkpoints, and Python bytecode
-do not belong under this directory.
-
-## S2D Drift Analysis Notebook Suite (5a--5e)
-
-The interactive analysis notebooks in `jupyter/` provide sequential, publication-ready two-reference drift diagnostics:
-
-| Notebook | Focus | Primary Products & Methods |
-|---|---|---|
-| `5a_refactor_drift_map.ipynb` | Global spatial maps | 2D global maps of distance change to observations ($X_{\text{obs}}$) vs model attractor ($X_{\text{att}}$) |
-| `5b_refactor_drift_region.ipynb` | Regional drift & skill | Lead-time drift trajectories and RMSE/spread curves for Niño3.4, North Atlantic, and global land H2OSOI |
-| `5c_refactor_drift_regime.ipynb` | Drift-regime frequency | Fraction of regional area in Regimes 1--4 (converging to obs vs drifting to model climate) |
-| `5d_refactor_drift_skill_relationship.ipynb` | Drift-to-skill attribution | Unified Method 1 (unconditional early drift vs later RMSE) and Method 2 (conditional error-growth rate controlling for initial $L=1$ error with block bootstrap), plus paired strategy contrasts |
-| `5e_refactor_drift_summary.ipynb` | Integrated S2D summary | Lead-time bias/spread, calendar-month bias, SST vs 2m air temp consistency, ENSO event frequency, and summary scorecards |
-
-Input preparation is managed on-demand via `workflows.diagnostics.drift_inputs`, or batch-precomputed via `jupyter/preprocessing/drift/` drivers (`0_run_drift_input.ipynb`, `0_run_drift_diag.ipynb`).
-Paired contrasts always use `JRA55_FOSIRL - Reanalysis`. Detailed modular subpackages (`daily_drift`, `monthly_drift`, `physical_consistency`, `unified`, `initial_conditions`) support underlying spatial and process calculations.
+Corresponding Jupyter notebooks: `5i` (IC analysis), `5j` (physical consistency), `5k` (unified diagnostics), `8a–8b` (tropical cyclones).
