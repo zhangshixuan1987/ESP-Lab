@@ -2,6 +2,7 @@ cartopy
 cftime
 cf_units
 cf_xarray
+cmocean
 dask
 dask-jobqueue
 distributed
@@ -15,5 +16,6 @@ pcmdi_metrics
 regionmask
 scipy
 xarray>=2023.1
+xcdat
 xesmf
 xskillscore>=0.0.24

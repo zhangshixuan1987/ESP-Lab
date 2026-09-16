@@ -1,10 +1,10 @@
 """
 run_unified.py
 ==============
-Top-level CLI orchestrator for the Unified S2D Diagnostic Architecture (5f).
+Top-level CLI orchestrator for the Unified S2D Diagnostic Architecture (5k).
 
 Executes:
-  0. Consume standardized 5b--5e products
+  0. Consume standardized 5d--5j products
   A. Field Drift (B^obs, D^obs, J)
   B. Physical Consistency (EF, BR, coupling slopes, R_apparent)
   C. Model Attractor using an independent historical climatology
@@ -77,7 +77,7 @@ def run(
     )
     if model_field is None and not product_bundles:
         raise ValueError(
-            "run_unified requires product_bundles from 5b--5e (preferred) or a "
+            "run_unified requires product_bundles from 5d--5j (preferred) or a "
             "validated model_field for backward-compatible direct execution."
         )
 
@@ -144,11 +144,11 @@ def run(
         )
         source_rows = product_table.copy()
         if not source_rows.empty:
-            source_rows["workflow"] = "5f_unified_synthesis"
+            source_rows["workflow"] = "5k_unified_synthesis"
             source_rows["configuration_hash"] = synthesis_hash
         attribution_table = (
             standardize_product_table(
-                attribution_rows, workflow="5f_unified_synthesis",
+                attribution_rows, workflow="5k_unified_synthesis",
                 configuration_hash=synthesis_hash,
             )
             if attribution_rows else pd.DataFrame(columns=source_rows.columns)
@@ -156,7 +156,7 @@ def run(
         synthesis_table = pd.concat([source_rows, attribution_table], ignore_index=True)
         write_product_bundle(
             Path(output_root) / "products", synthesis_table,
-            workflow="5f_unified_synthesis", configuration_hash=synthesis_hash,
+            workflow="5k_unified_synthesis", configuration_hash=synthesis_hash,
             metadata={
                 "source_manifests": [str(path) for path in (product_bundles or [])],
                 "causal_language": "association unless spatial, cross-start, and pathway evidence agree",

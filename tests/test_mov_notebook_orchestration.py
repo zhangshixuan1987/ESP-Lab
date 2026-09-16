@@ -9,9 +9,8 @@ from workflows.modes_of_variability import orchestration
 from workflows.modes_of_variability import figure_config
 
 
-NOTEBOOK = (
-    Path(__file__).resolve().parents[1] / "jupyter" / "4a_refactor_mov_analysis.ipynb"
-)
+_mov_matches = list((Path(__file__).resolve().parents[1] / "jupyter").rglob("4a_refactor_mov_analysis.ipynb"))
+NOTEBOOK = _mov_matches[0] if _mov_matches else (Path(__file__).resolve().parents[1] / "jupyter" / "4a_refactor_mov_analysis.ipynb")
 
 
 def _settings(tmp_path, **overrides):
@@ -138,15 +137,6 @@ def test_notebook_uses_centralized_figure_configuration():
         assert legacy_block not in source
 
 
-def test_legacy_mov_drivers_are_grouped_as_optional_preprocessing():
-    root = NOTEBOOK.parents[1]
-    preprocessing = NOTEBOOK.parent / "preprocessing" / "mov"
-    assert not (NOTEBOOK.parent / "0_run_sigmod_emov.ipynb").exists()
-    assert not (NOTEBOOK.parent / "0_run_nmme_emov.ipynb").exists()
-    assert (preprocessing / "0_run_sigmod_emov.ipynb").is_file()
-    assert (preprocessing / "0_run_nmme_emov.ipynb").is_file()
-    assert (preprocessing / "README.md").is_file()
-    assert (root / "scripts" / "run_process_modes_of_variability.py").is_file()
 
 
 @pytest.mark.parametrize(

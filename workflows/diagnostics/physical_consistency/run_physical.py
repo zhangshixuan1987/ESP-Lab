@@ -154,7 +154,7 @@ def run(
             variable="physical_consistency",
         )
         product_table = standardize_product_table(
-            rows, workflow="5e_physical_consistency", configuration_hash=fingerprint,
+            rows, workflow="5j_physical_consistency", configuration_hash=fingerprint,
             defaults={
                 "reference_product": "5c/5d validated native-grid products",
                 "significance_method": "paired initialization-year bootstrap where available",
@@ -162,7 +162,7 @@ def run(
         )
         write_product_bundle(
             Path(output_root) / frequency / season / "products", product_table,
-            workflow="5e_physical_consistency", configuration_hash=fingerprint,
+            workflow="5j_physical_consistency", configuration_hash=fingerprint,
             metadata={
                 "use_synthetic_demo": False,
                 "bowen_ratio_definition": "SHFLX / LHFLX",

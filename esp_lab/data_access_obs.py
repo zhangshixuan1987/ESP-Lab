@@ -421,6 +421,7 @@ def transform_to_mid_month(ds: xr.Dataset, time_name: str = "time") -> xr.Datase
     observational products, where monthly data are stored at true month start.
 
     This function is intentionally conservative:
+
     - if time bounds are available, use their lower bound as the represented
       month;
     - if timestamps are already on day 15, leave the represented month as-is;
@@ -736,7 +737,7 @@ def get_monthly_data(
     preproc : {"default"} or callable, optional
         - "default": use built-in monthly preprocessor
         - callable: custom preprocessing function with signature
-          preproc(ds, field=None, start_year=None, end_year=None, **kwargs)
+          ``preproc(ds, field=None, start_year=None, end_year=None, **kwargs)``
     start_year : str, optional
         Start year for cropping.
     end_year : str, optional

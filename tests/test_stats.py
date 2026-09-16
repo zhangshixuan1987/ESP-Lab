@@ -9,10 +9,7 @@ from esp_lab.stats import cor_ci_bootyears
 from esp_lab.stats import compute_skill_seasonal_batch
 from esp_lab.stats import compute_resampled_nrmse_prepared
 from esp_lab.stats import detrend_linear
-from esp_lab.stats import leadtime_skill_seas
-from esp_lab.stats import leadtime_skill_seas_resamp
 from esp_lab.stats import prepare_skill_seasonal_lead
-from esp_lab.stats import remove_drift
 from esp_lab.stats import _climatology_mean_by_year
 
 
@@ -94,33 +91,6 @@ def test_detrend_linear():
     assert final_dat.data[1][1][1] < -1.3
     assert final_dat.data[1][0][1] > 2.6
     assert final_dat.data[1][0][1] < 2.7
-
-
-def test_leadtime_skill_seas():
-    """
-    Test the leadtime_skill_seas function.
-    """
-    # todo: make test
-
-    assert True
-
-
-def test_leadtime_skill_seas_resamp():
-    """
-    Test the leadtime_skill_seas_resamp function.
-    """
-    # todo: make test
-
-    assert True
-
-
-def test_remove_drift():
-    """
-    Test the remove_drift function.
-    """
-    # todo: make test
-
-    assert True
 
 
 def test_climatology_mean_by_year_accepts_cftime_bounds_for_datetime_index():

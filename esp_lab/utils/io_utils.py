@@ -1,3 +1,16 @@
+"""
+esp_lab.utils.io_utils — DEPRECATED (Legacy Module)
+====================================================
+
+.. deprecated::
+    This module is the original SMYLE-era I/O utility inherited from ``SMYLEutils`` /
+    ``esp-tools``. It is retained for backward compatibility and loaded automatically
+    via ``esp_lab.utils``, but has no active callers in the current workflow suite.
+
+    For new workflows, prefer ``esp_lab.utils.netcdf_utils`` for NetCDF I/O and
+    ``esp_lab.data_access_e3sm`` / ``esp_lab.data_access_cesm_smyle`` for data access.
+"""
+
 import xarray as xr
 import numpy as np
 import glob

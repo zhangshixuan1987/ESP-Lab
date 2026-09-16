@@ -26,13 +26,16 @@ class DaskConfig:
     queue: Optional[str] = None
     project: Optional[str] = None
     interface: Optional[str] = None
+    dashboard_address: Optional[str] = None
 
 
 def get_cluster_client(cfg: DaskConfig) -> Tuple[object | None, object | None]:
     """
     Create a Dask cluster + client based on config.
     """
+    import os
 
+    os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
     dask.config.set({'array.slicing.split_large_chunks': True})
 
     if cfg.cluster_type in (None, "none"):
@@ -44,7 +47,6 @@ def get_cluster_client(cfg: DaskConfig) -> Tuple[object | None, object | None]:
     if cfg.cluster_type == "local":
         from dask.distributed import LocalCluster
         import socket
-        import os
 
         # Check if running on login or shared Jupyter node
         is_login = False
@@ -67,11 +69,18 @@ def get_cluster_client(cfg: DaskConfig) -> Tuple[object | None, object | None]:
                 )
                 local_workers = 4
 
-        cluster = LocalCluster(
-            n_workers=local_workers,
-            threads_per_worker=1,
-            memory_limit=cfg.memory_limit,
-        )
+        cluster_kwargs = {
+            "n_workers": local_workers,
+            "threads_per_worker": 1,
+            "memory_limit": cfg.memory_limit,
+        }
+        dash_addr = getattr(cfg, "dashboard_address", None)
+        if dash_addr is not None:
+            cluster_kwargs["dashboard_address"] = dash_addr
+        elif is_login:
+            cluster_kwargs["dashboard_address"] = ":0"
+
+        cluster = LocalCluster(**cluster_kwargs)
         return _connect_owned_cluster(cluster)
 
     # -----------------------

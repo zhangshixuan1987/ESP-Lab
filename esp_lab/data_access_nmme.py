@@ -460,10 +460,11 @@ def remove_monthly_climatology(
     """
     Remove monthly climatology from regional SST.
 
-    For models in `split_models` (default: COLA-RSMAS-CCSM4 and NCEP-CFSv2),
+    For models in ``split_models`` (default: COLA-RSMAS-CCSM4 and NCEP-CFSv2),
     two separate climatology periods are used:
-      - Period 1: 1982–1998
-      - Period 2: 1999–2016
+
+    - Period 1: 1982–1998
+    - Period 2: 1999–2016
 
     Parameters
     ----------

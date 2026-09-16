@@ -6,23 +6,29 @@ data_access utility, but is adapted to E3SM directory-driven data
 organization, where data are stored under top-level initialization
 directories and ensemble subdirectories.
 
-Expected directory structure
-----------------------------
-<data_dir>/
-  <case_prefix>_<init_tag>/
-    EN00/
-      post/atm/180x360_aave/ts/monthly/2yr/{FIELD}_{start_yyyymm}_{end_yyyymm}.nc
-    EN01/
-      post/atm/180x360_aave/ts/monthly/2yr/{FIELD}_{start_yyyymm}_{end_yyyymm}.nc
-    ...
+Expected E3SM directory structure
+---------------------------------
+::
 
-Example top-level case directory
---------------------------------
-WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_JRA55_FOSIRL_1980050100
+    <data_dir>/
+      <case_prefix>_<init_tag>/
+        EN00/
+          post/atm/180x360_aave/ts/monthly/2yr/{FIELD}_{start_yyyymm}_{end_yyyymm}.nc
+        EN01/
+          post/atm/180x360_aave/ts/monthly/2yr/{FIELD}_{start_yyyymm}_{end_yyyymm}.nc
+        ...
 
-Example file
-------------
-TREFHT_198005_198204.nc
+Example E3SM top-level case directory
+-------------------------------------
+::
+
+    WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_JRA55_FOSIRL_1980050100
+
+Example E3SM file
+-----------------
+::
+
+    TREFHT_198005_198204.nc
 
 Notes
 -----
@@ -55,28 +61,30 @@ Notes
    safer than relying on exact absolute timestamps when comparing with
    observational datasets.
 
-Typical use
------------
-from esp_lab import data_access_e3sm as data_access
+Typical E3SM use
+----------------
+::
 
-field = "TREFHT"
-data_dir = "/pscratch/sd/z/zhan391/e3sm_project/E3SMv3_S2D"
-case_prefix = "WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_JRA55_FOSIRL"
-members = [f"EN{i:02d}" for i in range(10)]
-init_tags = data_access.build_init_tags(np.arange(1980, 2015), [5, 11])
+    from esp_lab import data_access_e3sm as data_access
 
-ds = data_access.get_monthly_data(
-    data_dir=data_dir,
-    case_prefix=case_prefix,
-    members=members,
-    init_tags=init_tags,
-    field=field,
-    nlead=24,
-    realm="atm",
-    grid="180x360_aave",
-    freq="monthly",
-    ts_split="2yr",
-)
+    field = "TREFHT"
+    data_dir = "/pscratch/sd/z/zhan391/e3sm_project/E3SMv3_S2D"
+    case_prefix = "WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_JRA55_FOSIRL"
+    members = [f"EN{i:02d}" for i in range(10)]
+    init_tags = data_access.build_init_tags(np.arange(1980, 2015), [5, 11])
+
+    ds = data_access.get_monthly_data(
+        data_dir=data_dir,
+        case_prefix=case_prefix,
+        members=members,
+        init_tags=init_tags,
+        field=field,
+        nlead=24,
+        realm="atm",
+        grid="180x360_aave",
+        freq="monthly",
+        ts_split="2yr",
+    )
 """
 
 import re
@@ -406,6 +414,7 @@ def time_set_midmonth(ds: xr.Dataset, time_name: str) -> xr.Dataset:
     Return a copy of ds with monthly time on the represented month midpoint.
 
     The represented month is detected in this order:
+
     1. Time bounds lower edge, when bounds are present.
     2. The filename's represented start YYYYMM compared with the first
        timestamp month.

@@ -82,6 +82,13 @@ def _infer_metric(filename: str) -> str:
     candidates = (
         "leadtime_drift",
         "global_teleconnection_patterns",
+        "correlation_reference_comparison",
+        "taylor_diagram",
+        "annual_block_evolution",
+        "normalized_change_scatter",
+        "normalized_change",
+        "normalized_rmse",
+        "anomaly_member_vs_mean",
         "multi_e3sm_rmse_skill_map_conus",
         "multi_e3sm_rmse_skill_diff",
         "multi_e3sm_rmse_skill_map",
@@ -104,6 +111,7 @@ def _infer_metric(filename: str) -> str:
         "lead_time_benchmark",
         "drift_climatology",
         "skill",
+        "summary",
     )
     return next((metric for metric in candidates if metric in stem), "workflow_figure")
 
@@ -118,6 +126,7 @@ def _infer_mode(filename: str) -> str:
             or f"_{mode_lower}_" in stem
             or stem.endswith(f"_{mode_lower}")
             or stem == f"fig_{mode_lower}"
+            or stem.startswith(f"teleconnection_{mode_lower}_")
         ):
             return mode
     for token, label in (
@@ -137,6 +146,15 @@ def _infer_mode(filename: str) -> str:
         ("tws", "TWS"),
         ("h2osno", "H2OSNO"),
         ("h2osoi", "H2OSOI"),
+        ("atlmdr", "ATLMDR"),
+        ("atlnino", "ATLNINO"),
+        ("oni", "ONI"),
+        ("roni", "RONI"),
+        ("pacwarmpool", "PACWARMPOOL"),
+        ("pacwrampool", "PACWARMPOOL"),
+        ("tna", "TNA"),
+        ("tsa", "TSA"),
+        ("tni", "TNI"),
     ):
         if token in stem:
             return label
@@ -145,8 +163,15 @@ def _infer_mode(filename: str) -> str:
 
 def _infer_workflow_group(filename: str, metric: str, mode: str) -> str:
     """Map a figure to one of the major workflow diagnostic sections."""
-    stem = Path(filename).stem.lower()
+    path_obj = Path(filename)
+    stem = path_obj.stem.lower()
+    path_str = str(path_obj).lower()
     metric_lower = metric.lower()
+
+    if "initial_shock" in path_str or "shock" in stem:
+        return "INITIAL_SHOCK"
+    if path_str.startswith("teleconnections") or stem.startswith("teleconnection_"):
+        return "TELECONNECTIONS"
     if "eli" in stem or "eli" in metric_lower:
         return "ELI"
     if stem.startswith("fig_tc_") or "track_density" in stem:
@@ -158,21 +183,226 @@ def _infer_workflow_group(filename: str, metric: str, mode: str) -> str:
     }:
         return "MOV"
     if (
-        metric_lower.startswith("leadtime_acc")
-        or "_acc" in stem
-        or stem.startswith(("fig_1a_", "fig_1b_"))
+        stem.startswith(("fig_1a_", "fig_1b_"))
+        or "leadtime_acc" in stem
+        or metric_lower.startswith("leadtime_acc")
     ):
         return "LEAD_ACC"
     if metric_lower.startswith("leadtime_drift") or "_drift" in stem:
         return "LEAD_DRIFT"
     if (
-        metric_lower.startswith("leadtime_rmse")
+        stem.startswith(("fig_2a_", "fig_2b_"))
+        or metric_lower.startswith("leadtime_rmse")
         or metric_lower.startswith("rmse_compare")
         or "_rmse" in stem
-        or stem.startswith(("fig_2a_", "fig_2b_"))
     ):
         return "LEAD_RMSE"
     return "SST_INDEX"
+
+
+def _infer_shortname_and_type(
+    rel_file: str, group: str, metric: str = "", mode: str = ""
+) -> tuple[str, str]:
+    """Infer clean entity shortname and diagnostic button type."""
+    stem = Path(rel_file).stem
+    stem_lower = stem.lower()
+    file_lower = rel_file.lower()
+
+    shortname = mode or "General"
+    btn_type = "Diagnostic"
+
+    if group == "LEAD_ACC":
+        for v in ["PRECT", "PSL", "TREFHT", "TS", "SST", "H2OSNO", "H2OSOI", "TWS"]:
+            if v.lower() in stem_lower:
+                shortname = v
+                break
+        if "compare" in stem_lower:
+            btn_type = "Model Compare"
+        elif "difference" in stem_lower or "diff" in stem_lower:
+            btn_type = "Difference"
+        elif "distribution" in stem_lower:
+            btn_type = "Record Length"
+        elif "sigmask" in stem_lower:
+            btn_type = "Sigmask"
+        elif "minus_reanalysis" in stem_lower:
+            btn_type = "Minus Reanalysis"
+        else:
+            btn_type = "ACC Skill Map"
+
+    elif group == "LEAD_RMSE":
+        for v in ["PRECT", "PSL", "TREFHT", "TS", "SST", "H2OSNO", "H2OSOI", "TWS"]:
+            if v.lower() in stem_lower:
+                shortname = v
+                break
+        if "compare_conus" in stem_lower:
+            btn_type = "Compare (CONUS)"
+        elif "compare_global" in stem_lower:
+            btn_type = "Compare (Global)"
+        elif "difference_compare_init05" in stem_lower:
+            btn_type = "Diff Compare (May)"
+        elif "difference_compare_init11" in stem_lower:
+            btn_type = "Diff Compare (Nov)"
+        elif "difference_compare" in stem_lower:
+            btn_type = "Diff Compare"
+        elif "difference_global_init05" in stem_lower:
+            btn_type = "Diff Global (May)"
+        elif "difference_global_init11" in stem_lower:
+            btn_type = "Diff Global (Nov)"
+        elif "difference_global" in stem_lower:
+            btn_type = "Diff Global"
+        elif "difference" in stem_lower:
+            btn_type = "Difference"
+        elif "conus" in stem_lower:
+            btn_type = "CONUS RMSE"
+        elif "global" in stem_lower:
+            btn_type = "Global RMSE"
+        else:
+            btn_type = "RMSE Skill"
+
+    elif group == "SST_INDEX":
+        indices = [
+            ("nino3_4", "Niño3.4"),
+            ("nino34", "Niño3.4"),
+            ("nino12", "Niño1+2"),
+            ("nino3", "Niño3"),
+            ("nino4", "Niño4"),
+            ("oni", "ONI"),
+            ("roni", "RONI"),
+            ("pacwrampool", "PACWARMPOOL"),
+            ("pacwarmpool", "PACWARMPOOL"),
+            ("atlmdr", "ATLMDR"),
+            ("atlnino", "ATLNINO"),
+            ("iod", "IOD"),
+            ("tna", "TNA"),
+            ("tsa", "TSA"),
+            ("tni", "TNI"),
+        ]
+        for key, name in indices:
+            if key in stem_lower:
+                shortname = name
+                break
+        if "acc_skill" in stem_lower or "skill" in stem_lower:
+            btn_type = "ACC Skill"
+        elif "time_series" in stem_lower:
+            btn_type = "Time Series"
+        else:
+            btn_type = "Index Skill"
+
+    elif group == "MOV":
+        for m in sorted(CLIMATE_MODES, key=len, reverse=True):
+            if m.lower() in stem_lower:
+                shortname = m
+                break
+        if "eof_patterns_year1" in stem_lower:
+            btn_type = "EOF Year 1"
+        elif "eof_patterns_year2" in stem_lower:
+            btn_type = "EOF Year 2"
+        elif "teleconnection_patterns_init05" in stem_lower:
+            btn_type = "Telecon May"
+        elif "teleconnection_patterns_init11" in stem_lower:
+            btn_type = "Telecon Nov"
+        elif "pc_time_series" in stem_lower:
+            btn_type = "PC Time Series"
+        elif "skill" in stem_lower:
+            btn_type = "Skill vs Lead"
+        else:
+            btn_type = "Pattern"
+
+    elif group == "ELI":
+        shortname = "ELI Diagnostics"
+        if "acc_nrmse_skill" in stem_lower:
+            btn_type = "ACC / nRMSE Skill"
+        elif "time_series" in stem_lower:
+            btn_type = "Time Series"
+        elif "drift_climatology" in stem_lower:
+            btn_type = "Drift Climatology"
+        elif "lead_time_benchmark" in stem_lower:
+            btn_type = "NMME Benchmark"
+        elif "dual_axis_djf" in stem_lower:
+            btn_type = "Dual-Axis DJF"
+        elif "dual_axis_jja" in stem_lower:
+            btn_type = "Dual-Axis JJA"
+        else:
+            btn_type = "ELI Skill"
+
+    elif group == "INITIAL_SHOCK":
+        if "initial_shock_rmse_mae" in file_lower:
+            shortname = "Error Heatmaps"
+            var = "TREFHT" if "trefht" in stem_lower else "TS"
+            if "lead-year-1" in stem_lower:
+                btn_type = f"{var} Lead Y1"
+            elif "lead-year-2" in stem_lower:
+                btn_type = f"{var} Lead Y2"
+            else:
+                btn_type = f"{var} Monthly"
+        else:
+            for v in ["PRECT", "TREFHT", "TS"]:
+                if v.lower() in stem_lower:
+                    shortname = v
+                    break
+            if (
+                "absolute_normalized_change" in stem_lower
+                and "seasonal" in stem_lower
+            ):
+                btn_type = "Seasonal Abs Change"
+            elif "absolute_normalized_change" in stem_lower:
+                btn_type = "Abs Change"
+            elif "signed_normalized_change" in stem_lower:
+                btn_type = "Signed Change"
+            elif (
+                "normalized_change_scatter" in stem_lower
+                and "seasonal" in stem_lower
+            ):
+                btn_type = "Seasonal Scatter"
+            elif "normalized_change_scatter" in stem_lower:
+                btn_type = "Scatter"
+            elif "annual_block_evolution" in stem_lower:
+                btn_type = "Annual Evolution"
+            elif "init05" in stem_lower and "monthly_anomaly" in stem_lower:
+                btn_type = "May Anomaly"
+            elif "init11" in stem_lower and "monthly_anomaly" in stem_lower:
+                btn_type = "Nov Anomaly"
+            else:
+                btn_type = "Shock Metric"
+
+    elif group == "TELECONNECTIONS":
+        m = re.search(r"teleconnection_([A-Za-z0-9\.\+]+)_([A-Za-z0-9]+)_(.+)", stem)
+        if m:
+            mode_part = m.group(1)
+            var_part = m.group(2)
+            met_part = m.group(3)
+            if mode_part.lower() == "nino34":
+                mode_name = "Niño3.4"
+            elif mode_part.lower() == "atlmdr":
+                mode_name = "ATLMDR"
+            else:
+                mode_name = mode_part.upper()
+            shortname = f"{mode_name} · {var_part.upper()}"
+            if "corr" in met_part:
+                btn_type = "Correlation Map"
+            elif "summary" in met_part:
+                btn_type = "Summary"
+            elif "taylor" in met_part:
+                btn_type = "Taylor Diagram"
+            else:
+                btn_type = met_part
+        else:
+            shortname = "Teleconnection"
+            btn_type = "Map"
+
+    elif group == "LEAD_DRIFT":
+        for v in ["PRECT", "PSL", "TREFHT", "TS", "SST", "H2OSNO", "H2OSOI", "TWS"]:
+            if v.lower() in stem_lower:
+                shortname = v
+                break
+        if "spatial_maps" in stem_lower:
+            btn_type = "Spatial Maps"
+        elif "regime_fraction" in stem_lower:
+            btn_type = "Regime Fraction"
+        else:
+            btn_type = "Drift Metric"
+
+    return shortname, btn_type
 
 
 def discover_workflow_figures(
@@ -180,12 +410,14 @@ def discover_workflow_figures(
     *,
     pattern: str = "fig_*",
     write_manifest: bool = False,
+    include_subdirs: bool = True,
 ) -> dict:
     """Catalog actual workflow figures in a directory.
 
-    Only files matching ``pattern`` with a supported image extension are
-    returned. Existing manifest metadata is retained for files that still
-    exist; stale entries are removed and missing entries are synthesized.
+    Files matching ``pattern`` at root, as well as figures in workflow subdirectories
+    when ``include_subdirs`` is True, are returned with a supported image extension.
+    Existing manifest metadata is retained for files that still exist; stale entries
+    are removed and missing entries are synthesized.
     """
     diag_dir = Path(diag_dir)
     if not diag_dir.is_dir():
@@ -205,23 +437,42 @@ def discover_workflow_figures(
         for entry in existing_manifest.get("figures", [])
         if entry.get("file")
     }
-    figure_paths = sorted(
+
+    figure_paths = []
+    # 1. Top-level matching pattern
+    figure_paths.extend(
         path
-        for path in diag_dir.glob(pattern)
+        for path in sorted(diag_dir.glob(pattern))
         if path.is_file() and path.suffix.lower() in FIGURE_EXTENSIONS
     )
+    # 2. Subdirectories
+    if include_subdirs:
+        for sub in sorted(diag_dir.iterdir()):
+            if sub.is_dir() and not sub.name.startswith((".", "_")):
+                for path in sorted(sub.glob("**/*")):
+                    if path.is_file() and path.suffix.lower() in FIGURE_EXTENSIONS:
+                        rel = path.relative_to(diag_dir)
+                        if not any(part.startswith((".", "_")) for part in rel.parts):
+                            if path not in figure_paths:
+                                figure_paths.append(path)
 
     figures = []
     for path in figure_paths:
-        entry = dict(metadata_by_file.get(path.name, {}))
-        entry.update({"file": path.name})
+        rel_file = path.relative_to(diag_dir).as_posix()
+        entry = dict(metadata_by_file.get(rel_file, metadata_by_file.get(path.name, {})))
+        entry.update({"file": rel_file})
         entry.setdefault("mode", _infer_mode(path.name))
         entry.setdefault("metric", _infer_metric(path.name))
-        entry.setdefault("title", _humanize_figure_name(path.name))
+        entry.setdefault("title", _humanize_figure_name(path.stem))
         entry.setdefault("caption", "Workflow-generated diagnostic figure.")
         entry["group"] = _infer_workflow_group(
-            path.name, entry["metric"], entry["mode"]
+            rel_file, entry["metric"], entry["mode"]
         )
+        shortname, btn_type = _infer_shortname_and_type(
+            rel_file, entry["group"], entry["metric"], entry["mode"]
+        )
+        entry["shortname"] = shortname
+        entry["btn_type"] = btn_type
         figures.append(entry)
 
     manifest = {
@@ -253,14 +504,23 @@ def _make_gallery_web_readable(diag_dir: Path, manifest: dict) -> None:
     )
     diag_dir.chmod(diag_dir.stat().st_mode | directory_bits)
 
+    readable_bits = stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH
+
     for entry in manifest.get("figures", []):
         filename = entry.get("file")
         if not filename:
             continue
         figure_path = diag_dir / filename
         if figure_path.is_file():
-            readable_bits = stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH
+            parent_dir = figure_path.parent
+            if parent_dir != diag_dir and parent_dir.is_dir():
+                parent_dir.chmod(parent_dir.stat().st_mode | directory_bits)
             figure_path.chmod(figure_path.stat().st_mode | readable_bits)
+
+    for filename in ("figures.json", "index.html"):
+        path = diag_dir / filename
+        if path.is_file():
+            path.chmod(path.stat().st_mode | readable_bits)
 
 
 def generate_diagnostics_webpage(
@@ -269,6 +529,7 @@ def generate_diagnostics_webpage(
     discover_figures: bool = False,
     figure_pattern: str = "fig_*",
     make_web_readable: bool = True,
+    include_subdirs: bool = True,
 ) -> Path:
     """Generate an interactive HTML webpage for viewing diagnostics figures.
 
@@ -291,6 +552,8 @@ def generate_diagnostics_webpage(
     make_web_readable : bool, optional
         Make cataloged figures publicly readable and the gallery directory
         publicly traversable. Defaults to true.
+    include_subdirs : bool, optional
+        Discover workflow figures located in subdirectories. Defaults to true.
 
     Returns
     -------
@@ -309,7 +572,10 @@ def generate_diagnostics_webpage(
     manifest_path = diag_dir / "figures.json"
     if discover_figures:
         manifest_data = discover_workflow_figures(
-            diag_dir, pattern=figure_pattern, write_manifest=True
+            diag_dir,
+            pattern=figure_pattern,
+            write_manifest=True,
+            include_subdirs=include_subdirs,
         )
         if not manifest_data["figures"]:
             raise FileNotFoundError(
@@ -638,6 +904,270 @@ def _build_html_template(manifest: dict) -> str:
             color: var(--text-secondary);
         }
 
+        /* View Mode Toggle Controls */
+        .header-controls-area {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .view-mode-toggle {
+            display: inline-flex;
+            background-color: rgba(15, 23, 42, 0.85);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 4px;
+            gap: 4px;
+        }
+
+        .view-toggle-btn {
+            background: transparent;
+            border: none;
+            border-radius: 8px;
+            color: var(--text-secondary);
+            padding: 0.5rem 0.95rem;
+            font-family: var(--font-body);
+            font-size: 0.85rem;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            cursor: pointer;
+            transition: all var(--transition-speed) ease;
+        }
+
+        .view-toggle-btn:hover {
+            color: var(--text-primary);
+            background-color: rgba(255, 255, 255, 0.05);
+        }
+
+        .view-toggle-btn.active {
+            background-color: var(--accent-primary);
+            color: #ffffff;
+            box-shadow: 0 0 12px rgba(99, 102, 241, 0.35);
+        }
+
+        /* Quick Buttons Matrix Dashboard */
+        .matrix-dashboard {
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+            flex-grow: 1;
+        }
+
+        .matrix-section {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            overflow: hidden;
+            backdrop-filter: blur(8px);
+            box-shadow: var(--shadow-md);
+            transition: border-color var(--transition-speed) ease;
+        }
+
+        .matrix-section:hover {
+            border-color: var(--border-hover);
+        }
+
+        .matrix-sec-header {
+            padding: 1.25rem 1.75rem;
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(15, 23, 42, 0.6));
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+        }
+
+        .matrix-sec-title-group {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .matrix-sec-title {
+            font-family: var(--font-display);
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            letter-spacing: -0.01em;
+        }
+
+        .matrix-sec-count {
+            background: rgba(99, 102, 241, 0.2);
+            border: 1px solid rgba(99, 102, 241, 0.4);
+            color: #c7d2fe;
+            font-size: 0.75rem;
+            font-weight: 700;
+            padding: 0.2rem 0.6rem;
+            border-radius: 9999px;
+        }
+
+        .matrix-sec-desc {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-top: 0.25rem;
+            width: 100%;
+        }
+
+        /* Teleconnection Driver Mode Filter Pills */
+        .telecon-mode-filter {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.4rem;
+            padding: 0.85rem 1.75rem;
+            background-color: rgba(2, 6, 23, 0.35);
+            border-bottom: 1px solid var(--border-color);
+            align-items: center;
+        }
+
+        .telecon-filter-label {
+            font-size: 0.75rem;
+            font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-right: 0.5rem;
+        }
+
+        .mode-filter-pill {
+            background-color: rgba(30, 41, 59, 0.55);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-secondary);
+            padding: 0.25rem 0.65rem;
+            font-family: var(--font-body);
+            font-size: 0.8rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all var(--transition-speed) ease;
+        }
+
+        .mode-filter-pill:hover {
+            border-color: var(--border-hover);
+            color: var(--text-primary);
+            background-color: rgba(255, 255, 255, 0.05);
+        }
+
+        .mode-filter-pill.active {
+            background-color: var(--accent-primary);
+            border-color: var(--accent-primary);
+            color: #ffffff;
+            font-weight: 600;
+            box-shadow: 0 0 10px rgba(99, 102, 241, 0.3);
+        }
+
+        /* Matrix Rows Container */
+        .matrix-rows-list {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .matrix-row {
+            display: flex;
+            align-items: stretch;
+            border-bottom: 1px solid var(--border-color);
+            transition: background-color var(--transition-speed) ease;
+        }
+
+        .matrix-row:last-child {
+            border-bottom: none;
+        }
+
+        .matrix-row:hover {
+            background-color: rgba(255, 255, 255, 0.02);
+        }
+
+        .row-entity-col {
+            width: 210px;
+            min-width: 210px;
+            padding: 1rem 1.5rem;
+            background-color: rgba(2, 6, 23, 0.25);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 0.35rem;
+        }
+
+        .entity-badge-tag {
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(168, 85, 247, 0.25));
+            border: 1px solid rgba(165, 180, 252, 0.35);
+            color: #f1f5f9;
+            font-family: var(--font-display);
+            font-size: 0.95rem;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+            padding: 0.3rem 0.65rem;
+            border-radius: 6px;
+            display: inline-block;
+            width: fit-content;
+        }
+
+        .row-entity-sub {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        .row-buttons-col {
+            padding: 0.85rem 1.5rem;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.6rem;
+            flex-grow: 1;
+        }
+
+        /* Diagnostic Quick Buttons */
+        .diag-btn {
+            background-color: rgba(15, 23, 42, 0.7);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-primary);
+            padding: 0.5rem 0.9rem;
+            font-family: var(--font-body);
+            font-size: 0.825rem;
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            cursor: pointer;
+            transition: all var(--transition-speed) cubic-bezier(0.4, 0, 0.2, 1);
+            user-select: none;
+        }
+
+        .diag-btn:hover {
+            background-color: rgba(99, 102, 241, 0.22);
+            border-color: #818cf8;
+            color: #ffffff;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 14px rgba(99, 102, 241, 0.25);
+        }
+
+        .diag-btn:active {
+            transform: translateY(0) scale(0.97);
+        }
+
+        .diag-btn-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--accent-primary);
+            flex-shrink: 0;
+        }
+
+        .diag-btn-indicator.ind-skill { background-color: #10b981; box-shadow: 0 0 6px rgba(16, 185, 129, 0.5); }
+        .diag-btn-indicator.ind-compare { background-color: #38bdf8; box-shadow: 0 0 6px rgba(56, 189, 248, 0.5); }
+        .diag-btn-indicator.ind-diff { background-color: #c084fc; box-shadow: 0 0 6px rgba(192, 132, 252, 0.5); }
+        .diag-btn-indicator.ind-ts { background-color: #fbbf24; box-shadow: 0 0 6px rgba(251, 191, 36, 0.5); }
+        .diag-btn-indicator.ind-pattern { background-color: #f43f5e; box-shadow: 0 0 6px rgba(244, 63, 94, 0.5); }
+        .diag-btn-indicator.ind-shock { background-color: #ec4899; box-shadow: 0 0 6px rgba(236, 72, 153, 0.5); }
+
+        .diag-btn-label {
+            white-space: nowrap;
+        }
+
         /* Compact figure-type filters within the selected workflow group */
         .metrics-tabs {
             display: none;
@@ -916,6 +1446,25 @@ def _build_html_template(manifest: dict) -> str:
             overflow: hidden;
             padding: 2rem;
             user-select: none;
+        }
+
+        @keyframes bumpOutModal {
+            0% {
+                transform: scale(0.88);
+                opacity: 0;
+            }
+            60% {
+                transform: scale(1.02);
+                opacity: 1;
+            }
+            100% {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+
+        .lightbox.active .lightbox-container {
+            animation: bumpOutModal 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
         }
 
         .lightbox-img-wrapper {
@@ -1411,6 +1960,33 @@ def _build_html_template(manifest: dict) -> str:
                 font-size: 1.75rem;
             }
 
+            .main-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 1rem;
+            }
+
+            .header-controls-area {
+                width: 100%;
+                justify-content: flex-start;
+            }
+
+            .matrix-row {
+                flex-direction: column;
+            }
+
+            .row-entity-col {
+                width: 100%;
+                min-width: 0;
+                border-right: none;
+                border-bottom: 1px solid var(--border-color);
+                padding: 0.75rem 1.25rem;
+            }
+
+            .row-buttons-col {
+                padding: 0.75rem 1.25rem;
+            }
+
             .figures-grid {
                 grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
                 gap: 1.25rem;
@@ -1536,7 +2112,28 @@ def _build_html_template(manifest: dict) -> str:
                 <h2 class="active-group-title" id="activeGroupTitle">Loading...</h2>
                 <div class="active-group-desc" id="activeGroupDesc">-</div>
             </div>
+            <div class="header-controls-area">
+                <div class="view-mode-toggle" role="group" aria-label="View Mode">
+                    <button type="button" class="view-toggle-btn active" id="viewModeMatrixBtn" onclick="setViewMode('matrix')" title="Compact Quick Buttons Matrix - All diagnostics accessible on one page">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M4 4h4v4H4V4zm6 0h4v4h-4V4zm6 0h4v4h-4V4zM4 10h4v4H4v-4zm6 0h4v4h-4v-4zm6 0h4v4h-4v-4zM4 16h4v4H4v-4zm6 0h4v4h-4v-4zm6 0h4v4h-4v-4z"/>
+                        </svg>
+                        <span>Quick Buttons View</span>
+                    </button>
+                    <button type="button" class="view-toggle-btn" id="viewModeCardsBtn" onclick="setViewMode('cards')" title="Visual thumbnail cards gallery">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M4 5h16c.55 0 1 .45 1 1v12c0 .55-.45 1-1 1H4c-.55 0-1-.45-1-1V6c0-.55.45-1 1-1zm1 2v10h14V7H5zm2 2h3v3H7V9zm5 0h5v1h-5V9zm0 2h5v1h-5v-1zm-5 4h10v1H7v-1z"/>
+                        </svg>
+                        <span>Thumbnail Cards View</span>
+                    </button>
+                </div>
+            </div>
         </header>
+
+        <!-- Quick Buttons Matrix Dashboard View (Default) -->
+        <section class="matrix-dashboard" id="matrixDashboard">
+            <!-- Dynamically populated -->
+        </section>
 
         <!-- Metrics Filter Sub-Tabs -->
         <nav class="metrics-tabs" id="metricsTabs">
@@ -1616,6 +2213,14 @@ def _build_html_template(manifest: dict) -> str:
                     <div class="detail-val" id="lightboxFilename">-</div>
                 </div>
                 <div class="detail-row">
+                    <div class="detail-label">Entity / Shortname</div>
+                    <div class="detail-val" id="lightboxShortname">-</div>
+                </div>
+                <div class="detail-row">
+                    <div class="detail-label">Diagnostic Type</div>
+                    <div class="detail-val" id="lightboxBtnType">-</div>
+                </div>
+                <div class="detail-row">
                     <div class="detail-label">Category / Mode</div>
                     <div class="detail-val" id="lightboxMode">-</div>
                 </div>
@@ -1630,6 +2235,12 @@ def _build_html_template(manifest: dict) -> str:
             </div>
 
             <div class="lightbox-controls">
+                <button type="button" class="ctrl-btn" id="lightboxCompareBtn" onclick="toggleActiveLightboxCompare()">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                    </svg>
+                    <span id="lightboxCompareBtnText">Add to Compare</span>
+                </button>
                 <a class="ctrl-btn" id="lightboxDownloadBtn" href="" download>
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
                         <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/>
@@ -1667,18 +2278,36 @@ def _build_html_template(manifest: dict) -> str:
         let activeLightboxIndex = 0;
         let isScrollMode = false;
         let isInfoCollapsed = false;
+        let currentViewMode = "matrix"; // "matrix" (default) or "cards"
+        let activeTeleconMode = "ALL";
 
         // Group mapping metadata
         const GROUP_LABELS = {
             "ALL": "All Figures",
             "LEAD_ACC": "Lead-time ACC",
-            "LEAD_DRIFT": "Lead-time Drift",
             "LEAD_RMSE": "Lead-time RMSE",
             "SST_INDEX": "SST Indices",
             "MOV": "Modes of Variability",
-            "TC": "Tropical Cyclones",
             "ELI": "ELI Diagnostics",
+            "INITIAL_SHOCK": "Initial Shock",
+            "TELECONNECTIONS": "Teleconnections",
+            "LEAD_DRIFT": "Lead-time Drift",
+            "TC": "Tropical Cyclones",
             "OTHER": "Other"
+        };
+
+        const GROUP_DESCRIPTIONS = {
+            "ALL": "All workflow-generated diagnostic figures across active analysis notebooks.",
+            "LEAD_ACC": "Precipitation, pressure, temperature, and land hydrology ACC skill maps and comparisons vs lead month.",
+            "LEAD_RMSE": "Root Mean Square Error (RMSE) skill maps, CONUS/Global regional summaries, and model comparisons.",
+            "SST_INDEX": "Skill curves and ensemble-mean historical time series for tropical Pacific, Atlantic, and Indian ocean climate indices.",
+            "MOV": "Principal modes of climate variability (ENSO, NAO, PDO, PNA, SAM, etc.) with EOF spatial patterns, teleconnections, and PC series.",
+            "ELI": "Ensemble ENSO Longitude Index (ELI) skill scores, tracking metrics, lead-time drift climatologies, and NMME benchmarks.",
+            "INITIAL_SHOCK": "Quantification of initialization shock, step changes between seasonal start dates, scatter distributions, and error heatmaps.",
+            "TELECONNECTIONS": "Global climate mode teleconnection pattern correlation maps, comprehensive summaries, and Taylor diagrams.",
+            "LEAD_DRIFT": "Lead-time drift analysis and climatology metrics.",
+            "TC": "Tropical cyclone statistics and track density diagnostics.",
+            "OTHER": "Additional workflow diagnostics."
         };
 
         const FIGURE_TYPE_LABELS = {
@@ -1699,13 +2328,22 @@ def _build_html_template(manifest: dict) -> str:
             "DRIFT": "Drift climatology",
             "NMME_BENCHMARK": "NMME benchmark",
             "ELI_NINO34": "ELI vs Niño3.4",
+            "ERROR_INDEX": "RMSE/MAE index",
+            "SCATTER": "Scatter",
+            "EVOLUTION": "Evolution",
+            "ANOMALY": "Anomalies",
+            "CHANGE_MAP": "Change maps",
+            "TAYLOR_DIAGRAM": "Taylor diagrams",
+            "SUMMARY": "Summaries",
+            "CORRELATION_MAP": "Correlation maps",
             "OTHER": "Other"
         };
         const FIGURE_TYPE_ORDER = [
             "SKILL", "SKILL_MAP", "TIME_SERIES", "MODEL_COMPARISON",
             "DIFFERENCE", "EOF_PATTERNS", "TELECONNECTIONS", "PC_TIME_SERIES",
-            "METHOD_COMPARISON", "LEAD_TIME", "ENSO_REGRESSION", "TRACK_DENSITY",
-            "TRAJECTORIES", "DRIFT", "NMME_BENCHMARK", "ELI_NINO34", "OTHER"
+            "ERROR_INDEX", "SCATTER", "EVOLUTION", "ANOMALY", "CHANGE_MAP",
+            "TAYLOR_DIAGRAM", "SUMMARY", "CORRELATION_MAP",
+            "DRIFT", "ELI_NINO34", "NMME_BENCHMARK", "OTHER"
         ];
 
         // Bust browser image cache when figures are regenerated with the same filename.
@@ -1741,7 +2379,6 @@ def _build_html_template(manifest: dict) -> str:
             if (fileLower.includes("tna")) return "TNA";
             if (fileLower.includes("tc_") || fileLower.includes("track_density")) return "TC";
 
-            // Splitting tokens as fallback
             const tokens = fig.file.split('_');
             if (tokens.length > 1) {
                 return tokens[1].toUpperCase();
@@ -1803,7 +2440,133 @@ def _build_html_template(manifest: dict) -> str:
                 if (metric.includes("time_series")) return "TIME_SERIES";
                 return "SKILL";
             }
+            if (fig.group === "INITIAL_SHOCK") {
+                if (file.includes("rmse") || file.includes("mae")) return "ERROR_INDEX";
+                if (file.includes("scatter")) return "SCATTER";
+                if (file.includes("evolution")) return "EVOLUTION";
+                if (file.includes("anomaly")) return "ANOMALY";
+                return "CHANGE_MAP";
+            }
+            if (fig.group === "TELECONNECTIONS") {
+                if (file.includes("taylor")) return "TAYLOR_DIAGRAM";
+                if (file.includes("summary")) return "SUMMARY";
+                return "CORRELATION_MAP";
+            }
             return "OTHER";
+        }
+
+        // Client-side fallback to infer shortname and button type
+        function parseShortnameAndType(fig) {
+            const group = fig.group || "";
+            const file = fig.file || "";
+            const stem = file.split("/").pop().replace(/\\.[^.]+$/, "");
+            const stemLower = stem.toLowerCase();
+            const fileLower = file.toLowerCase();
+
+            let shortname = fig.mode || "General";
+            let btnType = "Diagnostic";
+
+            if (group === "LEAD_ACC") {
+                const vars = ["PRECT", "PSL", "TREFHT", "TS", "SST", "H2OSNO", "H2OSOI", "TWS"];
+                for (const v of vars) {
+                    if (stemLower.includes(v.toLowerCase())) { shortname = v; break; }
+                }
+                if (stemLower.includes("compare")) btnType = "Model Compare";
+                else if (stemLower.includes("difference") || stemLower.includes("diff")) btnType = "Difference";
+                else if (stemLower.includes("distribution")) btnType = "Record Length";
+                else if (stemLower.includes("sigmask")) btnType = "Sigmask";
+                else if (stemLower.includes("minus_reanalysis")) btnType = "Minus Reanalysis";
+                else btnType = "ACC Skill Map";
+            } else if (group === "LEAD_RMSE") {
+                const vars = ["PRECT", "PSL", "TREFHT", "TS", "SST", "H2OSNO", "H2OSOI", "TWS"];
+                for (const v of vars) {
+                    if (stemLower.includes(v.toLowerCase())) { shortname = v; break; }
+                }
+                if (stemLower.includes("compare_conus")) btnType = "Compare (CONUS)";
+                else if (stemLower.includes("compare_global")) btnType = "Compare (Global)";
+                else if (stemLower.includes("difference_compare_init05")) btnType = "Diff Compare (May)";
+                else if (stemLower.includes("difference_compare_init11")) btnType = "Diff Compare (Nov)";
+                else if (stemLower.includes("difference_compare")) btnType = "Diff Compare";
+                else if (stemLower.includes("difference_global_init05")) btnType = "Diff Global (May)";
+                else if (stemLower.includes("difference_global_init11")) btnType = "Diff Global (Nov)";
+                else if (stemLower.includes("difference_global")) btnType = "Diff Global";
+                else if (stemLower.includes("difference")) btnType = "Difference";
+                else if (stemLower.includes("conus")) btnType = "CONUS RMSE";
+                else if (stemLower.includes("global")) btnType = "Global RMSE";
+                else btnType = "RMSE Skill";
+            } else if (group === "SST_INDEX") {
+                const indices = [
+                    ["nino3_4", "Niño3.4"], ["nino34", "Niño3.4"], ["nino12", "Niño1+2"],
+                    ["nino3", "Niño3"], ["nino4", "Niño4"], ["oni", "ONI"], ["roni", "RONI"],
+                    ["pacwrampool", "PACWARMPOOL"], ["pacwarmpool", "PACWARMPOOL"],
+                    ["atlmdr", "ATLMDR"], ["atlnino", "ATLNINO"], ["iod", "IOD"],
+                    ["tna", "TNA"], ["tsa", "TSA"], ["tni", "TNI"]
+                ];
+                for (const [k, n] of indices) {
+                    if (stemLower.includes(k)) { shortname = n; break; }
+                }
+                if (stemLower.includes("acc_skill") || stemLower.includes("skill")) btnType = "ACC Skill";
+                else if (stemLower.includes("time_series")) btnType = "Time Series";
+                else btnType = "Index Skill";
+            } else if (group === "MOV") {
+                const modes = ["AMO", "EA", "NAM", "NAO", "NPGO", "NPO", "PDO", "PNA", "PSA1", "PSA2", "SAM", "SCA"];
+                for (const m of modes) {
+                    if (stemLower.includes(m.toLowerCase())) { shortname = m; break; }
+                }
+                if (stemLower.includes("eof_patterns_year1")) btnType = "EOF Year 1";
+                else if (stemLower.includes("eof_patterns_year2")) btnType = "EOF Year 2";
+                else if (stemLower.includes("teleconnection_patterns_init05")) btnType = "Telecon May";
+                else if (stemLower.includes("teleconnection_patterns_init11")) btnType = "Telecon Nov";
+                else if (stemLower.includes("pc_time_series")) btnType = "PC Time Series";
+                else if (stemLower.includes("skill")) btnType = "Skill vs Lead";
+                else btnType = "Pattern";
+            } else if (group === "ELI") {
+                shortname = "ELI Diagnostics";
+                if (stemLower.includes("acc_nrmse_skill")) btnType = "ACC / nRMSE Skill";
+                else if (stemLower.includes("time_series")) btnType = "Time Series";
+                else if (stemLower.includes("drift_climatology")) btnType = "Drift Climatology";
+                else if (stemLower.includes("lead_time_benchmark")) btnType = "NMME Benchmark";
+                else if (stemLower.includes("dual_axis_djf")) btnType = "Dual-Axis DJF";
+                else if (stemLower.includes("dual_axis_jja")) btnType = "Dual-Axis JJA";
+                else btnType = "ELI Skill";
+            } else if (group === "INITIAL_SHOCK") {
+                if (fileLower.includes("initial_shock_rmse_mae")) {
+                    shortname = "Error Heatmaps";
+                    const v = stemLower.includes("trefht") ? "TREFHT" : "TS";
+                    if (stemLower.includes("lead-year-1")) btnType = `${v} Lead Y1`;
+                    else if (stemLower.includes("lead-year-2")) btnType = `${v} Lead Y2`;
+                    else btnType = `${v} Monthly`;
+                } else {
+                    for (const v of ["PRECT", "TREFHT", "TS"]) {
+                        if (stemLower.includes(v.toLowerCase())) { shortname = v; break; }
+                    }
+                    if (stemLower.includes("absolute_normalized_change") && stemLower.includes("seasonal")) btnType = "Seasonal Abs Change";
+                    else if (stemLower.includes("absolute_normalized_change")) btnType = "Abs Change";
+                    else if (stemLower.includes("signed_normalized_change")) btnType = "Signed Change";
+                    else if (stemLower.includes("normalized_change_scatter") && stemLower.includes("seasonal")) btnType = "Seasonal Scatter";
+                    else if (stemLower.includes("normalized_change_scatter")) btnType = "Scatter";
+                    else if (stemLower.includes("annual_block_evolution")) btnType = "Annual Evolution";
+                    else if (stemLower.includes("init05") && stemLower.includes("monthly_anomaly")) btnType = "May Anomaly";
+                    else if (stemLower.includes("init11") && stemLower.includes("monthly_anomaly")) btnType = "Nov Anomaly";
+                    else btnType = "Shock Metric";
+                }
+            } else if (group === "TELECONNECTIONS") {
+                const match = stem.match(/teleconnection_([A-Za-z0-9\\.\\+]+)_([A-Za-z0-9]+)_(.+)/);
+                if (match) {
+                    let modePart = match[1];
+                    const varPart = match[2].toUpperCase();
+                    const metPart = match[3];
+                    if (modePart.toLowerCase() === "nino34") modePart = "Niño3.4";
+                    else if (modePart.toLowerCase() === "atlmdr") modePart = "ATLMDR";
+                    else modePart = modePart.toUpperCase();
+                    shortname = `${modePart} · ${varPart}`;
+                    if (metPart.includes("corr")) btnType = "Correlation Map";
+                    else if (metPart.includes("summary")) btnType = "Summary";
+                    else if (metPart.includes("taylor")) btnType = "Taylor Diagram";
+                    else btnType = metPart;
+                }
+            }
+            return { shortname, btn_type: btnType };
         }
 
         // Initialize Web Application
@@ -1812,13 +2575,19 @@ def _build_html_template(manifest: dict) -> str:
             document.getElementById("manifestUpdated").innerText = manifest.updated || "Unknown";
 
             // Process groups and figure properties
-            manifest.figures.forEach(fig => {
+            manifest.figures.forEach((fig, idx) => {
+                fig.globalIndex = idx;
                 fig.group = parseGroup(fig);
                 fig.figureType = classifyFigureType(fig);
+                if (!fig.shortname || !fig.btn_type) {
+                    const parsed = parseShortnameAndType(fig);
+                    fig.shortname = fig.shortname || parsed.shortname;
+                    fig.btn_type = fig.btn_type || parsed.btn_type;
+                }
             });
 
             renderSidebar();
-            updateActiveView();
+            setViewMode("matrix");
 
             // Set up search listener
             document.getElementById("searchBar").addEventListener("input", (e) => {
@@ -1847,8 +2616,39 @@ def _build_html_template(manifest: dict) -> str:
                     backdrop.classList.remove("active");
                 });
             }
-
         });
+
+        // Toggle between Quick Buttons Matrix View and Thumbnail Cards View
+        window.setViewMode = function(mode) {
+            currentViewMode = mode;
+            const matrixBtn = document.getElementById("viewModeMatrixBtn");
+            const cardsBtn = document.getElementById("viewModeCardsBtn");
+            const matrixDash = document.getElementById("matrixDashboard");
+            const cardsGrid = document.getElementById("figuresGrid");
+            const metricsTabs = document.getElementById("metricsTabs");
+
+            if (mode === "matrix") {
+                matrixBtn.classList.add("active");
+                cardsBtn.classList.remove("active");
+                matrixDash.style.display = "flex";
+                cardsGrid.style.display = "none";
+                metricsTabs.style.display = "none";
+            } else {
+                matrixBtn.classList.remove("active");
+                cardsBtn.classList.add("active");
+                matrixDash.style.display = "none";
+                cardsGrid.style.display = "grid";
+                if (metricsTabs.children.length > 0 && activeGroup !== "ALL") {
+                    metricsTabs.style.display = "flex";
+                }
+            }
+            updateActiveView();
+        };
+
+        window.setTeleconMode = function(mode) {
+            activeTeleconMode = mode;
+            updateActiveView();
+        };
 
         // Render groups lists in sidebar
         function renderSidebar() {
@@ -1861,9 +2661,8 @@ def _build_html_template(manifest: dict) -> str:
                 counts[fig.group] = (counts[fig.group] || 0) + 1;
             });
 
-            // Follow the major section order used by the diagnostics workflow.
             const workflowOrder = [
-                "LEAD_ACC", "LEAD_RMSE", "LEAD_DRIFT", "SST_INDEX", "MOV", "TC", "ELI", "OTHER"
+                "LEAD_ACC", "LEAD_RMSE", "SST_INDEX", "MOV", "ELI", "INITIAL_SHOCK", "TELECONNECTIONS", "OTHER"
             ];
             const groups = Object.keys(counts)
                 .filter(g => g !== "ALL")
@@ -1896,9 +2695,9 @@ def _build_html_template(manifest: dict) -> str:
         // Select active group
         window.selectGroup = function(grp) {
             activeGroup = grp;
-            activeMetric = "ALL"; // Reset sub-metric when switching groups
+            activeMetric = "ALL";
+            activeTeleconMode = "ALL";
             
-            // Re-render sidebar to update active class
             renderSidebar();
             updateActiveView();
 
@@ -1911,67 +2710,245 @@ def _build_html_template(manifest: dict) -> str:
             }
         };
 
-        // Update main content grid
-        function updateActiveView() {
-            const grid = document.getElementById("figuresGrid");
-            grid.innerHTML = "";
+        function escapeHtml(str) {
+            if (!str) return "";
+            return str
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
 
+        function getIndicatorClass(btnType) {
+            const t = (btnType || "").toLowerCase();
+            if (t.includes("skill") || t.includes("acc")) return "ind-skill";
+            if (t.includes("compare") || t.includes("benchmark")) return "ind-compare";
+            if (t.includes("diff")) return "ind-diff";
+            if (t.includes("time_series") || t.includes("series") || t.includes("evolution")) return "ind-ts";
+            if (t.includes("taylor") || t.includes("summary") || t.includes("pattern") || t.includes("eof") || t.includes("telecon")) return "ind-pattern";
+            if (t.includes("shock") || t.includes("change") || t.includes("anomaly") || t.includes("heatmap") || t.includes("rmse")) return "ind-shock";
+            return "ind-skill";
+        }
+
+        // Update active view (dispatches to matrix or cards view)
+        function updateActiveView() {
             // 1. Filter figures by Group & Search
             let list = manifest.figures.filter(fig => {
                 const matchesGroup = (activeGroup === "ALL" || fig.group === activeGroup);
                 const matchesSearch = searchQuery === "" || 
                     (fig.title && fig.title.toLowerCase().includes(searchQuery)) ||
                     (fig.caption && fig.caption.toLowerCase().includes(searchQuery)) ||
+                    (fig.shortname && fig.shortname.toLowerCase().includes(searchQuery)) ||
+                    (fig.btn_type && fig.btn_type.toLowerCase().includes(searchQuery)) ||
                     fig.file.toLowerCase().includes(searchQuery);
                 return matchesGroup && matchesSearch;
             });
-
-            // 2. Show concise figure-type filters only within a major group.
-            const uniqueMetrics = new Set();
-            list.forEach(fig => uniqueMetrics.add(fig.figureType));
-
-            // Render sub-metric tab buttons
-            const metricsTabs = document.getElementById("metricsTabs");
-            metricsTabs.innerHTML = "";
-
-            if (activeGroup !== "ALL" && uniqueMetrics.size > 1) {
-                const allBtn = document.createElement("button");
-                allBtn.className = `metric-tab-btn ${activeMetric === "ALL" ? "active" : ""}`;
-                allBtn.innerText = FIGURE_TYPE_LABELS.ALL;
-                allBtn.onclick = () => selectMetric("ALL");
-                metricsTabs.appendChild(allBtn);
-
-                Array.from(uniqueMetrics).sort((a, b) => {
-                    const ai = FIGURE_TYPE_ORDER.indexOf(a);
-                    const bi = FIGURE_TYPE_ORDER.indexOf(b);
-                    return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
-                }).forEach(met => {
-                    const btn = document.createElement("button");
-                    btn.className = `metric-tab-btn ${activeMetric === met ? "active" : ""}`;
-                    btn.innerText = FIGURE_TYPE_LABELS[met] || formatMetricName(met);
-                    btn.onclick = () => selectMetric(met);
-                    metricsTabs.appendChild(btn);
-                });
-                metricsTabs.style.display = "flex";
-            } else {
-                metricsTabs.style.display = "none";
-                activeMetric = "ALL";
-            }
-
-            // 3. Filter by sub-metric
-            if (activeMetric !== "ALL") {
-                list = list.filter(fig => fig.figureType === activeMetric);
-            }
-
-            filteredFigures = list; // Cache for lightbox arrows
 
             // Update main title info
             const label = GROUP_LABELS[activeGroup] || activeGroup;
             document.getElementById("activeGroupTitle").innerText = label;
             document.getElementById("activeGroupDesc").innerText =
-                `${list.length} ${list.length === 1 ? "figure" : "figures"}`;
+                `${list.length} ${list.length === 1 ? "figure" : "figures"} available`;
 
-            // 4. Render Grid
+            // Cache for lightbox navigation
+            filteredFigures = list;
+
+            if (currentViewMode === "matrix") {
+                renderMatrixView(list);
+            } else {
+                // In cards view, apply sub-metric tabs
+                const metricsTabs = document.getElementById("metricsTabs");
+                metricsTabs.innerHTML = "";
+
+                const uniqueMetrics = new Set();
+                list.forEach(fig => uniqueMetrics.add(fig.figureType));
+
+                if (activeGroup !== "ALL" && uniqueMetrics.size > 1) {
+                    const allBtn = document.createElement("button");
+                    allBtn.className = `metric-tab-btn ${activeMetric === "ALL" ? "active" : ""}`;
+                    allBtn.innerText = FIGURE_TYPE_LABELS.ALL;
+                    allBtn.onclick = () => selectMetric("ALL");
+                    metricsTabs.appendChild(allBtn);
+
+                    Array.from(uniqueMetrics).sort((a, b) => {
+                        const ai = FIGURE_TYPE_ORDER.indexOf(a);
+                        const bi = FIGURE_TYPE_ORDER.indexOf(b);
+                        return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+                    }).forEach(met => {
+                        const btn = document.createElement("button");
+                        btn.className = `metric-tab-btn ${activeMetric === met ? "active" : ""}`;
+                        btn.innerText = FIGURE_TYPE_LABELS[met] || formatMetricName(met);
+                        btn.onclick = () => selectMetric(met);
+                        metricsTabs.appendChild(btn);
+                    });
+                    metricsTabs.style.display = "flex";
+                } else {
+                    metricsTabs.style.display = "none";
+                    activeMetric = "ALL";
+                }
+
+                let cardsList = list;
+                if (activeMetric !== "ALL") {
+                    cardsList = cardsList.filter(fig => fig.figureType === activeMetric);
+                    filteredFigures = cardsList;
+                }
+
+                renderCardsView(cardsList);
+            }
+        }
+
+        function selectMetric(met) {
+            activeMetric = met;
+            updateActiveView();
+        }
+
+        // Render Quick Buttons Matrix View (All diagnostics on one screen)
+        function renderMatrixView(list) {
+            const dashboard = document.getElementById("matrixDashboard");
+            dashboard.innerHTML = "";
+
+            if (list.length === 0) {
+                dashboard.innerHTML = `
+                    <div class="empty-state">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
+                        </svg>
+                        <div class="empty-state-title">No figures found</div>
+                        <p>Adjust your search query or select another category.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const workflowOrder = [
+                "LEAD_ACC", "LEAD_RMSE", "SST_INDEX", "MOV", "ELI", "INITIAL_SHOCK", "TELECONNECTIONS", "OTHER"
+            ];
+            const byGroup = {};
+            list.forEach(fig => {
+                if (!byGroup[fig.group]) byGroup[fig.group] = [];
+                byGroup[fig.group].push(fig);
+            });
+
+            const sortedGroups = Object.keys(byGroup).sort((a, b) => {
+                const ai = workflowOrder.indexOf(a);
+                const bi = workflowOrder.indexOf(b);
+                if (ai === -1 && bi === -1) return a.localeCompare(b);
+                if (ai === -1) return 1;
+                if (bi === -1) return -1;
+                return ai - bi;
+            });
+
+            sortedGroups.forEach(grp => {
+                let groupFigs = byGroup[grp];
+                const section = document.createElement("div");
+                section.className = "matrix-section";
+
+                const secHeader = document.createElement("div");
+                secHeader.className = "matrix-sec-header";
+                const label = GROUP_LABELS[grp] || grp;
+                const desc = GROUP_DESCRIPTIONS[grp] || "";
+
+                secHeader.innerHTML = `
+                    <div class="matrix-sec-title-group">
+                        <span class="matrix-sec-title">${label}</span>
+                        <span class="matrix-sec-count">${groupFigs.length} ${groupFigs.length === 1 ? 'figure' : 'figures'}</span>
+                    </div>
+                    ${desc ? `<div class="matrix-sec-desc">${desc}</div>` : ''}
+                `;
+                section.appendChild(secHeader);
+
+                // Teleconnection driver mode filter pills
+                if (grp === "TELECONNECTIONS") {
+                    const driverModes = new Set();
+                    groupFigs.forEach(f => {
+                        const parts = (f.shortname || "").split(" · ");
+                        if (parts.length > 1) driverModes.add(parts[0]);
+                    });
+                    if (driverModes.size > 1) {
+                        const filterBar = document.createElement("div");
+                        filterBar.className = "telecon-mode-filter";
+                        filterBar.innerHTML = `<span class="telecon-filter-label">Driver Modes:</span>`;
+
+                        const allPill = document.createElement("button");
+                        allPill.className = `mode-filter-pill ${activeTeleconMode === "ALL" ? "active" : ""}`;
+                        allPill.innerText = `All Modes (${groupFigs.length})`;
+                        allPill.onclick = () => setTeleconMode("ALL");
+                        filterBar.appendChild(allPill);
+
+                        Array.from(driverModes).sort().forEach(dm => {
+                            const dmCount = groupFigs.filter(f => (f.shortname || "").startsWith(dm + " · ")).length;
+                            const pill = document.createElement("button");
+                            pill.className = `mode-filter-pill ${activeTeleconMode === dm ? "active" : ""}`;
+                            pill.innerText = `${dm} (${dmCount})`;
+                            pill.onclick = () => setTeleconMode(dm);
+                            filterBar.appendChild(pill);
+                        });
+                        section.appendChild(filterBar);
+
+                        if (activeTeleconMode !== "ALL") {
+                            groupFigs = groupFigs.filter(f => (f.shortname || "").startsWith(activeTeleconMode + " · "));
+                        }
+                    }
+                }
+
+                // Group by shortname
+                const byShortname = {};
+                groupFigs.forEach(fig => {
+                    const sn = fig.shortname || "General";
+                    if (!byShortname[sn]) byShortname[sn] = [];
+                    byShortname[sn].push(fig);
+                });
+
+                const rowsList = document.createElement("div");
+                rowsList.className = "matrix-rows-list";
+
+                Object.keys(byShortname).sort().forEach(sn => {
+                    const entityFigs = byShortname[sn];
+                    const row = document.createElement("div");
+                    row.className = "matrix-row";
+
+                    const colEntity = document.createElement("div");
+                    colEntity.className = "row-entity-col";
+                    colEntity.innerHTML = `
+                        <div class="entity-badge">
+                            <span class="entity-badge-tag">${escapeHtml(sn)}</span>
+                        </div>
+                        <span class="row-entity-sub">${entityFigs.length} ${entityFigs.length === 1 ? 'diagnostic' : 'diagnostics'}</span>
+                    `;
+
+                    const colButtons = document.createElement("div");
+                    colButtons.className = "row-buttons-col";
+
+                    entityFigs.forEach(fig => {
+                        const btn = document.createElement("button");
+                        btn.className = "diag-btn";
+                        btn.title = `${fig.title || fig.file}\nClick to bump out figure\nFile: ${fig.file}`;
+                        btn.onclick = () => openLightboxForFigureByFile(encodeURIComponent(fig.file));
+
+                        const indClass = getIndicatorClass(fig.btn_type);
+                        btn.innerHTML = `
+                            <span class="diag-btn-indicator ${indClass}"></span>
+                            <span class="diag-btn-label">${escapeHtml(fig.btn_type || "Diagnostic")}</span>
+                        `;
+                        colButtons.appendChild(btn);
+                    });
+
+                    row.appendChild(colEntity);
+                    row.appendChild(colButtons);
+                    rowsList.appendChild(row);
+                });
+
+                section.appendChild(rowsList);
+                dashboard.appendChild(section);
+            });
+        }
+
+        // Render traditional Thumbnail Cards View
+        function renderCardsView(list) {
+            const grid = document.getElementById("figuresGrid");
+            grid.innerHTML = "";
+
             if (list.length === 0) {
                 grid.innerHTML = `
                     <div class="empty-state">
@@ -1992,10 +2969,10 @@ def _build_html_template(manifest: dict) -> str:
 
                 card.innerHTML = `
                     <div class="card-img-wrapper" onclick="openLightbox(${index})">
-                        <img class="card-img" src="${figureUrl(fig)}" alt="${fig.title}" loading="lazy">
+                        <img class="card-img" src="${figureUrl(fig)}" alt="${escapeHtml(fig.title)}" loading="lazy">
                         <div class="card-actions-overlay">
                             <button class="action-btn" onclick="event.stopPropagation(); openLightbox(${index})">
-                                🔍 Fullscreen
+                                🔍 Bump Out
                             </button>
                             <label class="compare-label-btn" onclick="event.stopPropagation();">
                                 <input type="checkbox" class="compare-checkbox" ${isSelected ? 'checked' : ''} 
@@ -2005,12 +2982,12 @@ def _build_html_template(manifest: dict) -> str:
                         </div>
                     </div>
                     <div class="card-body">
-                        <h4 class="card-title">${fig.title || fig.file}</h4>
-                        ${fig.caption ? `<p class="card-caption">${fig.caption}</p>` : ''}
+                        <h4 class="card-title">${escapeHtml(fig.title || fig.file)}</h4>
+                        ${fig.caption ? `<p class="card-caption">${escapeHtml(fig.caption)}</p>` : ''}
                         <div class="card-meta">
-                            <span class="meta-tag">${fig.group}</span>
-                            <span class="meta-tag metric">${FIGURE_TYPE_LABELS[fig.figureType] || formatMetricName(fig.metric)}</span>
-                            ${fig.reference ? `<span class="meta-tag">${fig.reference}</span>` : ''}
+                            <span class="meta-tag entity-tag">${escapeHtml(fig.shortname || fig.group)}</span>
+                            <span class="meta-tag metric">${escapeHtml(fig.btn_type || formatMetricName(fig.metric))}</span>
+                            ${fig.reference ? `<span class="meta-tag">${escapeHtml(fig.reference)}</span>` : ''}
                         </div>
                     </div>
                 `;
@@ -2018,10 +2995,21 @@ def _build_html_template(manifest: dict) -> str:
             });
         }
 
-        function selectMetric(met) {
-            activeMetric = met;
-            updateActiveView();
-        }
+        // Bump-out figure directly by file path
+        window.openLightboxForFigureByFile = function(encodedFile) {
+            const file = decodeURIComponent(encodedFile);
+            let index = filteredFigures.findIndex(f => f.file === file);
+            if (index === -1) {
+                const globalIndex = manifest.figures.findIndex(f => f.file === file);
+                if (globalIndex !== -1) {
+                    filteredFigures = manifest.figures;
+                    index = globalIndex;
+                }
+            }
+            if (index !== -1) {
+                openLightbox(index);
+            }
+        };
 
         // Lightbox Functionality (Zoom, Pan, Arrows)
         let zoomScale = 1;
@@ -2051,6 +3039,8 @@ def _build_html_template(manifest: dict) -> str:
             document.getElementById("lightboxTitle").innerText = fig.title || fig.file;
             document.getElementById("lightboxCaption").innerText = fig.caption || "No caption details provided.";
             document.getElementById("lightboxFilename").innerText = fig.file;
+            document.getElementById("lightboxShortname").innerText = fig.shortname || "-";
+            document.getElementById("lightboxBtnType").innerText = fig.btn_type || formatMetricName(fig.metric);
             document.getElementById("lightboxMode").innerText = fig.group;
             document.getElementById("lightboxMetric").innerText = formatMetricName(fig.metric);
             
@@ -2063,10 +3053,45 @@ def _build_html_template(manifest: dict) -> str:
             }
 
             document.getElementById("lightboxDownloadBtn").href = figureUrl(fig);
+            updateLightboxCompareBtn(fig);
 
-            // Toggle active class
+            // Toggle active class with bump-out animation
             document.getElementById("lightbox").classList.add("active");
             document.body.style.overflow = "hidden"; // Prevent body scrolling
+        }
+
+        window.toggleActiveLightboxCompare = function() {
+            const fig = filteredFigures[activeLightboxIndex];
+            if (!fig) return;
+            const isAlreadySelected = selectedForCompare.some(item => item.file === fig.file);
+            if (isAlreadySelected) {
+                selectedForCompare = selectedForCompare.filter(item => item.file !== fig.file);
+            } else {
+                if (selectedForCompare.length >= 4) {
+                    alert("You can compare a maximum of 4 figures at once.");
+                    return;
+                }
+                selectedForCompare.push(fig);
+            }
+            updateCompareDrawer();
+            updateLightboxCompareBtn(fig);
+            if (currentViewMode === "cards") {
+                updateActiveView();
+            }
+        };
+
+        function updateLightboxCompareBtn(fig) {
+            const compareBtn = document.getElementById("lightboxCompareBtn");
+            const compareText = document.getElementById("lightboxCompareBtnText");
+            if (!compareBtn || !compareText) return;
+            const isAlreadySelected = selectedForCompare.some(item => item.file === fig.file);
+            if (isAlreadySelected) {
+                compareBtn.classList.add("active");
+                compareText.innerText = "✓ In Comparison";
+            } else {
+                compareBtn.classList.remove("active");
+                compareText.innerText = "Add to Compare";
+            }
         }
 
         function closeLightbox() {

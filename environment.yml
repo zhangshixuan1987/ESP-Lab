@@ -49,10 +49,10 @@ dependencies:
   - tqdm
   - watermark
   - xarray>=2023.1
+  - xcdat
   - xesmf # xarray interface to ESMF tools
   - xgcm # General Circulation Model Postprocessing with xarray
   - xhistogram # Fast, flexible, label-aware histograms for numpy and xarray
   - xrft # fourier transforms for xarray data
   - xskillscore>=0.0.24
   - zarr
-  - ncar-jobqueue
