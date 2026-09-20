@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import warnings
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -18,6 +19,7 @@ from workflows.diagnostics.sst_teleconnections import (
     DOWNSTREAM_VARIABLES,
     E3SM_CASES,
     MEMBER_DIMS,
+    SYSTEM_DIR_MAP,
     assemble_teleconnection_dataset,
     corr_and_p,
     downstream_regrid_method,
@@ -67,6 +69,7 @@ MOV_SOURCE_DIRS: dict[str, str] = dict(MOV_PRODUCT_TAGS)
 def load_modes_manifest(diag_root: Path = DEFAULT_DIAG_ROOT) -> tuple[dict[str, Any] | None, Path | None]:
     """Discover and load modes_manifest.json if present."""
     candidates = [
+        diag_root / "tmp" / "_manifests" / "modes_manifest.json",
         diag_root / "_manifests" / "modes_manifest.json",
         diag_root / "modes_manifest.json",
     ]
@@ -516,6 +519,49 @@ def ensure_mov_teleconnection_dataset(
     out_file = mov_teleconnection_cache_path(config)
     output_dir = out_file.parent
     cache_mode = config["cache"].get("mode", "auto")
+    diag_root = Path(config["paths"].get("diag_root", DEFAULT_DIAG_ROOT))
+    filename = out_file.name
+
+    # 1. Primary path: load single-system files from <Experiment>/leadtime_telec/
+    # and assemble into multi-system dataset in memory.
+    systems = (
+        [str(s) for s in inventory["system"].unique()]
+        if inventory is not None and not inventory.empty and "system" in inventory.columns
+        else [str(s) for s in config.get("selection", {}).get("systems", [])]
+    )
+    if systems and cache_mode != "rebuild":
+        sys_files = [
+            diag_root / SYSTEM_DIR_MAP.get(s, s) / "leadtime_telec" / filename
+            for s in systems
+        ]
+        if all(p.is_file() for p in sys_files):
+            slices = []
+            valid = True
+            for p in sys_files:
+                ds_slice = _open_compatible_mov_cache(p, fingerprint)
+                if ds_slice is None:
+                    valid = False
+                    break
+                slices.append(ds_slice)
+            if valid and slices:
+                metrics_ds = assemble_teleconnection_dataset(slices) if len(slices) > 1 else slices[0]
+                metrics_ds.attrs.update({
+                    "schema": "mov_teleconnection_metrics_v1",
+                    "fingerprint": fingerprint,
+                    "upstream_mode": mode,
+                })
+                return metrics_ds, sys_files[0], "loaded"
+
+    # 2. Fallback check: direct out_file or legacy candidates
+    if not out_file.is_file():
+        candidates = [
+            diag_root / "multimodel" / "leadtime_telec" / filename,
+            diag_root / "teleconnections" / filename,
+        ]
+        for cand in candidates:
+            if cand.is_file():
+                out_file = cand
+                break
 
     if cache_mode != "rebuild":
         metrics_ds = _open_compatible_mov_cache(out_file, fingerprint)
@@ -555,8 +601,35 @@ def ensure_mov_teleconnection_dataset(
         "pvalue_note": "classical Pearson t test; no field-significance or autocorrelation correction",
     })
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    tmp = out_file.with_suffix(".tmp.nc")
-    metrics_ds.to_netcdf(tmp)
-    tmp.replace(out_file)
-    return metrics_ds, out_file, "computed"
+    # Save per-system slice to <Experiment>/leadtime_telec/
+    if "system" in metrics_ds:
+        for sys_val in metrics_ds["system"].values:
+            sys_str = str(sys_val)
+            dir_name = SYSTEM_DIR_MAP.get(sys_str, sys_str)
+            sys_dir = diag_root / dir_name / "leadtime_telec"
+            sys_dir.mkdir(parents=True, exist_ok=True)
+            sys_tmp = sys_dir / f".{filename}.tmp.nc"
+            metrics_ds.sel(system=[sys_val]).to_netcdf(sys_tmp)
+            sys_tmp.replace(sys_dir / filename)
+
+    obs_vars = [v for v in metrics_ds.data_vars if "observed" in v or v == "downstream_lead"]
+    if obs_vars:
+        obs_dir = diag_root / "observations" / "leadtime_telec"
+        obs_dir.mkdir(parents=True, exist_ok=True)
+        obs_tmp = obs_dir / f".{filename}.tmp.nc"
+        metrics_ds[obs_vars].isel(system=0).drop_vars("system", errors="ignore").to_netcdf(obs_tmp)
+        obs_tmp.replace(obs_dir / filename)
+
+    # Only write to out_file if caller explicitly specified a non-multimodel output_dir (e.g. tests)
+    if "multimodel" not in str(output_dir):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        tmp = out_file.with_suffix(".tmp.nc")
+        metrics_ds.to_netcdf(tmp)
+        tmp.replace(out_file)
+
+    first_sys_file = (
+        diag_root / SYSTEM_DIR_MAP.get(systems[0], systems[0]) / "leadtime_telec" / filename
+        if systems
+        else out_file
+    )
+    return metrics_ds, first_sys_file, "computed"

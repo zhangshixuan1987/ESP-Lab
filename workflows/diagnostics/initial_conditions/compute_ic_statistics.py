@@ -175,10 +175,18 @@ def run(
 
     out_root = Path(config_path.parent) / ic_cfg.output_root
     subdirs = cfg.get("output", {}).get("subdirs", {})
-    manifests_dir = out_root / subdirs.get("manifests", "manifests")
-    fc_dir = out_root / subdirs.get("file_comparison", "file_comparison")
-    vs_dir = out_root / subdirs.get("variable_statistics", "variable_statistics")
+    manifests_dir = out_root / subdirs.get("manifests", "paired_manifests")
+    if not manifests_dir.exists() and (out_root / "manifests").exists():
+        manifests_dir = out_root / "manifests"
+    fc_dir = out_root / subdirs.get("file_comparison", "schema_comparison")
+    if not fc_dir.exists() and (out_root / "file_comparison").exists():
+        fc_dir = out_root / "file_comparison"
+    vs_dir = out_root / subdirs.get("variable_statistics", "tables")
+    if not vs_dir.exists() and (out_root / "variable_statistics").exists():
+        vs_dir = out_root / "variable_statistics"
+    diff_dir = out_root / subdirs.get("diff_grids", vs_dir.name)
     vs_dir.mkdir(parents=True, exist_ok=True)
+    diff_dir.mkdir(parents=True, exist_ok=True)
 
     active_dates = [single_date] if single_date else ic_cfg.active_dates
     nc_chunks = cfg.get("netcdf", {}).get("chunks", {}) or None
@@ -337,7 +345,7 @@ def run(
                         "threshold_exceedance"
                     )
                     var_token = re.sub(r"[^A-Za-z0-9_.-]+", "_", var)
-                    diff_path = vs_dir / f"{date}_{member_token}_{comp}_{var_token}_diff.nc"
+                    diff_path = diff_dir / f"{date}_{member_token}_{comp}_{var_token}_diff.nc"
                     diff_ds = xr.merge([
                         diff_da,
                         relative_da,

@@ -33,6 +33,17 @@ def _humanize_figure_name(filename: str) -> str:
         "1b": "1b",
         "2a": "2a",
         "2b": "2b",
+        "3a": "3a",
+        "3b": "3b",
+        "4a": "4a",
+        "4b": "4b",
+        "5a": "5a",
+        "5b": "5b",
+        "5c": "5c",
+        "6a": "6a",
+        "6b": "6b",
+        "7a": "7a",
+        "7b": "7b",
         "acc": "ACC",
         "conus": "CONUS",
         "eli": "ELI",
@@ -119,10 +130,13 @@ def _infer_metric(filename: str) -> str:
 def _infer_mode(filename: str) -> str:
     """Infer a broad diagnostic group for a figure without metadata."""
     stem = Path(filename).stem.lower()
+    stem_clean = re.sub(r"^fig_\d[a-z]_", "", stem)
     for mode in sorted(CLIMATE_MODES, key=len, reverse=True):
         mode_lower = mode.lower()
         if (
             stem.startswith(f"fig_{mode_lower}_")
+            or stem_clean.startswith(f"{mode_lower}_")
+            or stem_clean == mode_lower
             or f"_{mode_lower}_" in stem
             or stem.endswith(f"_{mode_lower}")
             or stem == f"fig_{mode_lower}"
@@ -156,7 +170,7 @@ def _infer_mode(filename: str) -> str:
         ("tsa", "TSA"),
         ("tni", "TNI"),
     ):
-        if token in stem:
+        if token in stem_clean or token in stem:
             return label
     return "Other"
 
@@ -168,22 +182,42 @@ def _infer_workflow_group(filename: str, metric: str, mode: str) -> str:
     path_str = str(path_obj).lower()
     metric_lower = metric.lower()
 
-    if "initial_shock" in path_str or "shock" in stem:
+    if (
+        stem.startswith(("fig_shock_", "fig_6a_", "fig_6b_"))
+        or "initial_shock" in path_str
+        or "shock" in stem
+    ):
         return "INITIAL_SHOCK"
-    if path_str.startswith("teleconnections") or stem.startswith("teleconnection_"):
+    if (
+        stem.startswith(("fig_teleconnection_", "teleconnection_", "fig_3b_", "fig_4b_", "fig_5c_"))
+        or path_str.startswith("teleconnections")
+    ):
         return "TELECONNECTIONS"
-    if "eli" in stem or "eli" in metric_lower:
+    if (
+        stem.startswith(("fig_eli_", "fig_5a_", "fig_5b_"))
+        or "eli" in stem
+        or "eli" in metric_lower
+    ):
         return "ELI"
-    if stem.startswith("fig_tc_") or "track_density" in stem:
+    if (
+        stem.startswith(("fig_tc_", "fig_7a_", "fig_7b_"))
+        or "track_density" in stem
+        or mode.upper() == "TC"
+        or "tropical_cyclone" in stem
+    ):
         return "TC"
-    if mode.upper() in CLIMATE_MODES or metric_lower in {
-        "eof_patterns",
-        "global_teleconnection_patterns",
-        "pc_time_series",
-    }:
+    if (
+        stem.startswith(("fig_mov_", "fig_4a_"))
+        or mode.upper() in CLIMATE_MODES
+        or metric_lower in {
+            "eof_patterns",
+            "global_teleconnection_patterns",
+            "pc_time_series",
+        }
+    ):
         return "MOV"
     if (
-        stem.startswith(("fig_1a_", "fig_1b_"))
+        stem.startswith(("fig_atm_acc_", "fig_lnd_acc_", "fig_lead_acc_", "fig_1a_", "fig_1b_"))
         or "leadtime_acc" in stem
         or metric_lower.startswith("leadtime_acc")
     ):
@@ -191,13 +225,14 @@ def _infer_workflow_group(filename: str, metric: str, mode: str) -> str:
     if metric_lower.startswith("leadtime_drift") or "_drift" in stem:
         return "LEAD_DRIFT"
     if (
-        stem.startswith(("fig_2a_", "fig_2b_"))
+        stem.startswith(("fig_atm_rmse_", "fig_rmse_compare_", "fig_lead_rmse_", "fig_2a_", "fig_2b_"))
         or metric_lower.startswith("leadtime_rmse")
         or metric_lower.startswith("rmse_compare")
         or "_rmse" in stem
     ):
         return "LEAD_RMSE"
     return "SST_INDEX"
+
 
 
 def _infer_shortname_and_type(
@@ -213,7 +248,7 @@ def _infer_shortname_and_type(
 
     if group == "LEAD_ACC":
         for v in ["PRECT", "PSL", "TREFHT", "TS", "SST", "H2OSNO", "H2OSOI", "TWS"]:
-            if v.lower() in stem_lower:
+            if f"_{v.lower()}_" in f"_{stem_lower}_":
                 shortname = v
                 break
         if "compare" in stem_lower:
@@ -221,7 +256,7 @@ def _infer_shortname_and_type(
         elif "difference" in stem_lower or "diff" in stem_lower:
             btn_type = "Difference"
         elif "distribution" in stem_lower:
-            btn_type = "Record Length"
+            btn_type = "Sample Period Sensitivity"
         elif "sigmask" in stem_lower:
             btn_type = "Sigmask"
         elif "minus_reanalysis" in stem_lower:
@@ -231,27 +266,41 @@ def _infer_shortname_and_type(
 
     elif group == "LEAD_RMSE":
         for v in ["PRECT", "PSL", "TREFHT", "TS", "SST", "H2OSNO", "H2OSOI", "TWS"]:
-            if v.lower() in stem_lower:
+            if f"_{v.lower()}_" in f"_{stem_lower}_":
                 shortname = v
                 break
-        if "compare_conus" in stem_lower:
-            btn_type = "Compare (CONUS)"
-        elif "compare_global" in stem_lower:
-            btn_type = "Compare (Global)"
-        elif "difference_compare_init05" in stem_lower:
+        if "difference_compare" in stem_lower or "diff_compare" in stem_lower:
+            if "init05" in stem_lower:
+                btn_type = "Diff Compare (May)"
+            elif "init11" in stem_lower:
+                btn_type = "Diff Compare (Nov)"
+            else:
+                btn_type = "Diff Compare"
+        elif "difference_global" in stem_lower or "diff_global" in stem_lower:
+            if "init05" in stem_lower:
+                btn_type = "Diff Global (May)"
+            elif "init11" in stem_lower:
+                btn_type = "Diff Global (Nov)"
+            else:
+                btn_type = "Diff Global"
+        elif "diff" in stem_lower and "compare" in stem_lower and "init05" in stem_lower:
             btn_type = "Diff Compare (May)"
-        elif "difference_compare_init11" in stem_lower:
+        elif "diff" in stem_lower and "compare" in stem_lower and "init11" in stem_lower:
             btn_type = "Diff Compare (Nov)"
-        elif "difference_compare" in stem_lower:
-            btn_type = "Diff Compare"
-        elif "difference_global_init05" in stem_lower:
+        elif "diff" in stem_lower and "global" in stem_lower and "init05" in stem_lower:
             btn_type = "Diff Global (May)"
-        elif "difference_global_init11" in stem_lower:
+        elif "diff" in stem_lower and "global" in stem_lower and "init11" in stem_lower:
             btn_type = "Diff Global (Nov)"
-        elif "difference_global" in stem_lower:
+        elif "diff" in stem_lower and "compare" in stem_lower:
+            btn_type = "Diff Compare"
+        elif "diff" in stem_lower and "global" in stem_lower:
             btn_type = "Diff Global"
-        elif "difference" in stem_lower:
+        elif "difference" in stem_lower or "diff" in stem_lower:
             btn_type = "Difference"
+        elif "compare" in stem_lower and "conus" in stem_lower:
+            btn_type = "Compare (CONUS)"
+        elif "compare" in stem_lower and "global" in stem_lower:
+            btn_type = "Compare (Global)"
         elif "conus" in stem_lower:
             btn_type = "CONUS RMSE"
         elif "global" in stem_lower:
@@ -266,8 +315,8 @@ def _infer_shortname_and_type(
             ("nino12", "Niño1+2"),
             ("nino3", "Niño3"),
             ("nino4", "Niño4"),
-            ("oni", "ONI"),
             ("roni", "RONI"),
+            ("oni", "ONI"),
             ("pacwrampool", "PACWARMPOOL"),
             ("pacwarmpool", "PACWARMPOOL"),
             ("atlmdr", "ATLMDR"),
@@ -315,31 +364,29 @@ def _infer_shortname_and_type(
         elif "time_series" in stem_lower:
             btn_type = "Time Series"
         elif "drift_climatology" in stem_lower:
-            btn_type = "Drift Climatology"
+            btn_type = "Leadtime Climatology"
         elif "lead_time_benchmark" in stem_lower:
             btn_type = "NMME Benchmark"
         elif "dual_axis_djf" in stem_lower:
-            btn_type = "Dual-Axis DJF"
+            btn_type = "Niño3.4 vs ELI (DJF)"
         elif "dual_axis_jja" in stem_lower:
-            btn_type = "Dual-Axis JJA"
+            btn_type = "Niño3.4 vs ELI (JJA)"
         else:
             btn_type = "ELI Skill"
 
     elif group == "INITIAL_SHOCK":
-        if "initial_shock_rmse_mae" in file_lower:
-            shortname = "Error Heatmaps"
-            var = "TREFHT" if "trefht" in stem_lower else "TS"
+        for v in ["PRECT", "TREFHT", "TS"]:
+            if f"_{v.lower()}_" in f"_{stem_lower}_" or f"_{v.lower()}." in f"_{stem_lower}." or f"-{v.lower()}_" in f"-{stem_lower}_":
+                shortname = v
+                break
+        if stem_lower.startswith(("fig_shock_error_", "fig_6b_")) or "initial_shock_rmse_mae" in file_lower or "normalized_rmse" in stem_lower:
             if "lead-year-1" in stem_lower:
-                btn_type = f"{var} Lead Y1"
+                btn_type = "Lead Y1 Heatmap"
             elif "lead-year-2" in stem_lower:
-                btn_type = f"{var} Lead Y2"
+                btn_type = "Lead Y2 Heatmap"
             else:
-                btn_type = f"{var} Monthly"
+                btn_type = "Monthly Heatmap"
         else:
-            for v in ["PRECT", "TREFHT", "TS"]:
-                if v.lower() in stem_lower:
-                    shortname = v
-                    break
             if (
                 "absolute_normalized_change" in stem_lower
                 and "seasonal" in stem_lower
@@ -366,11 +413,11 @@ def _infer_shortname_and_type(
                 btn_type = "Shock Metric"
 
     elif group == "TELECONNECTIONS":
-        m = re.search(r"teleconnection_([A-Za-z0-9\.\+]+)_([A-Za-z0-9]+)_(.+)", stem)
+        m = re.search(r"(?:fig_(?:[345][bc]_|)|)teleconnection_([A-Za-z0-9\.\+]+)_([A-Za-z0-9]+)_(.+)", stem, re.IGNORECASE)
         if m:
             mode_part = m.group(1)
             var_part = m.group(2)
-            met_part = m.group(3)
+            met_part = m.group(3).lower()
             if mode_part.lower() == "nino34":
                 mode_name = "Niño3.4"
             elif mode_part.lower() == "atlmdr":
@@ -401,6 +448,21 @@ def _infer_shortname_and_type(
             btn_type = "Regime Fraction"
         else:
             btn_type = "Drift Metric"
+
+    elif group == "TC":
+        shortname = "Tropical Cyclones"
+        if "genesis_density" in stem_lower or "method_compare" in stem_lower:
+            btn_type = "Method Compare"
+        elif "sanity_compare" in stem_lower or "tracks_density_sanity" in stem_lower:
+            btn_type = "Sanity Compare"
+        elif "trajectory" in stem_lower:
+            btn_type = "Trajectory Compare"
+        elif "enso_regression" in stem_lower:
+            btn_type = "Regression Map"
+        elif "leadtime" in stem_lower or "track_density_compare" in stem_lower:
+            btn_type = "Leadtime Compare"
+        else:
+            btn_type = "TC Diagnostic"
 
     return shortname, btn_type
 
@@ -1166,6 +1228,20 @@ def _build_html_template(manifest: dict) -> str:
 
         .diag-btn-label {
             white-space: nowrap;
+        }
+
+        .diag-btn.btn-unavailable {
+            opacity: 0.22;
+            cursor: not-allowed;
+            pointer-events: none;
+            border-color: rgba(255, 255, 255, 0.06);
+            background: rgba(255, 255, 255, 0.02);
+            color: var(--text-secondary);
+        }
+
+        .diag-btn.btn-unavailable .diag-btn-indicator {
+            background-color: rgba(255, 255, 255, 0.15);
+            box-shadow: none;
         }
 
         /* Compact figure-type filters within the selected workflow group */
@@ -2302,7 +2378,7 @@ def _build_html_template(manifest: dict) -> str:
             "LEAD_RMSE": "Root Mean Square Error (RMSE) skill maps, CONUS/Global regional summaries, and model comparisons.",
             "SST_INDEX": "Skill curves and ensemble-mean historical time series for tropical Pacific, Atlantic, and Indian ocean climate indices.",
             "MOV": "Principal modes of climate variability (ENSO, NAO, PDO, PNA, SAM, etc.) with EOF spatial patterns, teleconnections, and PC series.",
-            "ELI": "Ensemble ENSO Longitude Index (ELI) skill scores, tracking metrics, lead-time drift climatologies, and NMME benchmarks.",
+            "ELI": "Ensemble ENSO Longitude Index (ELI) skill scores, tracking metrics, lead-time climatologies, and NMME benchmarks.",
             "INITIAL_SHOCK": "Quantification of initialization shock, step changes between seasonal start dates, scatter distributions, and error heatmaps.",
             "TELECONNECTIONS": "Global climate mode teleconnection pattern correlation maps, comprehensive summaries, and Taylor diagrams.",
             "LEAD_DRIFT": "Lead-time drift analysis and climatology metrics.",
@@ -2473,7 +2549,7 @@ def _build_html_template(manifest: dict) -> str:
                 }
                 if (stemLower.includes("compare")) btnType = "Model Compare";
                 else if (stemLower.includes("difference") || stemLower.includes("diff")) btnType = "Difference";
-                else if (stemLower.includes("distribution")) btnType = "Record Length";
+                else if (stemLower.includes("distribution")) btnType = "Sample Period Sensitivity";
                 else if (stemLower.includes("sigmask")) btnType = "Sigmask";
                 else if (stemLower.includes("minus_reanalysis")) btnType = "Minus Reanalysis";
                 else btnType = "ACC Skill Map";
@@ -2482,15 +2558,23 @@ def _build_html_template(manifest: dict) -> str:
                 for (const v of vars) {
                     if (stemLower.includes(v.toLowerCase())) { shortname = v; break; }
                 }
-                if (stemLower.includes("compare_conus")) btnType = "Compare (CONUS)";
-                else if (stemLower.includes("compare_global")) btnType = "Compare (Global)";
-                else if (stemLower.includes("difference_compare_init05")) btnType = "Diff Compare (May)";
-                else if (stemLower.includes("difference_compare_init11")) btnType = "Diff Compare (Nov)";
-                else if (stemLower.includes("difference_compare")) btnType = "Diff Compare";
-                else if (stemLower.includes("difference_global_init05")) btnType = "Diff Global (May)";
-                else if (stemLower.includes("difference_global_init11")) btnType = "Diff Global (Nov)";
-                else if (stemLower.includes("difference_global")) btnType = "Diff Global";
-                else if (stemLower.includes("difference")) btnType = "Difference";
+                if (stemLower.includes("difference_compare") || stemLower.includes("diff_compare")) {
+                    if (stemLower.includes("init05")) btnType = "Diff Compare (May)";
+                    else if (stemLower.includes("init11")) btnType = "Diff Compare (Nov)";
+                    else btnType = "Diff Compare";
+                } else if (stemLower.includes("difference_global") || stemLower.includes("diff_global")) {
+                    if (stemLower.includes("init05")) btnType = "Diff Global (May)";
+                    else if (stemLower.includes("init11")) btnType = "Diff Global (Nov)";
+                    else btnType = "Diff Global";
+                } else if (stemLower.includes("diff") && stemLower.includes("compare") && stemLower.includes("init05")) btnType = "Diff Compare (May)";
+                else if (stemLower.includes("diff") && stemLower.includes("compare") && stemLower.includes("init11")) btnType = "Diff Compare (Nov)";
+                else if (stemLower.includes("diff") && stemLower.includes("global") && stemLower.includes("init05")) btnType = "Diff Global (May)";
+                else if (stemLower.includes("diff") && stemLower.includes("global") && stemLower.includes("init11")) btnType = "Diff Global (Nov)";
+                else if (stemLower.includes("diff") && stemLower.includes("compare")) btnType = "Diff Compare";
+                else if (stemLower.includes("diff") && stemLower.includes("global")) btnType = "Diff Global";
+                else if (stemLower.includes("difference") || stemLower.includes("diff")) btnType = "Difference";
+                else if (stemLower.includes("compare") && stemLower.includes("conus")) btnType = "Compare (CONUS)";
+                else if (stemLower.includes("compare") && stemLower.includes("global")) btnType = "Compare (Global)";
                 else if (stemLower.includes("conus")) btnType = "CONUS RMSE";
                 else if (stemLower.includes("global")) btnType = "Global RMSE";
                 else btnType = "RMSE Skill";
@@ -2524,22 +2608,23 @@ def _build_html_template(manifest: dict) -> str:
                 shortname = "ELI Diagnostics";
                 if (stemLower.includes("acc_nrmse_skill")) btnType = "ACC / nRMSE Skill";
                 else if (stemLower.includes("time_series")) btnType = "Time Series";
-                else if (stemLower.includes("drift_climatology")) btnType = "Drift Climatology";
+                else if (stemLower.includes("drift_climatology")) btnType = "Leadtime Climatology";
                 else if (stemLower.includes("lead_time_benchmark")) btnType = "NMME Benchmark";
-                else if (stemLower.includes("dual_axis_djf")) btnType = "Dual-Axis DJF";
-                else if (stemLower.includes("dual_axis_jja")) btnType = "Dual-Axis JJA";
+                else if (stemLower.includes("dual_axis_djf")) btnType = "Niño3.4 vs ELI (DJF)";
+                else if (stemLower.includes("dual_axis_jja")) btnType = "Niño3.4 vs ELI (JJA)";
                 else btnType = "ELI Skill";
             } else if (group === "INITIAL_SHOCK") {
-                if (fileLower.includes("initial_shock_rmse_mae")) {
-                    shortname = "Error Heatmaps";
-                    const v = stemLower.includes("trefht") ? "TREFHT" : "TS";
-                    if (stemLower.includes("lead-year-1")) btnType = `${v} Lead Y1`;
-                    else if (stemLower.includes("lead-year-2")) btnType = `${v} Lead Y2`;
-                    else btnType = `${v} Monthly`;
-                } else {
-                    for (const v of ["PRECT", "TREFHT", "TS"]) {
-                        if (stemLower.includes(v.toLowerCase())) { shortname = v; break; }
+                for (const v of ["PRECT", "TREFHT", "TS"]) {
+                    if (stemLower.includes(`_${v.toLowerCase()}_`) || stemLower.includes(`_${v.toLowerCase()}.`) || stemLower.includes(`-${v.toLowerCase()}_`)) {
+                        shortname = v;
+                        break;
                     }
+                }
+                if (stemLower.startsWith("fig_shock_error_") || stemLower.startsWith("fig_6b_") || fileLower.includes("initial_shock_rmse_mae") || stemLower.includes("normalized_rmse")) {
+                    if (stemLower.includes("lead-year-1")) btnType = "Lead Y1 Heatmap";
+                    else if (stemLower.includes("lead-year-2")) btnType = "Lead Y2 Heatmap";
+                    else btnType = "Monthly Heatmap";
+                } else {
                     if (stemLower.includes("absolute_normalized_change") && stemLower.includes("seasonal")) btnType = "Seasonal Abs Change";
                     else if (stemLower.includes("absolute_normalized_change")) btnType = "Abs Change";
                     else if (stemLower.includes("signed_normalized_change")) btnType = "Signed Change";
@@ -2551,7 +2636,8 @@ def _build_html_template(manifest: dict) -> str:
                     else btnType = "Shock Metric";
                 }
             } else if (group === "TELECONNECTIONS") {
-                const match = stem.match(/teleconnection_([A-Za-z0-9\\.\\+]+)_([A-Za-z0-9]+)_(.+)/);
+                const match = stem.match(/(?:fig_(?:[345][bc]_|)|)teleconnection_([A-Za-z0-9\\.\\+]+)_([A-Za-z0-9]+)_(.+)/i);
+
                 if (match) {
                     let modePart = match[1];
                     const varPart = match[2].toUpperCase();
@@ -2564,6 +2650,21 @@ def _build_html_template(manifest: dict) -> str:
                     else if (metPart.includes("summary")) btnType = "Summary";
                     else if (metPart.includes("taylor")) btnType = "Taylor Diagram";
                     else btnType = metPart;
+                }
+            } else if (group === "TC") {
+                shortname = "Tropical Cyclones";
+                if (stemLower.includes("genesis_density") || stemLower.includes("method_compare")) {
+                    btnType = "Method Compare";
+                } else if (stemLower.includes("sanity_compare") || stemLower.includes("tracks_density_sanity")) {
+                    btnType = "Sanity Compare";
+                } else if (stemLower.includes("trajectory")) {
+                    btnType = "Trajectory Compare";
+                } else if (stemLower.includes("enso_regression")) {
+                    btnType = "Regression Map";
+                } else if (stemLower.includes("leadtime") || stemLower.includes("track_density_compare")) {
+                    btnType = "Leadtime Compare";
+                } else {
+                    btnType = "TC Diagnostic";
                 }
             }
             return { shortname, btn_type: btnType };
@@ -2662,7 +2763,7 @@ def _build_html_template(manifest: dict) -> str:
             });
 
             const workflowOrder = [
-                "LEAD_ACC", "LEAD_RMSE", "SST_INDEX", "MOV", "ELI", "INITIAL_SHOCK", "TELECONNECTIONS", "OTHER"
+                "LEAD_ACC", "LEAD_RMSE", "SST_INDEX", "MOV", "ELI", "INITIAL_SHOCK", "TELECONNECTIONS", "TC", "OTHER"
             ];
             const groups = Object.keys(counts)
                 .filter(g => g !== "ALL")
@@ -2822,7 +2923,7 @@ def _build_html_template(manifest: dict) -> str:
             }
 
             const workflowOrder = [
-                "LEAD_ACC", "LEAD_RMSE", "SST_INDEX", "MOV", "ELI", "INITIAL_SHOCK", "TELECONNECTIONS", "OTHER"
+                "LEAD_ACC", "LEAD_RMSE", "SST_INDEX", "MOV", "ELI", "INITIAL_SHOCK", "TELECONNECTIONS", "TC", "OTHER"
             ];
             const byGroup = {};
             list.forEach(fig => {
@@ -2859,6 +2960,10 @@ def _build_html_template(manifest: dict) -> str:
                 section.appendChild(secHeader);
 
                 // Teleconnection driver mode filter pills
+                // Save the FULL unfiltered group so we can compute the canonical
+                // union of btn_types and variable suffixes across ALL modes.
+                const fullGroupFigs = (grp === "TELECONNECTIONS") ? [...groupFigs] : null;
+
                 if (grp === "TELECONNECTIONS") {
                     const driverModes = new Set();
                     groupFigs.forEach(f => {
@@ -2900,36 +3005,94 @@ def _build_html_template(manifest: dict) -> str:
                     byShortname[sn].push(fig);
                 });
 
+                // Build the ordered union of all btn_type labels.
+                // For TELECONNECTIONS: use the FULL pre-filter group so all modes share
+                // the same canonical button types. For other groups: use groupFigs.
+                const allBtnTypes = [];
+                const seenBtnTypes = new Set();
+                (fullGroupFigs || groupFigs).forEach(fig => {
+                    const bt = fig.btn_type || "Diagnostic";
+                    if (!seenBtnTypes.has(bt)) {
+                        seenBtnTypes.add(bt);
+                        allBtnTypes.push(bt);
+                    }
+                });
+
+                // For TELECONNECTIONS: also build the global union of variable suffixes
+                // (the part after " · " in shortname) so every mode shows the same rows.
+                let shortnameList;
+                if (fullGroupFigs && activeTeleconMode !== "ALL") {
+                    const allSuffixes = [];
+                    const seenSuffixes = new Set();
+                    fullGroupFigs.forEach(fig => {
+                        const sn = fig.shortname || "";
+                        const idx = sn.indexOf(" · ");
+                        const suffix = idx >= 0 ? sn.slice(idx + 3) : sn;
+                        if (suffix && !seenSuffixes.has(suffix)) {
+                            seenSuffixes.add(suffix);
+                            allSuffixes.push(suffix);
+                        }
+                    });
+                    // Construct the canonical shortname list for the selected mode
+                    shortnameList = allSuffixes.map(s => activeTeleconMode + " · " + s).sort();
+                } else {
+                    shortnameList = Object.keys(byShortname).sort();
+                }
+
                 const rowsList = document.createElement("div");
                 rowsList.className = "matrix-rows-list";
 
-                Object.keys(byShortname).sort().forEach(sn => {
-                    const entityFigs = byShortname[sn];
+                shortnameList.forEach(sn => {
+                    const entityFigs = byShortname[sn] || [];
+
+                    // Build a quick lookup: btn_type -> figure for this shortname
+                    const figByBtnType = {};
+                    entityFigs.forEach(fig => {
+                        figByBtnType[fig.btn_type || "Diagnostic"] = fig;
+                    });
+
                     const row = document.createElement("div");
                     row.className = "matrix-row";
 
                     const colEntity = document.createElement("div");
                     colEntity.className = "row-entity-col";
+                    const availCount = entityFigs.length;
+                    const totalCount = allBtnTypes.length;
+                    const diagLabel = availCount === totalCount
+                        ? `${availCount} ${availCount === 1 ? 'diagnostic' : 'diagnostics'}`
+                        : `${availCount} / ${totalCount} diagnostics`;
                     colEntity.innerHTML = `
                         <div class="entity-badge">
                             <span class="entity-badge-tag">${escapeHtml(sn)}</span>
                         </div>
-                        <span class="row-entity-sub">${entityFigs.length} ${entityFigs.length === 1 ? 'diagnostic' : 'diagnostics'}</span>
+                        <span class="row-entity-sub">${diagLabel}</span>
                     `;
 
                     const colButtons = document.createElement("div");
                     colButtons.className = "row-buttons-col";
 
-                    entityFigs.forEach(fig => {
+                    // Render one button per btn_type in the canonical union —
+                    // active if the figure exists, disabled/unavailable otherwise.
+                    allBtnTypes.forEach(bt => {
+                        const fig = figByBtnType[bt];
                         const btn = document.createElement("button");
-                        btn.className = "diag-btn";
-                        btn.title = `${fig.title || fig.file}\nClick to bump out figure\nFile: ${fig.file}`;
-                        btn.onclick = () => openLightboxForFigureByFile(encodeURIComponent(fig.file));
+                        const indClass = getIndicatorClass(bt);
 
-                        const indClass = getIndicatorClass(fig.btn_type);
+                        if (fig) {
+                            btn.className = "diag-btn";
+                            btn.title = `${fig.title || fig.file}\nClick to bump out figure\nFile: ${fig.file}`;
+                            btn.onclick = () => openLightboxForFigureByFile(encodeURIComponent(fig.file));
+                        } else {
+                            btn.className = "diag-btn btn-unavailable";
+                            btn.setAttribute("disabled", "true");
+                            btn.setAttribute("aria-disabled", "true");
+                            btn.setAttribute("tabindex", "-1");
+                            btn.title = `Figure not available for ${sn}`;
+                        }
+
                         btn.innerHTML = `
                             <span class="diag-btn-indicator ${indClass}"></span>
-                            <span class="diag-btn-label">${escapeHtml(fig.btn_type || "Diagnostic")}</span>
+                            <span class="diag-btn-label">${escapeHtml(bt)}</span>
                         `;
                         colButtons.appendChild(btn);
                     });

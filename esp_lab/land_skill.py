@@ -1,6 +1,6 @@
 """Lead-time ACC skill utilities for E3SM land variables.
 
-This module supports ``jupyter/1b_refactor_lnd_leadtime_acc_skill_map.ipynb``
+This module supports ``jupyter/1b_lnd_leadtime_acc_skill_map.ipynb``
 using the execution and cache contracts established by the atmospheric workflow.
 It deliberately leaves the observational product configurable: snow water
 equivalent, total water storage, and soil moisture generally require different

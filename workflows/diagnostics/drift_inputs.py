@@ -9,6 +9,7 @@ import pandas as pd
 import xarray as xr
 
 from workflows.diagnostics import two_reference_drift as workflow
+from esp_lab.paths import leadtime_drift_dir
 from esp_lab.diagnostics.two_reference_drift import (
     area_weighted_mean, regional_subset, compute_regime_fraction,
     run_pipeline,
@@ -203,7 +204,7 @@ def ensure_regional_products(output_root, variables, init_months, sources, regio
     for variable in variables:
         years = tuple(variable_years.get(variable, analysis_years))
         for month in init_months:
-            paths = {source: root / f'{source}_{variable}_{month:02d}_regional.nc' for source in sources}
+            paths = {source: regional_product_path(variable, month, source, output_root=root) for source in sources}
             current = all(regional_is_current(
                 path, variable=variable, month=month, years=years, regions=regions[variable],
                 baseline=baseline_lead, tolerance=distance_tolerance,
@@ -251,12 +252,15 @@ def ensure_regional_products(output_root, variables, init_months, sources, regio
                                  analysis_years=str(years), regions=','.join(regions[variable]),
                                  region_definitions=str({name: REGIONS[name] for name in regions[variable]}),
                                  drift_input_identity=_identity(variable, month, years, regions[variable], baseline_lead, distance_tolerance))
+            path.parent.mkdir(parents=True, exist_ok=True)
             workflow.atomic_to_netcdf(product, path)
             print(f'[drift inputs] Saved {path}')
     return pd.DataFrame(rows)
 
 
-DEFAULT_OUTPUT_ROOT = Path(
+DEFAULT_S2D_DIAG_ROOT = Path('/global/cfs/cdirs/e3sm/S2S2D/s2d_diag')
+DEFAULT_OUTPUT_ROOT = DEFAULT_S2D_DIAG_ROOT
+DEFAULT_LEGACY_OUTPUT_ROOT = Path(
     '/global/cfs/cdirs/e3sm/S2S2D/s2d_diag/multimodel/leadtime_drift/two_reference'
 )
 DEFAULT_FIGURE_ROOT = Path('/global/cfs/cdirs/e3sm/www/zhan391/esp-lab_diag')
@@ -289,8 +293,51 @@ MONTH_NAMES = {5: 'May', 11: 'November'}
 
 
 def regional_product_path(variable, init_month, source, output_root=DEFAULT_OUTPUT_ROOT):
-    """Standard filename and path for regional two-reference diagnostic products."""
-    return Path(output_root) / f'{source}_{variable}_{int(init_month):02d}_regional.nc'
+    """Standard filename and path for regional two-reference diagnostic products.
+
+    Places experiment-specific products under ``<output_root>/<source>/leadtime_drift/regional/``.
+    If ``output_root`` already ends in ``regional``, ``leadtime_drift``, or points directly to a
+    specific folder, the file is placed directly inside ``output_root``.
+    """
+    root = Path(output_root)
+    filename = f'{source}_{variable}_{int(init_month):02d}_regional.nc'
+    if root.name in ('regional', 'leadtime_drift', 'two_reference') or root.name == source:
+        return root / filename
+
+    canonical = leadtime_drift_dir(source, 'regional', filename, root=root)
+    if canonical.is_file():
+        return canonical
+
+    prior_exp = leadtime_drift_dir(source, filename, root=root)
+    if prior_exp.is_file():
+        return prior_exp
+
+    multimodel_comp = root / 'multimodel' / 'leadtime_drift' / 'comparisons' / 'regional' / filename
+    if multimodel_comp.is_file():
+        return multimodel_comp
+
+    legacy = root / 'multimodel' / 'leadtime_drift' / 'two_reference' / filename
+    if legacy.is_file():
+        return legacy
+
+    return canonical
+
+
+def comparison_product_path(comparison_name, variable, init_month, kind='regional', output_root=DEFAULT_OUTPUT_ROOT):
+    """Standard filename and path for cross-model comparison products.
+
+    Places comparison products under ``<output_root>/multimodel/leadtime_drift/comparisons/<kind>/``.
+    """
+    root = Path(output_root)
+    tag = 'regional' if kind == 'regional' else 'spatial_maps'
+    filename = f'{comparison_name}_{variable}_{int(init_month):02d}_{tag}.nc'
+    canonical = root / 'multimodel' / 'leadtime_drift' / 'comparisons' / tag / filename
+    if canonical.is_file():
+        return canonical
+    legacy = root / 'multimodel' / 'leadtime_drift' / 'two_reference' / filename
+    if legacy.is_file():
+        return legacy
+    return canonical
 
 
 def figure_size(width, height, scale=1.0):

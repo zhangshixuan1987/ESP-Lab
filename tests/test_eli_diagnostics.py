@@ -11,11 +11,11 @@ from esp_lab import eli_diagnostics
 from esp_lab.utils.resource_utils import ResourceTracker
 
 
-_eli_matches = list((Path(__file__).parents[1] / "jupyter").rglob("5a_refactor_eli_skill_ts.ipynb"))
-ELI_NOTEBOOK = _eli_matches[0] if _eli_matches else Path(__file__).parents[1] / "jupyter" / "5a_refactor_eli_skill_ts.ipynb"
-_eli_diag_matches = list((Path(__file__).parents[1] / "jupyter").rglob("5b_refactor_eli_diagnostics.ipynb"))
+_eli_matches = list((Path(__file__).parents[1] / "jupyter").rglob("5a_eli_skill_ts.ipynb"))
+ELI_NOTEBOOK = _eli_matches[0] if _eli_matches else Path(__file__).parents[1] / "jupyter" / "5a_eli_skill_ts.ipynb"
+_eli_diag_matches = list((Path(__file__).parents[1] / "jupyter").rglob("5b_eli_diagnostics.ipynb"))
 ELI_DIAGNOSTICS_NOTEBOOK = (
-    _eli_diag_matches[0] if _eli_diag_matches else Path(__file__).parents[1] / "jupyter" / "5b_refactor_eli_diagnostics.ipynb"
+    _eli_diag_matches[0] if _eli_diag_matches else Path(__file__).parents[1] / "jupyter" / "5b_eli_diagnostics.ipynb"
 )
 
 

@@ -9,8 +9,8 @@ from workflows.modes_of_variability import orchestration
 from workflows.modes_of_variability import figure_config
 
 
-_mov_matches = list((Path(__file__).resolve().parents[1] / "jupyter").rglob("4a_refactor_mov_analysis.ipynb"))
-NOTEBOOK = _mov_matches[0] if _mov_matches else (Path(__file__).resolve().parents[1] / "jupyter" / "4a_refactor_mov_analysis.ipynb")
+_mov_matches = list((Path(__file__).resolve().parents[1] / "jupyter").rglob("4a_mov_analysis.ipynb"))
+NOTEBOOK = _mov_matches[0] if _mov_matches else (Path(__file__).resolve().parents[1] / "jupyter" / "4a_mov_analysis.ipynb")
 
 
 def _settings(tmp_path, **overrides):

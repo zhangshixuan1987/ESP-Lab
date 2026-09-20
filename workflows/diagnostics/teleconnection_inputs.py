@@ -361,6 +361,14 @@ def prepare_atmospheric_observation(
         monthly.close()
 
 
+def _land_snapshot_dir(root: Path) -> Path:
+    tmp_path = root / "tmp" / "source_inventory_snapshots" / "land"
+    legacy_path = root / "source_inventory_snapshots" / "land"
+    if not tmp_path.exists() and legacy_path.exists():
+        return legacy_path
+    return tmp_path
+
+
 def prepare_land_inputs(
     config: Mapping[str, Any], variable: str, pairs: Sequence[tuple[str, int]], *,
     force: bool = False,
@@ -374,6 +382,7 @@ def prepare_land_inputs(
     settings = _input_settings(config)
     selection = config["selection"]
     root = Path(config["paths"]["diag_root"])
+    snapshot_dir = _land_snapshot_dir(root)
     years = _years(config)
     members = [f"EN{i:02d}" for i in range(int(settings.get("ensemble_member_count", 10)))]
     nlead = int(settings.get("monthly_nlead", 24))
@@ -393,7 +402,7 @@ def prepare_land_inputs(
         },
         source_revision=cfg["source_revision"], mode="inventory",
         inventory_root=Path(cfg["path"]).parent,
-        snapshot_dir=root / "source_inventory_snapshots" / "land",
+        snapshot_dir=snapshot_dir,
     )
     reference_month_policy = (
         "complete centered 3-month windows; retain explicit missing seasons"
@@ -445,7 +454,7 @@ def prepare_land_inputs(
             },
             source_revision=str(case.get("source_revision", "post_process_v1")),
             mode="inventory", inventory_root=raw_model_root,
-            snapshot_dir=root / "source_inventory_snapshots" / "land",
+            snapshot_dir=snapshot_dir,
         )
         expected = land_input_cache.expected_attrs(
             field=variable, source_kind="model", source_name=system,

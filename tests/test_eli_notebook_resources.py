@@ -14,9 +14,9 @@ def _source(name):
 
 def test_eli_notebooks_use_explicit_bounded_dask_settings():
     for name in (
-        "5a_refactor_eli_skill_ts.ipynb",
-        "5b_refactor_eli_diagnostics.ipynb",
-        "5c_refactor_eli_telecon.ipynb",
+        "5a_eli_skill_ts.ipynb",
+        "5b_eli_diagnostics.ipynb",
+        "5c_eli_telecon.ipynb",
     ):
         source = _source(name)
         assert '"workers": 4' in source
@@ -29,7 +29,7 @@ def test_eli_notebooks_use_explicit_bounded_dask_settings():
 
 
 def test_teleconnection_notebook_skips_cluster_for_exact_cache_hit():
-    source = _source("5c_refactor_eli_telecon.ipynb")
+    source = _source("5c_eli_telecon.ipynb")
 
     assert "telecon.teleconnection_cache_path(CONFIG, inventory)" in source
     assert 'CONFIG["cache"]["mode"] != "require"' in source

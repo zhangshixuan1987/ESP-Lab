@@ -8,8 +8,8 @@ from unittest.mock import Mock
 import pytest
 import xarray as xr
 
-_notebook_matches = list((Path(__file__).resolve().parents[1] / 'jupyter').rglob('3a_refactor_sst_skill_ts.ipynb'))
-NOTEBOOK = _notebook_matches[0] if _notebook_matches else Path(__file__).resolve().parents[1] / 'jupyter/3a_refactor_sst_skill_ts.ipynb'
+_notebook_matches = list((Path(__file__).resolve().parents[1] / 'jupyter').rglob('3a_sst_skill_ts.ipynb'))
+NOTEBOOK = _notebook_matches[0] if _notebook_matches else Path(__file__).resolve().parents[1] / 'jupyter/3a_sst_skill_ts.ipynb'
 
 
 def source(index):

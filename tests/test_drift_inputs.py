@@ -56,7 +56,7 @@ class DriftInputsTests(unittest.TestCase):
              patch.object(inputs, 'default_variable_config', side_effect=AssertionError('must not scan raw archives')):
             again = inputs.ensure_regional_products(**self.kw)
         self.assertEqual(list(rows.path), list(again.path))
-        self.assertEqual(len(list(self.kw['output_root'].glob('*.nc'))), len(self.kw['sources']))
+        self.assertEqual(len(list(self.kw['output_root'].rglob('*.nc'))), len(self.kw['sources']))
 
     def test_require_missing_writes_nothing(self):
         with self.assertRaises(FileNotFoundError):

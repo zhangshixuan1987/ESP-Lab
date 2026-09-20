@@ -12,8 +12,8 @@ def _find_notebook(name):
 
 
 NOTEBOOKS = (
-    _find_notebook("2a_refactor_leadtime_rmse_skill_map.ipynb"),
-    _find_notebook("2b_refactor_leadtime_rmse_compare.ipynb"),
+    _find_notebook("2a_leadtime_rmse_skill_map.ipynb"),
+    _find_notebook("2b_leadtime_rmse_compare.ipynb"),
 )
 
 

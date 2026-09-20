@@ -231,5 +231,5 @@ def ensure_mode_products(settings: Mapping[str, object]) -> dict[str, object]:
         "processor_runs": processor_runs,
         "nmme_models": nmme_models,
         "teleconnection_products": teleconnection_status,
-        "manifest": str(Path(effective["outdir"]) / "_manifests" / "modes_manifest.json"),
+        "manifest": str(Path(effective["outdir"]) / "tmp" / "_manifests" / "modes_manifest.json"),
     }

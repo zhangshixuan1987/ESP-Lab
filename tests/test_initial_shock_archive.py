@@ -131,8 +131,8 @@ def test_sources_changing_after_plan_are_rejected(archive_inputs):
 
 def test_notebook_cells_smoke_execution(archive_inputs,tmp_path):
     settings,cases,variable=archive_inputs
-    _nb_matches = list((Path(__file__).parents[1] / "jupyter").rglob("6a_refactor_shock_ts.ipynb"))
-    notebook = _nb_matches[0] if _nb_matches else Path(__file__).parents[1] / "jupyter/6a_refactor_shock_ts.ipynb"
+    _nb_matches = list((Path(__file__).parents[1] / "jupyter").rglob("6a_shock_ts.ipynb"))
+    notebook = _nb_matches[0] if _nb_matches else Path(__file__).parents[1] / "jupyter/6a_shock_ts.ipynb"
     nb = json.loads(notebook.read_text())
     settings['paths']['figure_outdir']=str(tmp_path/'figures')
     settings['dask']={'enabled':False}
@@ -215,8 +215,8 @@ def test_rmse_mae_archive_cache_and_notebook_smoke(archive_inputs, tmp_path):
     assert not second[0]['rebuild'] and not second[0]['error_rebuild']
     xr.testing.assert_allclose(error_archive.compute_archive_plan(second, settings, variable)[5], result)
 
-    _nb_matches = list((Path(__file__).parents[1] / "jupyter").rglob("6b_refactor_shock_index.ipynb"))
-    notebook = _nb_matches[0] if _nb_matches else Path(__file__).parents[1] / "jupyter/6b_refactor_shock_index.ipynb"
+    _nb_matches = list((Path(__file__).parents[1] / "jupyter").rglob("6b_shock_index.ipynb"))
+    notebook = _nb_matches[0] if _nb_matches else Path(__file__).parents[1] / "jupyter/6b_shock_index.ipynb"
     nb = json.loads(notebook.read_text())
     ns = {'WORKFLOW_SETTINGS': settings, 'E3SM_CASES': cases, 'variable': variable,
           'field': 'TREFHT',

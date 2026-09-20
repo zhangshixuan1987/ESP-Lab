@@ -15,6 +15,7 @@ from workflows.leadtime_skill.rmse_comparison import (
     make_obs_like_model_leads,
     make_obs_like_model_time,
     normalize_direct_rmse_leads,
+    provenance_digest,
     require_available_lead,
     safe_model_name,
     valid_area_weighted_fraction,
@@ -129,18 +130,24 @@ def test_direct_rmse_cache_contract_and_name_are_provenance_aware(tmp_path):
 
     assert attrs["cache_kind"] == "direct_rmse"
     assert attrs["obs_alignment_version"]
-    assert "init11_years_1980-1981_ny2" in path.name
-    changed = dict(attrs, observation_data_identity="inventory-sha256:new")
-    changed_path = direct_rmse_cache_path(
+    assert path.name == "E3SM-FOSIRL_PRECT_direct_rmse_init11_years_1980-1981_ny2.nc"
+
+    legacy_file = path.parent / (
+        f"E3SM-FOSIRL_PRECT_direct_rmse_init11_years_1980-1981_ny2_"
+        f"{provenance_digest(dict(attrs), length=12)}.nc"
+    )
+    legacy_file.touch()
+    fallback_path = direct_rmse_cache_path(
         root=tmp_path,
         source=kwargs["source"],
         component="atm",
         variable=kwargs["variable"],
         init_month=kwargs["init_month"],
         verification_years=kwargs["verification_years"],
-        expected_attrs=changed,
+        expected_attrs=attrs,
     )
-    assert changed_path != path
+    assert fallback_path == legacy_file
+    legacy_file.unlink()
 
 
 def test_make_obs_like_model_leads_uses_season_verification_month():

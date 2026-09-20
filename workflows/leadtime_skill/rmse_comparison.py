@@ -177,18 +177,28 @@ def direct_rmse_cache_path(
     variable,
     init_month,
     verification_years,
-    expected_attrs: Mapping,
+    expected_attrs: Mapping | None = None,
 ):
-    """Return a readable provenance-hashed path for one direct-RMSE result."""
+    """Return a deterministic path for one direct-RMSE result, with fallback to legacy hashed file."""
     directory = leadtime_acc_dir(
         source, "comparison", component, "direct_rmse", variable, root=root
     )
     directory.mkdir(parents=True, exist_ok=True)
-    return directory / (
+    canonical = directory / (
         f"{safe_model_name(source)}_{variable}_direct_rmse_init{int(init_month):02d}_"
-        f"years_{compact_year_tag(verification_years)}_"
-        f"{provenance_digest(dict(expected_attrs), length=12)}.nc"
+        f"years_{compact_year_tag(verification_years)}.nc"
     )
+    if canonical.exists():
+        return canonical
+    if expected_attrs:
+        legacy = directory / (
+            f"{safe_model_name(source)}_{variable}_direct_rmse_init{int(init_month):02d}_"
+            f"years_{compact_year_tag(verification_years)}_"
+            f"{provenance_digest(dict(expected_attrs), length=12)}.nc"
+        )
+        if legacy.exists():
+            return legacy
+    return canonical
 
 
 def rmse_comparison_fraction(left_rmse, right_rmse, *, iteration_dim="iteration"):

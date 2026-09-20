@@ -941,19 +941,33 @@ def regional_cache_path(
     region_name: str,
 ) -> Path:
     """Return the canonical path to a regional-index cache file."""
-    return (
-        outdir
+    filename = (
+        f"{_safe_token(exp_name)}"
+        f"_init{init_month:02d}"
+        f"_{_safe_token(field_key)}"
+        f"_{_safe_token(region_name)}"
+        f"_{freq_tag}.nc"
+    )
+    canonical = (
+        Path(outdir)
+        / _safe_token(exp_name)
+        / "leadtime_drift"
+        / "regional"
+        / "series"
+        / filename
+    )
+    if canonical.is_file():
+        return canonical
+    legacy = (
+        Path(outdir)
         / _safe_token(exp_name)
         / "leadtime_drift"
         / "atm"
-        / (
-            f"{_safe_token(exp_name)}"
-            f"_init{init_month:02d}"
-            f"_{_safe_token(field_key)}"
-            f"_{_safe_token(region_name)}"
-            f"_{freq_tag}.nc"
-        )
+        / filename
     )
+    if legacy.is_file():
+        return legacy
+    return canonical
 
 
 def open_regional_cache(

@@ -170,6 +170,10 @@ def test_infer_shortname_and_type():
     assert s == "PRECT"
     assert t == "ACC Skill Map"
 
+    s, t = _infer_shortname_and_type("fig_atm_acc_prect_acc_distribution.png", "LEAD_ACC")
+    assert s == "PRECT"
+    assert t == "Sample Period Sensitivity"
+
     # LEAD_RMSE
     s, t = _infer_shortname_and_type("fig_leadtime_rmse_compare_conus_prect.png", "LEAD_RMSE")
     assert s == "PRECT"
@@ -230,4 +234,74 @@ def test_generate_webpage_contains_matrix_dashboard(tmp_path):
     assert "renderCardsView" in content
     assert "setViewMode" in content
     assert "openLightboxForFigureByFile" in content
+
+
+def test_canonical_prefixes_classification(tmp_path):
+    # Test canonical prefixes across workflow steps
+    test_files = [
+        ("fig_1a_prect_acc_compare.png", "LEAD_ACC", "PRECT", "Model Compare"),
+        ("fig_atm_acc_prect_compare.png", "LEAD_ACC", "PRECT", "Model Compare"),
+        ("fig_1b_h2osoi_acc_difference.png", "LEAD_ACC", "H2OSOI", "Difference"),
+        ("fig_lnd_acc_h2osoi_difference.png", "LEAD_ACC", "H2OSOI", "Difference"),
+        ("fig_2a_prect_rmse_conus.png", "LEAD_RMSE", "PRECT", "CONUS RMSE"),
+        ("fig_atm_rmse_prect_conus.png", "LEAD_RMSE", "PRECT", "CONUS RMSE"),
+        ("fig_2b_prect_rmse_difference_compare_init05.png", "LEAD_RMSE", "PRECT", "Diff Compare (May)"),
+        ("fig_rmse_compare_prect_difference_compare_init05.png", "LEAD_RMSE", "PRECT", "Diff Compare (May)"),
+        ("fig_rmse_compare_prect_rmse_difference_compare_init11.png", "LEAD_RMSE", "PRECT", "Diff Compare (Nov)"),
+        ("fig_rmse_compare_prect_rmse_difference_global_init05.png", "LEAD_RMSE", "PRECT", "Diff Global (May)"),
+        ("fig_rmse_compare_prect_rmse_difference_global_init11.png", "LEAD_RMSE", "PRECT", "Diff Global (Nov)"),
+        ("fig_rmse_compare_prect_conus.png", "LEAD_RMSE", "PRECT", "Compare (CONUS)"),
+        ("fig_rmse_compare_prect_rmse_compare_global.png", "LEAD_RMSE", "PRECT", "Compare (Global)"),
+        ("fig_rmse_compare_psl_rmse_difference_compare_init05.png", "LEAD_RMSE", "PSL", "Diff Compare (May)"),
+        ("fig_rmse_compare_psl_rmse_difference_compare_init11.png", "LEAD_RMSE", "PSL", "Diff Compare (Nov)"),
+        ("fig_rmse_compare_psl_rmse_difference_global_init05.png", "LEAD_RMSE", "PSL", "Diff Global (May)"),
+        ("fig_rmse_compare_psl_rmse_difference_global_init11.png", "LEAD_RMSE", "PSL", "Diff Global (Nov)"),
+        ("fig_rmse_compare_trefht_rmse_difference_compare_init05.png", "LEAD_RMSE", "TREFHT", "Diff Compare (May)"),
+        ("fig_rmse_compare_trefht_rmse_difference_compare_init11.png", "LEAD_RMSE", "TREFHT", "Diff Compare (Nov)"),
+        ("fig_rmse_compare_trefht_rmse_difference_global_init05.png", "LEAD_RMSE", "TREFHT", "Diff Global (May)"),
+        ("fig_rmse_compare_trefht_rmse_difference_global_init11.png", "LEAD_RMSE", "TREFHT", "Diff Global (Nov)"),
+        ("fig_3a_nino34_acc_skill.png", "SST_INDEX", "Niño3.4", "ACC Skill"),
+        ("fig_sst_index_nino34_acc_skill.png", "SST_INDEX", "Niño3.4", "ACC Skill"),
+        ("fig_3a_roni_time_series.png", "SST_INDEX", "RONI", "Time Series"),
+        ("fig_4a_pdo_eof_patterns_year1.png", "MOV", "PDO", "EOF Year 1"),
+        ("fig_mov_pdo_eof_patterns_year1.png", "MOV", "PDO", "EOF Year 1"),
+        ("fig_4a_nao_global_teleconnection_patterns_init05.png", "MOV", "NAO", "Telecon May"),
+        ("fig_mov_nao_global_teleconnection_patterns_init05.png", "MOV", "NAO", "Telecon May"),
+        ("fig_5a_eli_multimodel_acc_nrmse_skill.png", "ELI", "ELI Diagnostics", "ACC / nRMSE Skill"),
+        ("fig_eli_multimodel_acc_nrmse_skill.png", "ELI", "ELI Diagnostics", "ACC / nRMSE Skill"),
+        ("fig_3b_teleconnection_nino34_prect_corr_map.png", "TELECONNECTIONS", "Niño3.4 · PRECT", "Correlation Map"),
+        ("fig_teleconnection_nino34_prect_corr_map.png", "TELECONNECTIONS", "Niño3.4 · PRECT", "Correlation Map"),
+        ("fig_4b_teleconnection_pdo_prect_corr_map.png", "TELECONNECTIONS", "PDO · PRECT", "Correlation Map"),
+        ("fig_teleconnection_pdo_prect_corr_map.png", "TELECONNECTIONS", "PDO · PRECT", "Correlation Map"),
+        ("fig_5b_eli_drift_climatology.png", "ELI", "ELI Diagnostics", "Leadtime Climatology"),
+        ("fig_eli_drift_climatology.png", "ELI", "ELI Diagnostics", "Leadtime Climatology"),
+        ("fig_5c_teleconnection_eli_prect_corr_map.png", "TELECONNECTIONS", "ELI · PRECT", "Correlation Map"),
+        ("fig_teleconnection_eli_prect_corr_map.png", "TELECONNECTIONS", "ELI · PRECT", "Correlation Map"),
+        ("fig_6a_prect_absolute_normalized_change_seasonal.png", "INITIAL_SHOCK", "PRECT", "Seasonal Abs Change"),
+        ("fig_6b_shock_metrics_heatmap_trefht_lead-year-1.png", "INITIAL_SHOCK", "TREFHT", "Lead Y1 Heatmap"),
+        ("fig_shock_error_trefht_lead-year-1.png", "INITIAL_SHOCK", "TREFHT", "Lead Y1 Heatmap"),
+        ("fig_shock_error_ts_lead-year-2.png", "INITIAL_SHOCK", "TS", "Lead Y2 Heatmap"),
+        ("fig_shock_error_ts_monthly.png", "INITIAL_SHOCK", "TS", "Monthly Heatmap"),
+        ("fig_7a_tc_tracks_density_sanity_compare.png", "TC", "Tropical Cyclones", "Sanity Compare"),
+        ("fig_tc_tracks_density_sanity_compare.png", "TC", "Tropical Cyclones", "Sanity Compare"),
+        ("fig_7a_tc_genesis_density_method_compare.png", "TC", "Tropical Cyclones", "Method Compare"),
+        ("fig_tc_genesis_density_method_compare.png", "TC", "Tropical Cyclones", "Method Compare"),
+        ("fig_7a_tc_trajectory_compare_set3.png", "TC", "Tropical Cyclones", "Trajectory Compare"),
+        ("fig_tc_trajectory_compare_set3.png", "TC", "Tropical Cyclones", "Trajectory Compare"),
+        ("fig_7b_tc_leadtime_track_density_compare.png", "TC", "Tropical Cyclones", "Leadtime Compare"),
+        ("fig_tc_leadtime_track_density_compare.png", "TC", "Tropical Cyclones", "Leadtime Compare"),
+        ("fig_7b_tc_track_density_enso_regression_fosirl_reanalysis.png", "TC", "Tropical Cyclones", "Regression Map"),
+        ("fig_tc_track_density_enso_regression_fosirl_reanalysis.png", "TC", "Tropical Cyclones", "Regression Map"),
+    ]
+    for fn, expected_grp, expected_shortname, expected_btn_type in test_files:
+        (tmp_path / fn).touch()
+
+    manifest = discover_workflow_figures(tmp_path)
+    by_file = {fig["file"]: fig for fig in manifest["figures"]}
+
+    for fn, expected_grp, expected_shortname, expected_btn_type in test_files:
+        fig_entry = by_file[fn]
+        assert fig_entry["group"] == expected_grp, f"{fn} group mismatch"
+        assert fig_entry["shortname"] == expected_shortname, f"{fn} shortname mismatch"
+        assert fig_entry["btn_type"] == expected_btn_type, f"{fn} btn_type mismatch"
 

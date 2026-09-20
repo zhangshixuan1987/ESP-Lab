@@ -138,8 +138,12 @@ def run(
 
     out_root = Path(config_path.parent) / ic_cfg.output_root
     subdirs = cfg.get("output", {}).get("subdirs", {})
-    manifests_dir = out_root / subdirs.get("manifests", "manifests")
-    fc_dir = out_root / subdirs.get("file_comparison", "file_comparison")
+    manifests_dir = out_root / subdirs.get("manifests", "paired_manifests")
+    if not manifests_dir.exists() and (out_root / "manifests").exists():
+        manifests_dir = out_root / "manifests"
+    fc_dir = out_root / subdirs.get("file_comparison", "schema_comparison")
+    if not fc_dir.exists() and (out_root / "file_comparison").exists():
+        fc_dir = out_root / "file_comparison"
     fc_dir.mkdir(parents=True, exist_ok=True)
 
     active_dates = [single_date] if single_date else ic_cfg.active_dates

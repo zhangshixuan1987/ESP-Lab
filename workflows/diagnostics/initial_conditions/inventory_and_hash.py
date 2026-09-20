@@ -118,10 +118,11 @@ def run(
     pair = ic_cfg.experiment_pair
     ref_root = Path(pair.ref_root)
     test_root = Path(pair.test_root)
-    out_root = Path(config_path.parent) / ic_cfg.output_root
-    manifests_dir = out_root / cfg.get("output", {}).get(
-        "subdirs", {}
-    ).get("manifests", "manifests")
+    subdirs = cfg.get("output", {}).get("subdirs", {})
+    manifests_dir = out_root / subdirs.get("manifests", "paired_manifests")
+    if not manifests_dir.exists() and (out_root / "manifests").exists():
+        manifests_dir = out_root / "manifests"
+    manifests_dir.mkdir(parents=True, exist_ok=True)
 
     # Determine active dates
     if single_date:

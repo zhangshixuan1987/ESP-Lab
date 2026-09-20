@@ -126,7 +126,9 @@ def run(
 
     out_root = Path(config_path.parent) / ic_cfg.output_root
     subdirs = cfg.get("output", {}).get("subdirs", {})
-    vs_dir = out_root / subdirs.get("variable_statistics", "variable_statistics")
+    vs_dir = out_root / subdirs.get("variable_statistics", "tables")
+    if not vs_dir.exists() and (out_root / "variable_statistics").exists():
+        vs_dir = out_root / "variable_statistics"
     cs_dir = out_root / subdirs.get("campaign_summary", "campaign_summary")
     cs_dir.mkdir(parents=True, exist_ok=True)
 

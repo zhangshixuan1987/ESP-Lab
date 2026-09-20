@@ -502,9 +502,18 @@ class TestCacheAndPipelineContracts:
         )
         assert path == (
             tmp_path / "JRA55_FOSIRL" / "leadtime_drift"
-            / "atm"
+            / "regional" / "series"
             / "JRA55_FOSIRL_init05_PRECT_Nino3_4_mon.nc"
         )
+
+        # Legacy atm fallback if existing
+        legacy_dir = tmp_path / "JRA55_FOSIRL" / "leadtime_drift" / "atm"
+        legacy_dir.mkdir(parents=True, exist_ok=True)
+        legacy_file = legacy_dir / "JRA55_FOSIRL_init05_PRECT_Nino3_4_mon.nc"
+        legacy_file.touch()
+        assert regional_cache_path(
+            tmp_path, "JRA55_FOSIRL", 5, "mon", "PRECT", "Nino3.4"
+        ) == legacy_file
 
     def test_precip_converter_is_idempotent(self):
         da = xr.DataArray([2.5], dims=("x",), attrs={"units": "mm/day"})

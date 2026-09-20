@@ -43,21 +43,22 @@ The evaluation workflows are categorized under the [`jupyter/`](jupyter/) direct
 | Notebook | Focus Area | Description |
 |---|---|---|
 | [`0_run_cesm_smyle_benchmark.ipynb`](jupyter/s2d_skill/0_run_cesm_smyle_benchmark.ipynb) | Benchmark Data | Dask-distributed preprocessing of CESM-SMYLE hindcasts |
-| [`1a_refactor_atm_leadtime_acc_skill_map.ipynb`](jupyter/s2d_skill/1a_refactor_atm_leadtime_acc_skill_map.ipynb) | Atmospheric Skill | Lead-time anomaly correlation coefficient (ACC) maps |
-| [`1b_refactor_lnd_leadtime_acc_skill_map.ipynb`](jupyter/s2d_skill/1b_refactor_lnd_leadtime_acc_skill_map.ipynb) | Land Skill | Land surface lead-time ACC maps (soil moisture, runoff, etc.) |
-| [`2a_refactor_leadtime_rmse_skill_map.ipynb`](jupyter/s2d_skill/2a_refactor_leadtime_rmse_skill_map.ipynb) | Error Maps | Spatial root mean square error (RMSE) skill maps |
-| [`2b_refactor_leadtime_rmse_compare.ipynb`](jupyter/s2d_skill/2b_refactor_leadtime_rmse_compare.ipynb) | Model Comparison | Multi-model RMSE comparison and model difference metrics |
-| [`3a_refactor_sst_skill_ts.ipynb`](jupyter/s2d_skill/3a_refactor_sst_skill_ts.ipynb) | Ocean Skill | SST index skill time series (E3SM, CESM-SMYLE, NMME) |
-| [`3b_refactor_sst_telecon.ipynb`](jupyter/s2d_skill/3b_refactor_sst_telecon.ipynb) | Teleconnections | Sea surface temperature teleconnection diagnostics |
-| [`4a_refactor_mov_analysis.ipynb`](jupyter/s2d_skill/4a_refactor_mov_analysis.ipynb) | Modes of Variability | EOF projection and index calculation (PDO, AMO, NAO) |
-| [`4b_refactor_mov_telecon.ipynb`](jupyter/s2d_skill/4b_refactor_mov_telecon.ipynb) | Teleconnections | Modes of variability climate teleconnection patterns |
-| [`5a_refactor_eli_skill_ts.ipynb`](jupyter/s2d_skill/5a_refactor_eli_skill_ts.ipynb) | Tropical Pacific | Equatorial Longitude Index (ELI) skill time series |
-| [`5b_refactor_eli_diagnostics.ipynb`](jupyter/s2d_skill/5b_refactor_eli_diagnostics.ipynb) | ELI Diagnostics | Native & regridded ELI diagnostics across starts |
-| [`5c_refactor_eli_telecon.ipynb`](jupyter/s2d_skill/5c_refactor_eli_telecon.ipynb) | Teleconnections | ELI precipitation and temperature teleconnections |
-| [`6a_refactor_shock_ts.ipynb`](jupyter/s2d_skill/6a_refactor_shock_ts.ipynb) | Initialization Shock | Lead-dependent drift and initialization shock time series |
-| [`6b_refactor_shock_index.ipynb`](jupyter/s2d_skill/6b_refactor_shock_index.ipynb) | Shock Indices | Initialization shock metrics and multi-model indices |
-| [`7a_refactor_tc_method_analysis.ipynb`](jupyter/s2d_skill/7a_refactor_tc_method_analysis.ipynb) | TC Methods | Tropical cyclone tracking method comparison and sanity plots |
-| [`7b_refactor_tc_leadtime_analysis.ipynb`](jupyter/s2d_skill/7b_refactor_tc_leadtime_analysis.ipynb) | TC Lead-time | TC lead-time diagnostics, IBTrACS companion, ENSO regression |
+| [`1a_atm_leadtime_acc_skill_map.ipynb`](jupyter/s2d_skill/1a_atm_leadtime_acc_skill_map.ipynb) | Atmospheric Skill | Lead-time anomaly correlation coefficient (ACC) maps |
+| [`1b_lnd_leadtime_acc_skill_map.ipynb`](jupyter/s2d_skill/1b_lnd_leadtime_acc_skill_map.ipynb) | Land Skill | Land surface lead-time ACC maps (soil moisture, runoff, etc.) |
+| [`2a_leadtime_rmse_skill_map.ipynb`](jupyter/s2d_skill/2a_leadtime_rmse_skill_map.ipynb) | Error Maps | Spatial root mean square error (RMSE) skill maps |
+| [`2b_leadtime_rmse_compare.ipynb`](jupyter/s2d_skill/2b_leadtime_rmse_compare.ipynb) | Model Comparison | Multi-model RMSE comparison and model difference metrics |
+| [`3a_sst_skill_ts.ipynb`](jupyter/s2d_skill/3a_sst_skill_ts.ipynb) | Ocean Skill | SST index skill time series (E3SM, CESM-SMYLE, NMME) |
+| [`3b_sst_telecon.ipynb`](jupyter/s2d_skill/3b_sst_telecon.ipynb) | Teleconnections | Sea surface temperature teleconnection diagnostics |
+| [`4a_mov_analysis.ipynb`](jupyter/s2d_skill/4a_mov_analysis.ipynb) | Modes of Variability | EOF projection and index calculation (PDO, AMO, NAO) |
+| [`4b_mov_telecon.ipynb`](jupyter/s2d_skill/4b_mov_telecon.ipynb) | Teleconnections | Modes of variability climate teleconnection patterns |
+| [`5a_eli_skill_ts.ipynb`](jupyter/s2d_skill/5a_eli_skill_ts.ipynb) | Tropical Pacific | Equatorial Longitude Index (ELI) skill time series |
+| [`5b_eli_diagnostics.ipynb`](jupyter/s2d_skill/5b_eli_diagnostics.ipynb) | ELI Diagnostics | Native & regridded ELI diagnostics across starts |
+| [`5c_eli_telecon.ipynb`](jupyter/s2d_skill/5c_eli_telecon.ipynb) | Teleconnections | ELI precipitation and temperature teleconnections |
+| [`6a_shock_ts.ipynb`](jupyter/s2d_skill/6a_shock_ts.ipynb) | Initialization Shock | Lead-dependent drift and initialization shock time series |
+| [`6b_shock_index.ipynb`](jupyter/s2d_skill/6b_shock_index.ipynb) | Shock Indices | Initialization shock metrics and multi-model indices |
+| [`7a_tc_method_analysis.ipynb`](jupyter/s2d_skill/7a_tc_method_analysis.ipynb) | TC Methods | Tropical cyclone tracking method comparison and sanity plots |
+| [`7b_tc_leadtime_analysis.ipynb`](jupyter/s2d_skill/7b_tc_leadtime_analysis.ipynb) | TC Lead-time | TC lead-time diagnostics, IBTrACS companion, ENSO regression |
+| [`8_run_viewer_webpage.ipynb`](jupyter/s2d_skill/8_run_viewer_webpage.ipynb) | Interactive Web | Generate interactive diagnostics viewer webpage |
 
 ### S2D Drift & Initialization Suite (`jupyter/s2d_drift/`)
 

@@ -170,12 +170,13 @@ hashing:
 # -----------------------------------------------------------------------
 output:
   # Explicit Perlmutter roots for durable diagnostics and public figures.
-  output_root: "/global/cfs/cdirs/e3sm/S2S2D/s2d_diag/multimodel/initial_conditions"
-  figure_outdir: "/global/cfs/cdirs/e3sm/www/zhan391/esp-lab_diag/initial_conditions"
+  output_root: "${ESP_LAB_IC_OUTPUT_ROOT:/global/cfs/cdirs/e3sm/S2S2D/s2d_diag/multimodel/initial_conditions}"
+  figure_outdir: "${ESP_LAB_IC_FIGURE_ROOT:/global/cfs/cdirs/e3sm/www/zhan391/esp-lab_diag/initial_conditions}"
   subdirs:
-    manifests: "manifests"
-    file_comparison: "file_comparison"
-    variable_statistics: "variable_statistics"
+    manifests: "paired_manifests"
+    file_comparison: "schema_comparison"
+    variable_statistics: "tables"
+    diff_grids: "diff_grids"
     maps: "maps"
     profiles: "profiles"
     campaign_summary: "campaign_summary"

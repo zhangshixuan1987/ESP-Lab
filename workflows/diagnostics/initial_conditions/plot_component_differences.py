@@ -331,7 +331,12 @@ def run(
 
     out_root = Path(config_path.parent) / ic_cfg.output_root
     subdirs = cfg.get("output", {}).get("subdirs", {})
-    vs_dir = out_root / subdirs.get("variable_statistics", "variable_statistics")
+    vs_dir = out_root / subdirs.get("variable_statistics", "tables")
+    if not vs_dir.exists() and (out_root / "variable_statistics").exists():
+        vs_dir = out_root / "variable_statistics"
+    diff_dir = out_root / subdirs.get("diff_grids", "diff_grids")
+    if not diff_dir.exists():
+        diff_dir = vs_dir
     figure_root = Path(
         figure_outdir or cfg.get("output", {}).get("figure_outdir", out_root)
     )
@@ -354,8 +359,10 @@ def run(
             if filter_components and comp not in filter_components:
                 continue
 
-            legacy_diff = vs_dir / f"{date}_{comp}_diff.nc"
-            diff_files = sorted(vs_dir.glob(f"{date}_*_{comp}_*_diff.nc"))
+            legacy_diff = diff_dir / f"{date}_{comp}_diff.nc"
+            diff_files = sorted(diff_dir.glob(f"{date}_*_{comp}_*_diff.nc"))
+            if not diff_files and diff_dir != vs_dir:
+                diff_files = sorted(vs_dir.glob(f"{date}_*_{comp}_*_diff.nc"))
             if legacy_diff.exists():
                 diff_files.insert(0, legacy_diff)
 

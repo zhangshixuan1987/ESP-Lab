@@ -478,14 +478,17 @@ def test_teleconnection_cache_path_matches_provenance(tmp_path):
         "field_observed": str(sources[3]),
     }])
     config = {
-        "selection": {"upstream_index": "Nino3.4"},
+        "selection": {
+            "upstream_index": "Nino3.4",
+            "downstream_variable": "TREFHT",
+            "verification_years": [1981, 2011],
+        },
         "analysis": {"detrend": True},
         "paths": {"output_dir": str(tmp_path / "cache")},
     }
 
-    expected_fingerprint = telecon.compute_provenance_fingerprint(config, sources)
     assert telecon.teleconnection_cache_path(config, inventory) == (
-        tmp_path / "cache" / f"teleconnection_Nino34_{expected_fingerprint}.nc"
+        tmp_path / "cache" / "teleconnection_Nino34_TREFHT_verify1981_2011.nc"
     )
 
 
@@ -529,3 +532,59 @@ def test_standardize_spatial_grid_and_assemble():
     assert np.isnan(assembled["model_correlation"].sel(variable="H2OSNO", L=3).values).all()
     # At L=6, H2OSNO should be 2.0
     assert np.allclose(assembled["model_correlation"].sel(variable="H2OSNO", L=6).values, 2.0)
+
+
+def test_ensure_teleconnection_dataset_assembles_single_system_slices(tmp_path):
+    # Setup mock single-system slices in experiment directories
+    diag_root = tmp_path / "s2d_diag"
+    filename = "teleconnection_Nino34_TREFHT_verify1981_2011.nc"
+    systems = ["E3SM-FOSIRL", "E3SM-Reanalysis"]
+    dirs = ["JRA55_FOSIRL", "Reanalysis"]
+
+    for sys_name, dir_name in zip(systems, dirs):
+        sys_dir = diag_root / dir_name / "leadtime_telec"
+        sys_dir.mkdir(parents=True, exist_ok=True)
+        ds = xr.Dataset(
+            {
+                "model_correlation": xr.DataArray(
+                    np.ones((1, 1, 1, 1, 10, 20)),
+                    dims=("init_month", "system", "variable", "L", "lat", "lon"),
+                    coords={
+                        "init_month": [5],
+                        "system": [sys_name],
+                        "variable": ["TREFHT"],
+                        "L": [3],
+                        "lat": np.linspace(-90, 90, 10),
+                        "lon": np.linspace(0, 360, 20),
+                    },
+                )
+            },
+            attrs={"schema": "teleconnection_metrics_v1", "upstream_index": "Nino3.4"},
+        )
+        ds.to_netcdf(sys_dir / filename)
+
+    config = {
+        "paths": {"diag_root": str(diag_root)},
+        "selection": {
+            "upstream_index": "Nino3.4",
+            "downstream_variable": "TREFHT",
+            "systems": systems,
+            "init_months": [5],
+            "verification_years": [1981, 2011],
+            "leads": [3],
+        },
+        "cache": {"mode": "auto"},
+        "analysis": {"alpha": 0.1},
+    }
+
+    inv = pd.DataFrame([
+        {"system": "E3SM-FOSIRL", "init_month": 5, "variable": "TREFHT", "status": "ready"},
+        {"system": "E3SM-Reanalysis", "init_month": 5, "variable": "TREFHT", "status": "ready"},
+    ])
+
+    metrics_ds, out_file, status = telecon.ensure_teleconnection_dataset(config, inventory=inv)
+
+    assert status == "loaded"
+    assert set(metrics_ds.system.values) == {"E3SM-FOSIRL", "E3SM-Reanalysis"}
+    assert metrics_ds["model_correlation"].shape == (1, 2, 1, 1, 10, 20)
+
