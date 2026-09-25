@@ -241,3 +241,144 @@ __all__ = [
     "seasonal_label",
     "style_global_map_axis",
 ]
+
+
+# CONUS zoom used by the lead-time RMSE notebooks (1b_atm layout): each season
+# is verified in forecast year 1 (upper block) and forecast year 2 (lower block).
+CONUS_EXTENT = (-125.0, -66.0, 24.0, 50.0)
+CONUS_SEASON_LEADS = (
+    {"season": "JJA", "init_month": 5, "year_leads": (3, 15)},
+    {"season": "SON", "init_month": 5, "year_leads": (6, 18)},
+    {"season": "DJF", "init_month": 11, "year_leads": (3, 15)},
+    {"season": "MAM", "init_month": 11, "year_leads": (6, 18)},
+)
+_MONTH_NAMES = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def subset_conus(data, extent=CONUS_EXTENT):
+    """Return ``data`` cut to the CONUS box, with longitudes in -180..180."""
+    lon0, lon1, lat0, lat1 = extent
+    if float(data.lon.max()) > 180:
+        data = data.assign_coords(lon=((data.lon + 180) % 360) - 180).sortby("lon")
+    data = data.sel(lon=slice(lon0, lon1))
+    lat_slice = slice(lat0, lat1)
+    if data.lat.size > 1 and float(data.lat[0]) > float(data.lat[-1]):
+        lat_slice = slice(lat1, lat0)
+    return data.sel(lat=lat_slice)
+
+
+def conus_season_specs(init_months):
+    """Return the CONUS season rows available for the configured start months."""
+    return [spec for spec in CONUS_SEASON_LEADS if spec["init_month"] in set(init_months)]
+
+
+def plot_conus_rmse_panels(
+    fields_by_model,
+    *,
+    model_names,
+    init_months,
+    levels,
+    colorbar_label,
+    title,
+    cmap="YlOrRd",
+    extend="max",
+    tick_decimals=1,
+    column_width=3.9,
+    missing_message="No data",
+):
+    """Draw the CONUS RMSE layout of ``1b_atm_leadtime_rmse_skill_map``.
+
+    ``fields_by_model[model][init_month]`` is a (L, lat, lon) map with seasonal
+    lead coordinates (3 = first season). Columns are models; rows are the
+    seasons of ``CONUS_SEASON_LEADS`` for forecast years 1 and 2. A lead the
+    data lacks, or one with no finite values, is drawn as a grey panel showing
+    ``missing_message``. Returns the figure.
+    """
+    import cartopy.crs as ccrs
+    import cartopy.feature as cfeature
+    import matplotlib.pyplot as plt
+    import matplotlib.ticker as mticker
+    from cartopy.mpl.ticker import LatitudeFormatter, LongitudeFormatter
+    from matplotlib.colors import BoundaryNorm
+    from matplotlib.offsetbox import AnchoredText
+
+    specs = conus_season_specs(init_months)
+    if not specs:
+        raise ValueError(f"No CONUS season rows are defined for init_months={list(init_months)}")
+    models = list(fields_by_model)
+    levels = np.asarray(levels, dtype=float)
+    color_map = plt.get_cmap(cmap)
+    norm = BoundaryNorm(levels, color_map.N, extend=extend)
+    font = 14
+    projection = ccrs.PlateCarree()
+
+    fig = plt.figure(figsize=(max(column_width * len(models), 8.0), 19.5))
+    fig.suptitle(title, fontsize=font * 1.3, fontweight="bold", y=0.985)
+    grid = fig.add_gridspec(
+        nrows=9, ncols=len(models), height_ratios=[1, 1, 1, 1, 0.35, 1, 1, 1, 1],
+        top=0.915, bottom=0.055, left=0.065, right=0.975, hspace=0.22, wspace=0.09,
+    )
+    banner = dict(boxstyle="round,pad=0.28", facecolor="#f0f4f8", edgecolor="#b0c4de", alpha=0.92)
+    for y, text in ((0.945, "Forecast Year 1 (Leads 1–4 seasons)"), (0.490, "Forecast Year 2 (Leads 13–16 seasons)")):
+        fig.text(0.52, y, text, ha="center", va="center", fontsize=font * 1.15, fontweight="bold", bbox=banner)
+
+    mappable = None
+    for year_index in range(2):
+        for row, spec in enumerate(specs):
+            grid_row = row + (0 if year_index == 0 else 5)
+            lead = spec["year_leads"][year_index]
+            month = spec["init_month"]
+            badge_text = f"Lead-{lead - 2} {spec['season']} ({_MONTH_NAMES[month - 1]} init)"
+            for column, model in enumerate(models):
+                ax = fig.add_subplot(grid[grid_row, column], projection=projection)
+                ax.set_aspect("auto")
+                if row == 0:
+                    ax.set_title(model_names.get(model, model), fontsize=font, fontweight="bold", pad=5)
+                data = fields_by_model[model].get(month)
+                panel = (
+                    subset_conus(data.sel(L=lead))
+                    if data is not None and lead in data.L.values else None
+                )
+                if panel is not None and bool(np.isfinite(panel).any()):
+                    mappable = ax.pcolormesh(
+                        panel.lon, panel.lat, panel, shading="nearest", cmap=color_map,
+                        norm=norm, rasterized=True, transform=projection,
+                    )
+                else:
+                    ax.set_facecolor("0.94")
+                    ax.text(0.5, 0.5, missing_message, transform=ax.transAxes, ha="center",
+                            va="center", fontsize=font * 0.8, color="0.35", fontweight="bold")
+                ax.set_extent(CONUS_EXTENT, crs=projection)
+                for feature, kwargs in (
+                    (cfeature.COASTLINE, {"linewidth": 0.6}),
+                    (cfeature.BORDERS, {"linewidth": 0.4}),
+                    (cfeature.STATES, {"linewidth": 0.25, "edgecolor": "0.35"}),
+                ):
+                    try:
+                        ax.add_feature(feature, **kwargs)
+                    except Exception as err:  # offline Natural Earth data
+                        print(f"Skipping Cartopy feature {feature}: {err}")
+                ax.set_xticks([-120, -105, -90, -75], crs=projection)
+                ax.set_yticks([25, 35, 45], crs=projection)
+                ax.xaxis.set_major_formatter(LongitudeFormatter(zero_direction_label=True))
+                ax.yaxis.set_major_formatter(LatitudeFormatter())
+                ax.tick_params(
+                    labelsize=font - 3.5, length=2.5, width=0.5, top=False, right=False,
+                    labelbottom=grid_row == 8, labelleft=column == 0,
+                )
+                badge = AnchoredText(
+                    badge_text, loc="lower left", frameon=True, pad=0.18, borderpad=0.25,
+                    prop=dict(size=font - 4.5, weight="bold", family="sans-serif"),
+                )
+                badge.patch.set(boxstyle="round,pad=0.2", facecolor="white", edgecolor="lightgray", alpha=0.85)
+                ax.add_artist(badge)
+
+    if mappable is not None:
+        colorbar = fig.colorbar(
+            mappable, cax=fig.add_axes([0.25, 0.020, 0.5, 0.012]),
+            orientation="horizontal", extend=extend,
+        )
+        colorbar.ax.xaxis.set_major_formatter(mticker.FormatStrFormatter(f"%.{tick_decimals}f"))
+        colorbar.set_label(colorbar_label, fontsize=font, fontweight="bold")
+        colorbar.ax.tick_params(labelsize=font - 2.5)
+    return fig
