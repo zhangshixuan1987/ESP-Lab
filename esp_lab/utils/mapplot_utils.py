@@ -70,7 +70,7 @@ def map_pcolor_global_subplot(fig, dat, lon, lat, ci, cmin, cmax, titlestr,
     clevs = np.arange(cmin, cmax+ci, ci)
 
     if (cmap == "blue2red"):
-        cmap = mycolors.blue2red_cmap(nlevs)
+        cmap = mycolors.blue2red_cmap(clevs)
         #mymap.set_over('pink')
         #mymap.set_under('cyan')
     elif (cmap == "precip"):
