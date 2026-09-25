@@ -266,6 +266,7 @@ def test_canonical_prefixes_classification(tmp_path):
         ("fig_atm_rmse_ts_rmse_case_difference.png", "LEAD_RMSE", "TS", "Case Difference"),
         ("fig_atm_rmse_ts_rmse_difference.png", "LEAD_RMSE", "TS", "nRMSE Difference"),
         ("fig_rmse_compare_h2osno_rmse_difference_global.png", "LEAD_RMSE", "H2OSNO", "RMSE Difference"),
+        ("fig_rmse_compare_h2osno_rmse_difference_global_init11.png", "LEAD_RMSE", "H2OSNO", "RMSE Difference (Nov)"),
         ("fig_rmse_compare_ohc700_rmse_compare_conus.png", "LEAD_RMSE", "OHC700", "Total RMSE (CONUS)"),
         ("fig_3a_nino34_acc_skill.png", "SST_INDEX", "Niño3.4", "ACC Skill"),
         ("fig_sst_index_nino34_acc_skill.png", "SST_INDEX", "Niño3.4", "ACC Skill"),
