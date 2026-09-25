@@ -176,8 +176,12 @@ def add_pointwise_significance_markers(
     font_size,
     font_weight="bold",
     label_bbox=None,
+    label_position="lower right",
 ):
     """Stipple significant ACC cells and label their valid-area percentage.
+
+    ``label_position`` is ``"lower right"`` or ``"lower left"`` (use the latter
+    when the panel's lead label already occupies the lower-right corner).
 
     The percentage uses cosine-latitude weights and includes only cells with
     the complete sample cohort recorded by the skill dataset.
@@ -218,11 +222,12 @@ def add_pointwise_significance_markers(
         label = "(n/a)" if not np.isfinite(significant_fraction) else (
             f"({significant_fraction * 100:3.1f}% sig.)"
         )
+        x, ha = {"lower right": (0.98, "right"), "lower left": (0.02, "left")}[label_position]
         ax.text(
-            0.98, 0.05, label,
+            x, 0.05, label,
             fontsize=font_size, fontweight=font_weight,
             bbox=dict(label_bbox or {}), zorder=10,
-            transform=ax.transAxes, ha="right", va="bottom",
+            transform=ax.transAxes, ha=ha, va="bottom",
         )
     return significant_fraction
 

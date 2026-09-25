@@ -1,3 +1,4 @@
+import glob
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Union
 import warnings
@@ -76,24 +77,6 @@ def resolve_obs_dir(obs_dir: Optional[str] = None) -> Path:
         raise FileNotFoundError(f"Observation directory does not exist: {obs_path}")
 
     return obs_path
-
-
-def list_products(obs_dir: Optional[str] = None) -> List[str]:
-    """
-    List available observational product subdirectories.
-
-    Parameters
-    ----------
-    obs_dir : str, optional
-        Base observation directory. If None, use DEFAULT_OBS_DIR.
-
-    Returns
-    -------
-    products : list of str
-        Sorted list of available product names.
-    """
-    obs_path = resolve_obs_dir(obs_dir)
-    return sorted([p.name for p in obs_path.iterdir() if p.is_dir()])
 
 
 def resolve_obs_field(
@@ -852,23 +835,90 @@ def get_monthly_data(
     )
 
 
-def merge_obs(primary: xr.DataArray, secondary: xr.DataArray) -> xr.DataArray:
-    """
-    Fill missing values in the primary observational field using values
-    from the secondary field.
-    """
-    if not isinstance(primary, xr.DataArray) or not isinstance(secondary, xr.DataArray):
-        raise TypeError("Inputs to merge_obs must be xarray.DataArray instances")
+def resolve_glob_files(path_pattern: str) -> List[Path]:
+    """Resolve an explicit path or glob into a sorted, non-empty file list."""
+    text = str(Path(path_pattern).expanduser())
+    if any(char in text for char in "*?["):
+        paths = sorted(Path(p) for p in glob.glob(text))
+    else:
+        candidate = Path(text)
+        paths = [candidate] if candidate.is_file() else []
+    if not paths:
+        raise FileNotFoundError(f"No observational files match {path_pattern!r}")
+    return paths
 
-    if "time" in primary.dims and "time" in secondary.dims:
-        if primary.sizes.get("time") != secondary.sizes.get("time"):
-            raise ValueError(
-                f"Cannot merge! Time sizes do not match. "
-                f"primary ({primary.name}) time length: {primary.sizes.get('time')}, "
-                f"secondary ({secondary.name}) time length: {secondary.sizes.get('time')}"
-            )
 
-    return primary.fillna(secondary)
+def get_monthly_data_from_pattern(
+    path_pattern: str,
+    field: str,
+    chunks: Optional[Dict[str, int]] = None,
+    preproc: Union[str, Callable] = "default",
+    start_year: Optional[str] = None,
+    end_year: Optional[str] = None,
+    harmonize_time: bool = True,
+    calendar: str = "noleap",
+    decode_times: bool = True,
+    base_year: Optional[int] = None,
+    verbose: bool = False,
+) -> xr.Dataset:
+    """
+    Load a preprocessed observational monthly time-series dataset from a set
+    of files matched by an explicit path or glob pattern.
+
+    Use this instead of :func:`get_monthly_data` for archives split across
+    multiple files (e.g. one file per year) that do not follow the
+    ``{field}_{start_yyyymm}_{end_yyyymm}.nc`` single-file-per-product
+    convention that :func:`find_obs_file` expects. Parameters mirror
+    :func:`get_monthly_data`, except ``path_pattern`` replaces
+    ``obs_dir``/``product``/``filename``, and ``field`` is the variable name
+    to select directly from the source files (no CMOR name resolution).
+    """
+    paths = resolve_glob_files(path_pattern)
+
+    if chunks is None:
+        chunks = {}
+
+    if verbose:
+        print(f"[OBS] Loading {len(paths)} file(s) matching: {path_pattern}")
+
+    if len(paths) == 1:
+        ds = xr.open_dataset(paths[0], chunks=chunks, decode_times=decode_times)
+    else:
+        ds = xr.open_mfdataset(
+            [str(p) for p in paths],
+            chunks=chunks,
+            decode_times=decode_times,
+            combine="by_coords",
+        )
+
+    if preproc == "default":
+        return preprocessor_monthly(
+            ds,
+            field=field,
+            start_year=start_year,
+            end_year=end_year,
+            harmonize_time=harmonize_time,
+            calendar=calendar,
+            decode_times=decode_times,
+            base_year=base_year,
+        )
+
+    if callable(preproc):
+        return preproc(
+            ds,
+            field=field,
+            start_year=start_year,
+            end_year=end_year,
+            harmonize_time=harmonize_time,
+            calendar=calendar,
+            decode_times=decode_times,
+            base_year=base_year,
+        )
+
+    raise TypeError(
+        "preproc must be 'default' or a callable with signature "
+        "preproc(ds, field=None, start_year=None, end_year=None, **kwargs)"
+    )
 
 
 def mon_to_seas_obs(
@@ -1056,55 +1106,3 @@ def obs_regional_weights(
     return weights.where(region, 0).fillna(0)
 
 
-def obs_regional_mean(
-    da: xr.DataArray,
-    lonlat,
-    lat_name: str = "lat",
-    lon_name: str = "lon",
-    area: xr.DataArray = None,
-    mask: xr.DataArray = None,
-) -> xr.DataArray:
-    """
-    Area-weighted regional mean for observational lat/lon data.
-
-    Parameters
-    ----------
-    da : xr.DataArray
-        Input DataArray on a rectilinear lat/lon grid.
-    lonlat : sequence of length 4
-        [lon_w, lon_e, lat_s, lat_n].
-    lat_name : str, optional
-        Latitude coordinate name, default 'lat'.
-    lon_name : str, optional
-        Longitude coordinate name, default 'lon'.
-    area : xr.DataArray, optional
-        True grid-cell area weights. If None, cos(lat) is used.
-    mask : xr.DataArray, optional
-        Additional boolean mask (True = keep).
-
-    Returns
-    -------
-    xr.DataArray
-        Weighted regional mean with spatial dimensions reduced.
-
-    Raises
-    ------
-    ValueError
-        If neither lat nor lon dimension is found in `da`.
-    """
-    reg_weights = obs_regional_weights(
-        da,
-        lonlat,
-        lat_name=lat_name,
-        lon_name=lon_name,
-        area=area,
-        mask=mask,
-    )
-
-    spatial_dims = [dim for dim in [lat_name, lon_name] if dim in da.dims]
-    if not spatial_dims:
-        raise ValueError(
-            f"DataArray does not contain spatial dimensions '{lat_name}' or '{lon_name}'."
-        )
-
-    return da.weighted(reg_weights).mean(dim=spatial_dims, skipna=True)

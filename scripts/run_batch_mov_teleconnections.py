@@ -51,6 +51,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from esp_lab.leadtime_plot_utils import seasonal_label
+from esp_lab import env_paths
 from esp_lab.utils import colormap_utils as mycolors
 from workflows.diagnostics import mov_teleconnections as mov_telecon
 
@@ -62,9 +63,9 @@ ALL_VARIABLES = [
     "TREFHT", "TS", "PRECT", "PSL", "SST", "H2OSNO", "H2OSOI",
 ]
 
-DEFAULT_DIAG_ROOT = "/global/cfs/cdirs/e3sm/S2S2D/s2d_diag"
-DEFAULT_OUTPUT_DIR = "/global/cfs/cdirs/e3sm/S2S2D/s2d_diag/teleconnections"
-DEFAULT_FIGURE_DIR = "/global/cfs/cdirs/e3sm/www/zhan391/esp-lab_diag/teleconnections"
+DEFAULT_DIAG_ROOT = str(env_paths.s2d_diag_root())
+DEFAULT_OUTPUT_DIR = str(env_paths.s2d_diag_root() / "multimodel" / "leadtime_telec")
+DEFAULT_FIGURE_DIR = str(env_paths.figure_root() / "teleconnections")
 
 
 def initialization_label(month: int) -> str:
@@ -436,10 +437,12 @@ def plot_fidelity_summary(
     legend_framealpha = 0.9
     legend_edgecolor = "0.8"
 
-    METHOD_STYLES = {
+    system_styles = {
         "E3SM-4DEnVarOcn": {"short_name": "4DEnVarOcn", "color": "tab:purple", "marker": "o"},
         "E3SM-FOSIRL": {"short_name": "FOSIRL", "color": "black", "marker": "s"},
         "E3SM-Reanalysis": {"short_name": "Reanalysis", "color": "tab:blue", "marker": "D"},
+        "BruteForce": {"short_name": "BruteForce", "color": "tab:green", "marker": "^"},
+        "E3SM-BruteForce": {"short_name": "BruteForce", "color": "tab:green", "marker": "^"},
     }
 
     summary_metrics = ["pattern_correlation", "centered_rmse", "amplitude_ratio", "sign_agreement_fraction"]
@@ -617,6 +620,8 @@ def plot_taylor_diagram(
         "E3SM-FOSIRL": {"short_name": "FOSIRL", "color": "black", "marker": "s"},
         "E3SM-Reanalysis": {"short_name": "Reanalysis", "color": "tab:blue", "marker": "D"},
         "E3SM-4DEnVarOcn": {"short_name": "4DEnVarOcn", "color": "tab:purple", "marker": "o"},
+        "BruteForce": {"short_name": "BruteForce", "color": "tab:green", "marker": "^"},
+        "E3SM-BruteForce": {"short_name": "BruteForce", "color": "tab:green", "marker": "^"},
     }
 
     figure_dpi = config["figures"].get("dpi", 300)
@@ -837,29 +842,13 @@ def plot_taylor_diagram(
     plt.close(fig)
 
 
-def process_pair(mode: str, var: str, args: argparse.Namespace) -> bool:
-    diag_root = Path(args.diag_root)
-    output_dir = Path(args.output_dir)
-    figure_dir = Path(args.figure_dir)
-
-    nc_file = output_dir / f"teleconnection_{mode}_{var}_verify1981_{args.year_end}.nc"
-    fig1 = figure_dir / f"teleconnection_{mode}_{var}_correlation_reference_comparison.png"
-    fig2 = figure_dir / f"teleconnection_{mode}_{var}_summary.png"
-    fig3 = figure_dir / f"teleconnection_{mode}_{var}_taylor_diagram.png"
-
-    all_exist = nc_file.exists() and fig1.exists() and fig2.exists() and fig3.exists()
-    if all_exist and not args.force:
-        print(f"[{mode} - {var}] All products exist. Skipping.")
-        return True
-
-    print(f"\n{'='*70}\nProcessing [{mode} - {var}] (nc: {nc_file.exists()}, fig1: {fig1.exists()}, fig2: {fig2.exists()}, fig3: {fig3.exists()})\n{'='*70}")
-    t0 = time.time()
-
-    config = {
+def _pair_config(mode: str, var: str, args: argparse.Namespace) -> dict[str, Any]:
+    """Teleconnection configuration for one (mode, variable) pair."""
+    return {
         "paths": {
-            "diag_root": str(diag_root),
-            "output_dir": str(output_dir),
-            "figure_dir": str(figure_dir),
+            "diag_root": str(args.diag_root),
+            "output_dir": str(args.output_dir),
+            "figure_dir": str(args.figure_dir),
         },
         "inputs": {
             "mode": "auto",
@@ -874,7 +863,7 @@ def process_pair(mode: str, var: str, args: argparse.Namespace) -> bool:
         "selection": {
             "upstream_mode": mode,
             "downstream_variable": var,
-            "systems": ["E3SM-FOSIRL", "E3SM-Reanalysis", "E3SM-4DEnVarOcn"],
+            "systems": args.selected_systems,
             "init_months": [5, 11],
             "leads": "all",
             "year_end": args.year_end,
@@ -910,6 +899,25 @@ def process_pair(mode: str, var: str, args: argparse.Namespace) -> bool:
             "show_significant_only": True,
         },
     }
+
+
+def process_pair(mode: str, var: str, args: argparse.Namespace) -> bool:
+    figure_dir = Path(args.figure_dir)
+
+    nc_file = mov_telecon.mov_teleconnection_cache_path(_pair_config(mode, var, args))
+    fig1 = figure_dir / f"teleconnection_{mode}_{var}_correlation_reference_comparison.png"
+    fig2 = figure_dir / f"teleconnection_{mode}_{var}_summary.png"
+    fig3 = figure_dir / f"teleconnection_{mode}_{var}_taylor_diagram.png"
+
+    all_exist = nc_file.exists() and fig1.exists() and fig2.exists() and fig3.exists()
+    if all_exist and not args.force:
+        print(f"[{mode} - {var}] All products exist. Skipping.")
+        return True
+
+    print(f"\n{'='*70}\nProcessing [{mode} - {var}] (nc: {nc_file.exists()}, fig1: {fig1.exists()}, fig2: {fig2.exists()}, fig3: {fig3.exists()})\n{'='*70}")
+    t0 = time.time()
+
+    config = _pair_config(mode, var, args)
 
     try:
         # Step 1: Ensure NetCDF dataset exists or compute it
@@ -968,6 +976,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run batch MOV teleconnections")
     parser.add_argument("--modes", nargs="+", default=ALL_MODES, help="Modes of variability")
     parser.add_argument("--variables", nargs="+", default=ALL_VARIABLES, help="Downstream variables")
+    parser.add_argument(
+        "--systems",
+        "--system",
+        dest="systems",
+        nargs="+",
+        default=["E3SM-FOSIRL", "E3SM-Reanalysis", "E3SM-4DEnVarOcn"],
+        help="Systems/experiments to process (e.g. BruteForce, 4DEnVarOcn, JRA55_FOSIRL, Reanalysis)",
+    )
     parser.add_argument("--diag-root", default=DEFAULT_DIAG_ROOT, help="Diagnostic root directory")
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="NetCDF output directory")
     parser.add_argument("--figure-dir", default=DEFAULT_FIGURE_DIR, help="Figure output directory")
@@ -975,6 +991,31 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=4, help="Worker count")
     parser.add_argument("--force", action="store_true", help="Force recomputation of existing files")
     args = parser.parse_args()
+
+    system_alias_map = {
+        "4DEnVarOcn": "E3SM-4DEnVarOcn",
+        "E3SM-4DEnVarOcn": "E3SM-4DEnVarOcn",
+        "JRA55_FOSIRL": "E3SM-FOSIRL",
+        "FOSIRL": "E3SM-FOSIRL",
+        "E3SM-FOSIRL": "E3SM-FOSIRL",
+        "Reanalysis": "E3SM-Reanalysis",
+        "BruteForce": "E3SM-Reanalysis",
+        "E3SM-BruteForce": "E3SM-Reanalysis",
+    }
+    args.selected_systems = [system_alias_map.get(s, s) for s in args.systems]
+
+    # If output_dir was left as default and a single experiment was requested, route to that experiment's dir
+    if args.output_dir == DEFAULT_OUTPUT_DIR and len(args.selected_systems) == 1:
+        single_sys = args.selected_systems[0]
+        sys_dir_map = {
+            "E3SM-4DEnVarOcn": "4DEnVarOcn",
+            "E3SM-FOSIRL": "JRA55_FOSIRL",
+            "E3SM-Reanalysis": "Reanalysis",
+            "E3SM-BruteForce": "Reanalysis",
+            "BruteForce": "Reanalysis",
+        }
+        exp_name = sys_dir_map.get(single_sys, single_sys)
+        args.output_dir = str(Path(args.diag_root) / exp_name / "leadtime_telec")
 
     # Create directories if they do not exist
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
@@ -996,7 +1037,7 @@ def main() -> None:
     skipped_count = 0
 
     for idx, (mode, var) in enumerate(pairs, start=1):
-        nc_file = Path(args.output_dir) / f"teleconnection_{mode}_{var}_verify1981_{args.year_end}.nc"
+        nc_file = mov_telecon.mov_teleconnection_cache_path(_pair_config(mode, var, args))
         fig1 = Path(args.figure_dir) / f"teleconnection_{mode}_{var}_correlation_reference_comparison.png"
         fig2 = Path(args.figure_dir) / f"teleconnection_{mode}_{var}_summary.png"
         fig3 = Path(args.figure_dir) / f"teleconnection_{mode}_{var}_taylor_diagram.png"

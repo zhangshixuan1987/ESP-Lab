@@ -226,3 +226,27 @@ def test_process_native_eli_case_end_to_end(tmp_path):
         assert ds["eli"].shape == (1, 3, 1)
         assert ds.attrs["frequency"] == "monthly"
         assert ds.attrs["source_grid"] == "native MPAS-Ocean"
+
+
+def test_process_native_eli_case_refuses_to_write_when_no_case_directories(tmp_path):
+    # A wrong case prefix or data directory finds no cases; the rebuild must fail
+    # instead of replacing a good cache with an all-missing file.
+    mesh_path = _create_mock_mesh_file(tmp_path / "mesh.nc", ncells=20)
+    (tmp_path / "simulations").mkdir()
+    outdir = tmp_path / "out" / "sst_index" / "timeseries"
+
+    with pytest.raises(RuntimeError, match="No case directories found"):
+        process_native_eli_case(
+            case_prefix="CASE_WRONG_PREFIX",
+            data_dir=tmp_path / "simulations",
+            outdir=outdir,
+            mesh_path=mesh_path,
+            init_months=[5],
+            year_start=1980,
+            year_end=1981,
+            nlead=3,
+            nens=1,
+            workers=1,
+            force=True,
+        )
+    assert not any(outdir.glob("*.nc")) if outdir.exists() else True

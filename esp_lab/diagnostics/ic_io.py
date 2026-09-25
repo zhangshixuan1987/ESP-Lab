@@ -218,32 +218,6 @@ def compute_sha256(path: Path, chunk_size: int = 1 << 20) -> str:
 # ===========================================================================
 
 
-def read_rpointer(path: Path) -> dict:
-    """Parse an rpointer file and return its content.
-
-    rpointer files typically contain one or two lines: the target filename and
-    optionally a date string.
-
-    Parameters
-    ----------
-    path:
-        Path to the rpointer file.
-
-    Returns
-    -------
-    Dict with keys ``"target"`` and ``"raw_lines"``.
-    """
-    path = Path(path)
-    if not path.is_file():
-        return {"target": "", "raw_lines": []}
-    try:
-        lines = path.read_text().strip().splitlines()
-        return {"target": lines[0].strip() if lines else "", "raw_lines": lines}
-    except OSError as exc:
-        warnings.warn(f"read_rpointer: cannot read {path}: {exc}", stacklevel=2)
-        return {"target": "", "raw_lines": []}
-
-
 # ===========================================================================
 # Section 4 — NetCDF I/O helpers
 # ===========================================================================
@@ -710,7 +684,6 @@ __all__ = [
     # Section 2
     "compute_sha256",
     # Section 3
-    "read_rpointer",
     # Section 4
     "open_restart_file",
     "read_nc_dims",

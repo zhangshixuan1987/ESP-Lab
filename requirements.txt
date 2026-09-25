@@ -6,7 +6,6 @@ cmocean
 dask
 dask-jobqueue
 distributed
-eofs
 matplotlib
 netcdf4
 numpy

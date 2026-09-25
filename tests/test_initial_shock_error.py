@@ -3,8 +3,8 @@ import pytest
 import xarray as xr
 
 from esp_lab.diagnostics.initial_shock_error import (
-    compute_initial_shock_error_index, compute_legacy_initial_shock_error_index,
-    plot_error_heatmap, plot_rmse_mae,
+    compute_initial_shock_error_index,
+    plot_error_heatmap,
 )
 
 
@@ -56,30 +56,6 @@ def test_monthly_shared_climatology_errors_and_seasonal_summaries():
     assert result.attrs["anomaly_baseline"].startswith("shared reference-observation")
 
 
-def test_ncl_independent_full_cohort_anomalies_remain_explicitly_legacy():
-    result = compute_legacy_initial_shock_error_index(indices())
-    np.testing.assert_allclose(result.model_climatology, 103.)
-    np.testing.assert_allclose(result.observation_climatology, 1.5)
-    np.testing.assert_allclose(result.error, [[-1.5, -.5], [.5, 1.5]])
-    np.testing.assert_allclose(result.rmse, np.sqrt(1.25))
-    np.testing.assert_allclose(result.mae, 1.)
-    np.testing.assert_allclose(result.normalized_rmse, np.sqrt(1.25) / np.sqrt(2.))
-    np.testing.assert_allclose(result.normalized_mae, 1. / np.sqrt(2.))
-    assert (result.paired_sample_count == 2).all()
-    assert result.attrs["diagnostic_version"] == "initial_shock_rmse_mae_v2"
-
-
-def test_separate_constant_offsets_do_not_change_metrics():
-    source = indices()
-    shifted = source.copy()
-    shifted["model_index"] = source.model_index + 700
-    shifted["observation_index"] = source.observation_index - 20
-    xr.testing.assert_allclose(
-        compute_legacy_initial_shock_error_index(source)[["rmse", "mae"]],
-        compute_legacy_initial_shock_error_index(shifted)[["rmse", "mae"]],
-    )
-
-
 def test_pairing_minimum_and_validation():
     source = monthly_indices()
     source["monthly_standardized_error"].loc[dict(Y=1980, lead_month=1)] = np.nan
@@ -89,14 +65,6 @@ def test_pairing_minimum_and_validation():
     assert np.isfinite(relaxed.normalized_rmse.sel(Y=1980))
     with pytest.raises(ValueError, match="min_samples"):
         compute_initial_shock_error_index(source, min_samples=25)
-
-
-def test_plot_has_two_metric_panels():
-    result = compute_initial_shock_error_index(monthly_indices()).expand_dims(case=["case"])
-    fig = plot_rmse_mae(result)
-    assert len(fig.axes) == 4  # two panels and two colorbars
-    with pytest.raises(ValueError, match="six increasing"):
-        plot_rmse_mae(result, rmse_ranges=(.2, .1), mae_ranges=(.1,) * 6)
 
 
 def test_normalized_error_heatmap_accepts_explicit_levels():

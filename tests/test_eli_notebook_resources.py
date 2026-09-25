@@ -6,9 +6,7 @@ REPO_ROOT = Path(__file__).parents[1]
 
 
 def _source(name):
-    matches = list((REPO_ROOT / "jupyter").rglob(name))
-    target = matches[0] if matches else (REPO_ROOT / "jupyter" / name)
-    notebook = json.loads(target.read_text())
+    notebook = json.loads((REPO_ROOT / "jupyter" / "s2d_skill" / name).read_text())
     return "\n".join("".join(cell.get("source", [])) for cell in notebook["cells"])
 
 

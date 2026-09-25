@@ -36,12 +36,13 @@ This page provides an auto-generated API reference for **ESP-Lab**.
     :show-inheritance:
 ```
 
-### Legacy SMYLE Data Access
+### Legacy Data Access
 ```{eval-rst}
-.. automodule:: esp_lab.data_access_smyle
+.. automodule:: esp_lab.data_access
     :members:
     :undoc-members:
     :show-inheritance:
+    :no-index:
 ```
 
 ## Diagnostics

@@ -863,9 +863,9 @@ def benchmark_filename(
     Returns
     -------
     str
-        Filename like 'BSMYLE05_TREFHT_N20_M24_seas.nc'.
+        Filename like 'CESM-SMYLE05_TREFHT_N20_M24_seas.nc' (prefix = source folder name).
     """
-    return f"BSMYLE{init_month:02d}_{field}_N{nens:02d}_M{nlead:02d}_{freq}.nc"
+    return f"CESM-SMYLE_init{init_month:02d}_{field}_N{nens:02d}_M{nlead:02d}_{freq}.nc"
 
 
 def benchmark_path(

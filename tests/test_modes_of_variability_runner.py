@@ -250,7 +250,9 @@ def test_nmme_products_use_canonical_uppercase_directory(tmp_path):
     expected_root = tmp_path / "NMME" / "modes_variability"
     assert field_path.parent == expected_root / "fields"
     assert index_path.parent == expected_root / "modes" / "pdo" / "indices"
-    assert field_path.name.startswith("nmme_init02_")
+    # File prefix matches the source folder name.
+    assert field_path.name.startswith("NMME_init02_")
+    assert index_path.name == "NMME_init02_pdo.nc"
 
 
 def test_nmme_fixed_fields_live_under_canonical_nmme_directory():

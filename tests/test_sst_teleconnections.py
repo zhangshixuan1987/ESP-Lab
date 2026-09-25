@@ -47,12 +47,12 @@ def test_upstream_eli_paths_support_regridded_and_native_caches(tmp_path):
     )
 
     assert regridded == (
-        tmp_path / "4DEnVarOcn/sst_index/timeseries/E3SMLE05_ELI_N10_M24_seas.nc"
+        tmp_path / "4DEnVarOcn/sst_index/timeseries/4DEnVarOcn_init05_ELI_y1980-2011_N10_M24_seas.nc"
     )
     assert native == (
-        tmp_path / "4DEnVarOcn/sst_index/timeseries/E3SMLE11_ELI_native_N10_M24_seas.nc"
+        tmp_path / "4DEnVarOcn/sst_index/timeseries/4DEnVarOcn_init11_ELI_native_y1980-2011_N10_M24_seas.nc"
     )
-    assert observed == tmp_path / "HadISST2/sst_index/timeseries/HadISST2_sst_ELI_seas.nc"
+    assert observed == tmp_path / "observations/sst_index/timeseries/HadISST2_sst_ELI_seas.nc"
     assert native_observed == observed
     assert "ELI" in telecon.SUPPORTED_UPSTREAM_INDICES
 
@@ -488,7 +488,11 @@ def test_teleconnection_cache_path_matches_provenance(tmp_path):
     }
 
     assert telecon.teleconnection_cache_path(config, inventory) == (
-        tmp_path / "cache" / "teleconnection_Nino34_TREFHT_verify1981_2011.nc"
+        tmp_path / "cache" / "teleconnection_Nino34_TREFHT_verify1981_2011_1x1deg.nc"
+    )
+    config["regrid"] = {"target_dlat": 5.0, "target_dlon": 5.0, "method": "conservative", "periodic": True}
+    assert telecon.teleconnection_cache_path(config, inventory).name == (
+        "teleconnection_Nino34_TREFHT_verify1981_2011_5x5deg.nc"
     )
 
 
@@ -537,7 +541,7 @@ def test_standardize_spatial_grid_and_assemble():
 def test_ensure_teleconnection_dataset_assembles_single_system_slices(tmp_path):
     # Setup mock single-system slices in experiment directories
     diag_root = tmp_path / "s2d_diag"
-    filename = "teleconnection_Nino34_TREFHT_verify1981_2011.nc"
+    filename = "teleconnection_Nino34_TREFHT_verify1981_2011_1x1deg.nc"
     systems = ["E3SM-FOSIRL", "E3SM-Reanalysis"]
     dirs = ["JRA55_FOSIRL", "Reanalysis"]
 
@@ -561,7 +565,7 @@ def test_ensure_teleconnection_dataset_assembles_single_system_slices(tmp_path):
             },
             attrs={"schema": "teleconnection_metrics_v1", "upstream_index": "Nino3.4"},
         )
-        ds.to_netcdf(sys_dir / filename)
+        ds.to_netcdf(sys_dir / f"{dir_name}_{filename}")
 
     config = {
         "paths": {"diag_root": str(diag_root)},
@@ -585,6 +589,7 @@ def test_ensure_teleconnection_dataset_assembles_single_system_slices(tmp_path):
     metrics_ds, out_file, status = telecon.ensure_teleconnection_dataset(config, inventory=inv)
 
     assert status == "loaded"
+    assert out_file == diag_root / "JRA55_FOSIRL" / "leadtime_telec" / f"JRA55_FOSIRL_{filename}"
     assert set(metrics_ds.system.values) == {"E3SM-FOSIRL", "E3SM-Reanalysis"}
     assert metrics_ds["model_correlation"].shape == (1, 2, 1, 1, 10, 20)
 

@@ -10,8 +10,8 @@ For every (field, init_month) combination this script:
   5. Optionally runs sanity checks and saves diagnostic figures (--verify).
 
 Output files follow the same naming convention as the E3SMLE benchmark files:
-    BSMYLE{mm:02d}_{field}_N{nens:02d}_M{nlead:02d}_mon.nc
-    BSMYLE{mm:02d}_{field}_N{nens:02d}_M{nlead:02d}_seas.nc
+    CESM-SMYLE_init{mm:02d}_{field}_N{nens:02d}_M{nlead:02d}_mon.nc
+    CESM-SMYLE_init{mm:02d}_{field}_N{nens:02d}_M{nlead:02d}_seas.nc
 
 The output is on the NATIVE f09_g17 grid (0.9° × 1.25°).
 Regridding to an analysis grid is left to downstream notebooks/scripts so that
@@ -73,6 +73,7 @@ import xarray as xr
 
 # esp_lab imports
 import esp_lab.data_access_cesm_smyle as smyle_access
+from esp_lab import env_paths
 from esp_lab.data_access_cesm_smyle import benchmark_filename as _benchmark_filename
 from esp_lab.utils import calendar_utils as cal
 
@@ -84,8 +85,8 @@ FIELDS_ALL = ["TREFHT", "TS", "PRECT", "PSL"]
 INIT_MONTHS_ALL = [2, 5, 8, 11]
 
 DATA_DIR_DEFAULT = "/global/cfs/cdirs/e3sm/S2S2D/CESM-SMYLE"
-OUTDIR_DEFAULT = "/global/cfs/cdirs/e3sm/S2S2D/s2d_diag/CESM-SMYLE"
-FIGDIR_DEFAULT = "/global/cfs/cdirs/e3sm/www/zhan391/esp-lab_diag"
+OUTDIR_DEFAULT = str(env_paths.s2d_diag_root() / "CESM-SMYLE")
+FIGDIR_DEFAULT = str(env_paths.figure_root())
 
 YEAR_START_DEFAULT = 1980
 YEAR_END_DEFAULT = 2018

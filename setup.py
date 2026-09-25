@@ -26,12 +26,13 @@ CLASSIFIERS = [
     'Programming Language :: Python :: 3.11',
     'Programming Language :: Python :: 3.12',
     'Programming Language :: Python :: 3.13',
+    'Programming Language :: Python :: 3.14',
     'Topic :: Scientific/Engineering',
 ]
 
 setup(
     name='esp-lab',
-    version='1.3.0',
+    version='1.4.0',
     description='Diagnostic and analysis utilities for E3SM S2D ensemble predictions',
     long_description=long_description,
     long_description_content_type='text/markdown',

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-03_compute_ic_statistics.py
+compute_ic_statistics.py
 ============================
 Step 3: Compute variable-level IC difference statistics for every file
         flagged DIFFERENT in the Step 1 manifest.
@@ -16,10 +16,10 @@ What this script does
 
 Usage
 -----
-    python 03_compute_ic_statistics.py                    # pilot only
-    python 03_compute_ic_statistics.py --full-campaign
-    python 03_compute_ic_statistics.py --date 1980-05-01-00000
-    python 03_compute_ic_statistics.py --components ocn lnd
+    python -m workflows.diagnostics.compute_ic_statistics                    # pilot only
+    python -m workflows.diagnostics.compute_ic_statistics --full-campaign
+    python -m workflows.diagnostics.compute_ic_statistics --date 1980-05-01-00000
+    python -m workflows.diagnostics.compute_ic_statistics --components ocn lnd
 
 Outputs
 -------
@@ -43,7 +43,7 @@ import pandas as pd
 import xarray as xr
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_REPO_ROOT = _SCRIPT_DIR.parent.parent.parent
+_REPO_ROOT = _SCRIPT_DIR.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
@@ -57,7 +57,7 @@ from esp_lab.diagnostics.ic_io import (
     open_restart_file,
 )
 
-from .config import build_ic_config, load_config
+from .ic_config import build_ic_config, load_config
 
 
 def _grid_integrity(da: xr.DataArray) -> tuple[str, str]:
@@ -415,7 +415,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="IC Analysis Step 3: Compute variable-level IC statistics."
     )
-    parser.add_argument("--config", default=str(_SCRIPT_DIR / "config.yaml"))
+    parser.add_argument("--config", default=str(_SCRIPT_DIR / "ic_config.yaml"))
     parser.add_argument("--full-campaign", action="store_true")
     parser.add_argument("--date", default=None)
     parser.add_argument(

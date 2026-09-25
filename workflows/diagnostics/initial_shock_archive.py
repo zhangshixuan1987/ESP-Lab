@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from contextlib import ExitStack
 import hashlib
-import inspect
 import json
 from pathlib import Path
 
@@ -13,23 +12,28 @@ import xarray as xr
 from esp_lab import data_access_e3sm as e3sm_access
 from esp_lab import data_access_cesm_smyle as smyle_access
 from esp_lab import data_access_obs as obs_access
-from esp_lab.diagnostics import initial_shock
 from esp_lab.diagnostics.initial_shock import VERSION, align_observation_months, compute_initial_shock_index
 from esp_lab.paths import diagnostic_dir
+from esp_lab.utils.code_identity import code_digest
 from esp_lab.utils.netcdf_utils import atomic_to_netcdf, load_netcdf
 
 ARCHIVE_VERSION = 'initial_shock_archive_v4'
 
 
-def _scientific_code_digest():
-    """Hash numerical diagnostic code without coupling caches to plot styling."""
-    functions = (
-        initial_shock.align_observation_months,
-        initial_shock._weights,
-        initial_shock.compute_initial_shock_index,
-    )
-    source = '\n'.join(inspect.getsource(function) for function in functions)
-    return hashlib.sha256(source.encode()).hexdigest()
+def archive_code_identity():
+    """Fingerprint the code that computes these caches and everything it calls.
+
+    Loaders, numerical shock functions and regridding are covered function by
+    function, not as whole files: edits elsewhere in the data-access modules or
+    to plot styling must not force an expensive archive rebuild.
+    """
+    return {'archive_compute': code_digest([
+        compute_archive_plan,
+        e3sm_access.build_init_tags, e3sm_access.nested_file_list_by_init,
+        e3sm_access.get_monthly_data,
+        smyle_access.build_init_tags, smyle_access.benchmark_path, smyle_access.load_benchmark,
+        obs_access.find_obs_file, obs_access.get_monthly_data,
+    ])}
 
 
 def _inventory(paths):
@@ -145,12 +149,7 @@ def plan_archive_run(settings, cases, variable):
                     raise ValueError(f'CESM-SMYLE {month:02d}: incomplete years/members/leads; missing={missing}')
             tasks.append(dict(case='CESM-SMYLE', source='CESM-SMYLE', month=month,
                               kind='smyle', loader=loader, model_paths=[str(path)]))
-    # Include adapter and workflow code so scientific preparation changes invalidate
-    # caches. Hash only numerical functions from initial_shock: plot styling must not
-    # force expensive archive data to be recomputed.
-    code_paths = [__file__, e3sm_access.__file__, smyle_access.__file__, obs_access.__file__]
-    code_identity = {str(p): hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in code_paths}
-    code_identity[f'{initial_shock.__file__}::scientific-functions'] = _scientific_code_digest()
+    code_identity = archive_code_identity()
     for task in tasks:
         task['years'] = years
         task['obs_path'] = obs_path
@@ -163,7 +162,7 @@ def plan_archive_run(settings, cases, variable):
         task['digest'] = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         task['path'] = str(diagnostic_dir(task['source'], 'initial_shock', 'metrics', 'atm',
                                         variable['field'], root=settings['paths']['s2d_diag_root']) /
-                           f"init{task['month']:02d}_{years[0]}_{years[-1]}.nc")
+                           f"{task['source']}_init{task['month']:02d}_{years[0]}_{years[-1]}.nc")
         task['cached'] = _cache_valid(Path(task['path']), task['digest'])
         task['rebuild'] = force_compute or mode == 'rebuild' or not task['cached']
     if mode == 'require' and any(t['rebuild'] for t in tasks):

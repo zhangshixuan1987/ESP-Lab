@@ -21,7 +21,7 @@ def diagnostic_path(diag_root, case_key, case_prefix, parset, year_start, year_e
         Path(diag_root)
         / case_key
         / "tc_track"
-        / f"tc_lead_track_density_{case_prefix}_{parset}_{year_start}_{year_end}.nc"
+        / f"{case_key}_tc_lead_track_density_{case_prefix}_{parset}_{year_start}_{year_end}.nc"
     )
 
 

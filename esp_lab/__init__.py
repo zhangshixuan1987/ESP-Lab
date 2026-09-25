@@ -34,7 +34,6 @@ from .data_access_e3sm import get_monthly_data as get_monthly_data_e3sm
 from .data_access_e3sm import preprocessor as preprocessor_e3sm
 from .data_access_cesm_smyle import get_monthly_data as get_monthly_data_cesm_smyle
 from .data_access_cesm_smyle import preprocessor as preprocessor_cesm_smyle
-from .stats import leadtime_skill_seas_resamp
 
 __all__ = [
     "data_access_smyle",
@@ -53,7 +52,6 @@ __all__ = [
     "preprocessor_e3sm",
     "get_monthly_data_cesm_smyle",
     "preprocessor_cesm_smyle",
-    "leadtime_skill_seas_resamp",
 ]
 
 try:

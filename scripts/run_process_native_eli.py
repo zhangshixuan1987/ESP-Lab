@@ -12,6 +12,7 @@ from pathlib import Path
 # Add repo root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from esp_lab import env_paths
 from esp_lab.diagnostics.native_eli import (
     DEFAULT_MPAS_MESH_FILE,
     DEFAULT_RAW_SIMULATION_DIR,
@@ -20,7 +21,7 @@ from esp_lab.diagnostics.native_eli import (
 
 LOG = logging.getLogger(__name__)
 
-DEFAULT_S2D_DIAG_ROOT = Path("/global/cfs/cdirs/e3sm/S2S2D/s2d_diag")
+DEFAULT_S2D_DIAG_ROOT = env_paths.s2d_diag_root()
 
 KNOWN_CASES: dict[str, dict[str, str]] = {
     "JRA55_FOSIRL": {
@@ -32,7 +33,7 @@ KNOWN_CASES: dict[str, dict[str, str]] = {
     "Reanalysis": {
         "display_name": "E3SM-Reanalysis",
         "data_dir": "/global/cfs/cdirs/e3sm/S2S2D/simulation",
-        "case_prefix": "WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_Reanalysis",
+        "case_prefix": "WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_BruteForce",
         "cache_tag": "Reanalysis",
     },
     "4DEnVarOcn": {

@@ -284,35 +284,6 @@ def compute_track_density(
     raise ValueError(f"Unknown track-density method: {selected_method!r}")
 
 
-def make_track_id_from_2d_or_3d_shape(shape, year_offset: int = 0, ensemble_offset: int = 0):
-    """
-    Create unique track IDs from 2D or 3D trajectory-array shapes.
-
-    The last dimension is assumed to be time/step.
-    """
-
-    if len(shape) == 2:
-        ntrack, _ = shape
-        track = np.arange(ntrack)[:, None]
-        return np.broadcast_to(track, shape)
-
-    if len(shape) == 3:
-        nouter, ntrack, _ = shape
-        outer = np.arange(nouter)[:, None, None]
-        track = np.arange(ntrack)[None, :, None]
-
-        track_id = (
-            ensemble_offset * 10_000_000
-            + year_offset * 1_000_000
-            + outer * 100_000
-            + track
-        )
-
-        return np.broadcast_to(track_id, shape)
-
-    raise ValueError(f"Unsupported shape {shape}; expected 2D or 3D trajectory arrays")
-
-
 def read_stitch_nodes_tracks(track_files: list[str | Path], workflows_dir=None) -> pd.DataFrame:
     """
     Parse a list of TempestExtremes StitchNodes track files and combine them into a single DataFrame.

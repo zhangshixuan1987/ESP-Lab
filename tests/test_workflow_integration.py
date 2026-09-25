@@ -277,24 +277,24 @@ def test_regional_product_path_follows_model_first_layout(tmp_path):
 
     # Canonical experiment-first layout under general root
     canonical = regional_product_path("TREFHT", 5, "JRA55_FOSIRL", output_root=tmp_path)
-    assert canonical == tmp_path / "JRA55_FOSIRL" / "leadtime_drift" / "regional" / "JRA55_FOSIRL_TREFHT_05_regional.nc"
+    assert canonical == tmp_path / "JRA55_FOSIRL" / "leadtime_drift" / "regional" / "JRA55_FOSIRL_init05_TREFHT_regional.nc"
 
     # Direct regional directory
     direct_reg = regional_product_path("TREFHT", 5, "JRA55_FOSIRL", output_root=tmp_path / "regional")
-    assert direct_reg == tmp_path / "regional" / "JRA55_FOSIRL_TREFHT_05_regional.nc"
+    assert direct_reg == tmp_path / "regional" / "JRA55_FOSIRL_init05_TREFHT_regional.nc"
 
     # Direct drift directory
     direct_drift = regional_product_path("TREFHT", 5, "JRA55_FOSIRL", output_root=tmp_path / "leadtime_drift")
-    assert direct_drift == tmp_path / "leadtime_drift" / "JRA55_FOSIRL_TREFHT_05_regional.nc"
+    assert direct_drift == tmp_path / "leadtime_drift" / "JRA55_FOSIRL_init05_TREFHT_regional.nc"
 
     # Comparisons path
     comp_path = comparison_product_path("FOSIRL_minus_Reanalysis", "TREFHT", 5, kind="regional", output_root=tmp_path)
-    assert comp_path == tmp_path / "multimodel" / "leadtime_drift" / "comparisons" / "regional" / "FOSIRL_minus_Reanalysis_TREFHT_05_regional.nc"
+    assert comp_path == tmp_path / "multimodel" / "leadtime_drift" / "comparisons" / "regional" / "FOSIRL_minus_Reanalysis_init05_TREFHT_regional.nc"
 
     # Legacy two_reference fallback if file exists
     legacy_dir = tmp_path / "multimodel" / "leadtime_drift" / "two_reference"
     legacy_dir.mkdir(parents=True, exist_ok=True)
-    legacy_file = legacy_dir / "Reanalysis_TREFHT_11_regional.nc"
+    legacy_file = legacy_dir / "Reanalysis_init11_TREFHT_regional.nc"
     legacy_file.touch()
     resolved_legacy = regional_product_path("TREFHT", 11, "Reanalysis", output_root=tmp_path)
     assert resolved_legacy == legacy_file

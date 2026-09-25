@@ -11,7 +11,6 @@ renamed to ``leadtime_prepared_cache.py`` (consistent with ``leadtime_skill_cach
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -22,6 +21,7 @@ from typing import Iterable, Mapping
 import xarray as xr
 
 from esp_lab.paths import leadtime_acc_dir
+from esp_lab.utils.filename_utils import source_init_prefix
 
 
 _PREPARED_CACHE_SCHEMA_VERSION = "2"
@@ -58,9 +58,20 @@ def _years_value(years: Iterable[int]) -> str:
     return json.dumps(values, separators=(",", ":"))
 
 
-def _provenance_digest(attrs: Mapping[str, str | int]) -> str:
-    payload = json.dumps(dict(sorted(attrs.items())), separators=(",", ":"), sort_keys=True)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+def grid_token(target_grid: str) -> str:
+    """Short filename token for a target-grid identity, e.g. ``5x5deg``."""
+    match = re.match(r"latlon_([0-9.]+)x([0-9.]+)", str(target_grid)) or re.match(
+        r"([0-9.]+)x([0-9.]+)deg", str(target_grid)
+    )
+    if match:
+        return f"{float(match.group(1)):g}x{float(match.group(2)):g}deg"
+    return _token(target_grid)
+
+
+def units_token(unit_conversion_version: str) -> str:
+    """Short filename token for a unit-conversion version, e.g. ``skill_v1``."""
+    token = str(unit_conversion_version).removeprefix("leadtime_").replace("_units", "")
+    return _token(token)
 
 
 def expected_prepared_skill_attrs(
@@ -121,30 +132,26 @@ def prepared_skill_path(
     source_data_identity: str,
     root: str | Path,
 ) -> Path:
-    """Return a readable, provenance-hashed prepared-cache path."""
+    """Return a fixed, readable prepared-cache path.
+
+    The name carries only settings that legitimately produce different
+    products side by side (years, climatology, members, leads, target grid,
+    unit-conversion version). Everything else, such as the source data
+    identity, case prefix, or regridding method, is recorded in the file's
+    attributes: a stale cache keeps its name and is rebuilt in place when
+    those attributes no longer match (or when a rebuild is forced).
+    """
     years = [int(year) for year in requested_years]
-    attrs = expected_prepared_skill_attrs(
-        source=source,
-        source_data_identity=source_data_identity,
-        case_prefix=case_prefix,
-        component=component,
-        variable=variable,
-        init_month=init_month,
-        climatology_years=climatology_years,
-        requested_years=years,
-        target_grid=target_grid,
-        regridding_method=regridding_method,
-        ensemble_member_count=ensemble_member_count,
-        lead_count=lead_count,
-        unit_conversion_version=unit_conversion_version,
-    )
+    if not years:
+        raise ValueError("requested_years must not be empty")
     climy0, climy1 = climatology_years
-    source_token = _token(source)
+    # Keep hyphens so the prefix matches the source folder (e.g. CESM-SMYLE).
+    source_token = re.sub(r"[^A-Za-z0-9-]+", "_", str(source)).strip("_")
     filename = (
-        f"{source_token}_{init_month:02d}_{variable}_seasonal_anomaly_"
+        f"{source_init_prefix(source_token, init_month)}_{variable}_seasonal_anomaly_"
         f"y{years[0]}-{years[-1]}_ny{len(years)}_clim_{climy0}_{climy1}_"
         f"m{ensemble_member_count}_l{lead_count}_"
-        f"{_provenance_digest(attrs)}.nc"
+        f"{grid_token(target_grid)}_{units_token(unit_conversion_version)}.nc"
     )
     return leadtime_acc_dir(
         source, "prepared_skill", component, variable, filename, root=root

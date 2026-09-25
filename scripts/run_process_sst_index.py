@@ -29,11 +29,13 @@ import dask
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from esp_lab import data_access_e3sm as data_access
+from esp_lab import env_paths
 from esp_lab import data_access_obs as obs_access
 from esp_lab import data_access_cesm_smyle as smyle_access
 from esp_lab import stats
 from esp_lab.utils import spatial_utils as spatial
 from esp_lab.utils import calendar_utils as cal
+from esp_lab.utils.filename_utils import sst_index_filename
 from esp_lab.utils.sst_utils import SST_PREPROCESSING_VERSION, prepare_sst
 from esp_lab.diagnostics import (
     DEFAULT_CLIMATOLOGY_END_YEAR,
@@ -61,10 +63,10 @@ from esp_lab.diagnostics.native_eli import (
 
 LOG = logging.getLogger(__name__)
 SST_INDEX_OUTPUT_VERSION = 2
-S2D_DIAG_ROOT = Path("/global/cfs/cdirs/e3sm/S2S2D/s2d_diag")
+S2D_DIAG_ROOT = env_paths.s2d_diag_root()
 E3SMLE_DIAG_DIR = S2D_DIAG_ROOT
 CESM_SMYLE_DIAG_DIR = S2D_DIAG_ROOT / "CESM-SMYLE"
-HADISST2_DIAG_DIR = S2D_DIAG_ROOT / "HadISST2"
+OBS_DIAG_DIR = S2D_DIAG_ROOT / "observations"
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
@@ -125,7 +127,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--obs-outdir",
-        default=str(HADISST2_DIAG_DIR / "sst_index" / "timeseries"),
+        default=str(OBS_DIAG_DIR / "sst_index" / "timeseries"),
         help="Output directory for HadISST2 SST index files.",
     )
     p.add_argument(
@@ -336,6 +338,8 @@ def process_e3sm(args: argparse.Namespace) -> None:
     if args.e3sm_cache_tag:
         case_outdir = case_outdir / args.e3sm_cache_tag
     outdir = case_outdir / "sst_index" / "timeseries"
+    # Files start with the case folder name (cache tag).
+    file_prefix = args.e3sm_cache_tag or "E3SM"
     fixed_dir = case_outdir / "fixed"
     fixed_dir.mkdir(parents=True, exist_ok=True)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -451,7 +455,7 @@ def process_e3sm(args: argparse.Namespace) -> None:
             if r == "ELI":
                 if getattr(args, "eli_grid", "regridded") not in {"regridded", "both"}:
                     continue
-                outfile_mon = outdir / f"E3SMLE{m:02d}_ELI_N{args.e3sm_nens:02d}_M{args.nlead:02d}.nc"
+                outfile_mon = outdir / sst_index_filename(file_prefix, m, (args.year_start, args.year_end), args.e3sm_nens, args.nlead)
                 if args.force or not _output_is_current(outfile_mon, args):
                     ds_out_mon = all_mon[r].to_dataset()
                     ds_out_mon["time"] = time_mon
@@ -465,7 +469,7 @@ def process_e3sm(args: argparse.Namespace) -> None:
                     _safe_to_netcdf(ds_out_mon, outfile_mon, encoding={"eli": {"zlib": True, "complevel": 1, "dtype": "float32"}}, sst_land_mask=args.sst_land_mask)
                     LOG.info(f"Saved E3SM monthly ELI: {outfile_mon}")
 
-                outfile_seas = outdir / f"E3SMLE{m:02d}_ELI_N{args.e3sm_nens:02d}_M{args.nlead:02d}_seas.nc"
+                outfile_seas = outdir / sst_index_filename(file_prefix, m, (args.year_start, args.year_end), args.e3sm_nens, args.nlead, seasonal=True)
                 if args.force or not _output_is_current(outfile_seas, args):
                     ds_out_seas = all_seas[r].to_dataset()
                     ds_out_seas["time"] = time_seas
@@ -480,7 +484,7 @@ def process_e3sm(args: argparse.Namespace) -> None:
                     LOG.info(f"Saved E3SM seasonal ELI: {outfile_seas}")
                 continue
 
-            outfile_mon = outdir / f"E3SMLE{m:02d}_{source_field}_N{args.e3sm_nens:02d}_M{args.nlead:02d}_{r}SST_mon.nc"
+            outfile_mon = outdir / sst_index_filename(file_prefix, m, (args.year_start, args.year_end), args.e3sm_nens, args.nlead, index=r, field=source_field)
             if args.force or not _output_is_current(outfile_mon, args):
                 ds_out_mon = all_mon[r].rename("sst").to_dataset()
                 ds_out_mon["time"] = time_mon
@@ -501,7 +505,7 @@ def process_e3sm(args: argparse.Namespace) -> None:
                 _safe_to_netcdf(ds_out_mon, outfile_mon, encoding=index_encoding, sst_land_mask=args.sst_land_mask)
                 LOG.info(f"Saved E3SM monthly index for {r}: {outfile_mon}")
 
-            outfile_seas = outdir / f"E3SMLE{m:02d}_{source_field}_N{args.e3sm_nens:02d}_M{args.nlead:02d}_{r}SST_seas.nc"
+            outfile_seas = outdir / sst_index_filename(file_prefix, m, (args.year_start, args.year_end), args.e3sm_nens, args.nlead, index=r, field=source_field, seasonal=True)
             if args.force or not _output_is_current(outfile_seas, args):
                 ds_out_seas = all_seas[r].rename("sst").to_dataset()
                 ds_out_seas["time"] = time_seas
@@ -552,7 +556,7 @@ def process_e3sm(args: argparse.Namespace) -> None:
 def process_obs(args: argparse.Namespace) -> None:
     LOG.info("Processing Observations (HadISST2) regional SST Indices...")
     outdir = Path(args.obs_outdir)
-    fixed_dir = HADISST2_DIAG_DIR / "fixed"
+    fixed_dir = OBS_DIAG_DIR / "fixed"
     fixed_dir.mkdir(parents=True, exist_ok=True)
 
     obs_dir = "/global/cfs/cdirs/e3sm/e3sm_diags/obs_for_e3sm_diags/time-series"
@@ -883,7 +887,7 @@ def process_smyle(args: argparse.Namespace) -> None:
 
         for r in args.regions:
             if r == "ELI":
-                outfile_mon = smyle_outdir / f"BSMYLE{m:02d}_ELI_N{args.smyle_nens:02d}_M{args.nlead:02d}.nc"
+                outfile_mon = smyle_outdir / sst_index_filename("CESM-SMYLE", m, (args.year_start, args.year_end), args.smyle_nens, args.nlead)
                 if args.force or not _output_is_current(outfile_mon, args):
                     ds_idx_mon = all_mon[r].to_dataset()
                     ds_idx_mon["time"] = time_mon
@@ -891,7 +895,7 @@ def process_smyle(args: argparse.Namespace) -> None:
                     _safe_to_netcdf(ds_idx_mon, outfile_mon, encoding={"eli": {"zlib": True, "complevel": 1, "dtype": "float32"}}, sst_land_mask=args.sst_land_mask)
                     LOG.info(f"Saved CESM-SMYLE monthly ELI: {outfile_mon}")
 
-                outfile_seas = smyle_outdir / f"BSMYLE{m:02d}_ELI_N{args.smyle_nens:02d}_M{args.nlead:02d}_seas.nc"
+                outfile_seas = smyle_outdir / sst_index_filename("CESM-SMYLE", m, (args.year_start, args.year_end), args.smyle_nens, args.nlead, seasonal=True)
                 if args.force or not _output_is_current(outfile_seas, args):
                     ds_idx = all_seas[r].to_dataset()
                     ds_idx["time"] = time_seas
@@ -900,7 +904,7 @@ def process_smyle(args: argparse.Namespace) -> None:
                     LOG.info(f"Saved CESM-SMYLE seasonal ELI: {outfile_seas}")
                 continue
 
-            outfile_seas = smyle_outdir / f"BSMYLE{m:02d}_TS_N{args.smyle_nens:02d}_M{args.nlead:02d}_{r}SST_seas.nc"
+            outfile_seas = smyle_outdir / sst_index_filename("CESM-SMYLE", m, (args.year_start, args.year_end), args.smyle_nens, args.nlead, index=r, field="TS", seasonal=True)
             if args.force or not _output_is_current(outfile_seas, args):
                 ds_idx = all_seas[r].rename("sst").to_dataset()
                 ds_idx["time"] = time_seas
@@ -915,7 +919,7 @@ def process_smyle(args: argparse.Namespace) -> None:
                 _safe_to_netcdf(ds_idx, outfile_seas, encoding=smyle_index_encoding, sst_land_mask=args.sst_land_mask)
                 LOG.info(f"Saved CESM-SMYLE seasonal index for {r}: {outfile_seas}")
 
-            outfile_mon = smyle_outdir / f"BSMYLE{m:02d}_TS_N{args.smyle_nens:02d}_M{args.nlead:02d}_{r}SST_mon.nc"
+            outfile_mon = smyle_outdir / sst_index_filename("CESM-SMYLE", m, (args.year_start, args.year_end), args.smyle_nens, args.nlead, index=r, field="TS")
             if args.force or not _output_is_current(outfile_mon, args):
                 ds_idx_mon = all_mon[r].rename("sst").to_dataset()
                 ds_idx_mon["time"] = time_mon

@@ -35,7 +35,7 @@ def test_diagnostic_path_uses_exact_period(tmp_path):
     )
     assert path == (
         tmp_path / "experiment" / "tc_track"
-        / "tc_lead_track_density_case_set3_1980_2011.nc"
+        / "experiment_tc_lead_track_density_case_set3_1980_2011.nc"
     )
 
 

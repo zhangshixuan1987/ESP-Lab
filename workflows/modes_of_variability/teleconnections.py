@@ -30,6 +30,17 @@ def _first_variable(dataset: xr.Dataset, candidates: tuple[str, ...]) -> str:
     )
 
 
+def output_filename(product: str) -> str:
+    """Return the regression-pattern filename for a ``MODE:source`` product key.
+
+    The source token (e.g. ``JRA55_FOSIRL_init05``) leads so the file starts
+    with its folder name, matching the other ``s2d_diag`` products.
+    """
+    mode, _, source = str(product).partition(":")
+    stem = f"{source}_{mode}" if source else mode
+    return f"{stem}_global_teleconnection.nc"
+
+
 def output_path(product: str, index_path: Path, field_path: Path) -> Path:
     """Return the source-local ancillary product path."""
     for candidate in (field_path, index_path):
@@ -38,7 +49,7 @@ def output_path(product: str, index_path: Path, field_path: Path) -> Path:
             root = Path(*candidate.parts[: position + 1])
             return (
                 root / "regression_patterns"
-                / f"{product.replace(':', '_')}_global_teleconnection.nc"
+                / output_filename(product)
             )
     raise ValueError(
         "Cannot infer modes_variability root from "

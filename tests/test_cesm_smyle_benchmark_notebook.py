@@ -4,8 +4,12 @@ from pathlib import Path
 from IPython.core.interactiveshell import InteractiveShell
 
 
-_nb_matches = list((Path(__file__).parents[1] / "jupyter").rglob("0_run_cesm_smyle_benchmark.ipynb"))
-NOTEBOOK = _nb_matches[0] if _nb_matches else (Path(__file__).parents[1] / "jupyter" / "0_run_cesm_smyle_benchmark.ipynb")
+NOTEBOOK = (
+    Path(__file__).parents[1]
+    / "jupyter"
+    / "s2d_skill"
+    / "0_run_cesm_smyle_benchmark.ipynb"
+)
 
 
 def _notebook_source():

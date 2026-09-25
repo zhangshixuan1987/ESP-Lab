@@ -25,7 +25,9 @@ Sections
 
 Usage
 -----
-See ``workflows/diagnostics/initial_conditions/`` for workflow orchestration and
+See ``workflows/diagnostics/`` (inventory_and_hash.py, compare_netcdf_structure.py,
+compute_ic_statistics.py, plot_component_differences.py,
+check_physical_consistency.py, summarize_campaign.py) for workflow orchestration and
 ``tests/test_ic_core.py`` for offline smoke tests.
 """
 

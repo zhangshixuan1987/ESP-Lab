@@ -1,5 +1,16 @@
 # Changelog
 
+## Version 1.4.0 — September 2026
+Final-pass consolidation of the E3SM S2D diagnostic suite:
+- **Notebook suites**: the S2D prediction-skill notebooks live in `jupyter/s2d_skill/` alongside the drift/initialization (`jupyter/s2d_drift/`) and S2S weekly-skill (`jupyter/s2s_skill/`) suites; initial-condition audit modules are flattened into `workflows/diagnostics/` with `ic_config.yaml`, and drift products follow the `<source>_init<MM>_…` naming.
+- **Run controls everywhere**: every workflow notebook starts with `derivation_mode` and `recompute_*` flags, and forcing now reaches every cache it should (1b/1c observations, 1c bootstrap, 2a monthly skill, 3a NMME skill, 5a/5b native ELI, 7b ENSO regression).
+- **Ocean fields**: `SSS` (EN4) and `OHC700` (EN4 0–700 m heat content, MPAS field converted to J m-2 before regridding) across `1a`/`1b`/`1c`/`2a`; fields without a CESM-SMYLE benchmark get E3SM-only maps.
+- **Consistent comparisons**: ACC skill maps show the full field with significance dots; every `1a`/`1b` field has an E3SM case-difference figure; `1c` keeps only the significance-tested RMSE difference; `1c_lnd` skips direct RMSE for anomaly-only references (TWS) instead of failing.
+- **Regional skill (`2a`)**: separate `OCN_MONTHLY_REFERENCES` and `LND_MONTHLY_REFERENCES`, realm-appropriate regions, correct season labels, and nRMSE that ignores cells without observed variability (e.g. SST under sea ice).
+- **Web gallery**: descriptive, fixed-order Lead-time RMSE buttons, Case Difference buttons, SSS/OHC700 rows, PSL initial-shock figures, and Niño driver names; no two figures share a button.
+- **Robustness**: large dask-backed NetCDF writes are computed before writing (fixes a hang on the HDF5 lock); native ELI refuses to write empty caches; scripts and workflows resolve roots through `esp_lab.env_paths`.
+- **Packaging**: version 1.4.0; unused `eofs`, `xcdat`, and `cmocean` removed from the runtime requirements; `global-land-mask` added to `environment.yml`.
+
 ## Version 1.3.0 — September 2024
 This version delivers major enhancements for E3SM subseasonal-to-decadal (S2D) hindcast evaluation, interactive visualization, and distributed workflow resilience:
 - **Streamlined `jupyter/` Analysis & Diagnostic Suite**: Refactored evaluation workflows into a clean sequential suite (Notebooks 0 through 7) covering distributed CESM-SMYLE benchmark preprocessing, atmospheric and land lead-time ACC maps, multi-model RMSE comparisons, SST index skill and teleconnections, modes of variability (PDO, AMO, NAO), native and regridded ELI analysis, and initialization shock diagnostics.

@@ -45,6 +45,7 @@ from pcmdi_metrics.variability_mode.lib import (
 )
 
 from esp_lab import data_access_cesm_smyle as smyle_access
+from esp_lab import env_paths
 from esp_lab import data_access_e3sm as e3sm_access
 from esp_lab import data_access_nmme as nmme_access
 from esp_lab import data_access_obs as obs_access
@@ -57,7 +58,7 @@ from esp_lab.utils import sst_utils
 LOG = logging.getLogger(__name__)
 _NUMPY_SVD = np.linalg.svd
 PATH_SETTINGS = {
-    "s2d_diag_root": Path("/global/cfs/cdirs/e3sm/S2S2D/s2d_diag"),
+    "s2d_diag_root": env_paths.s2d_diag_root(),
 }
 S2D_DIAG_ROOT = PATH_SETTINGS["s2d_diag_root"]
 CESM_SMYLE_DIAG_DIR = S2D_DIAG_ROOT / "CESM-SMYLE"
@@ -1861,6 +1862,18 @@ def station_nao_obs(data: xr.DataArray, definition: StationNaoDefinition) -> xr.
     ).rename("nao_station")
 
 
+# File prefix (and source folder) for each non-E3SM model source; E3SM cases use
+# their cache tag. Prefixes always match the source folder name.
+MODEL_SOURCE_PREFIXES = {"smyle": "CESM-SMYLE", "nmme": "NMME"}
+
+
+def output_source_name(source: str, e3sm_cache_tag: str | None = None) -> str:
+    """Return the folder/file prefix for a model source (e.g. ``CESM-SMYLE``)."""
+    if source == "e3sm":
+        return str(e3sm_cache_tag or "e3sm")
+    return MODEL_SOURCE_PREFIXES.get(source, source)
+
+
 def product_paths(
     outdir: Path,
     mode: str,
@@ -1872,27 +1885,23 @@ def product_paths(
 ) -> tuple[Path, Path]:
     init_token = "" if init_month is None else f"_init{init_month:02d}"
     if source == "obs":
-        source_dir = str(settings["obs_product"])
-        source_name = source_dir.lower()
-    elif source == "smyle":
-        source_dir = "CESM-SMYLE"
-        source_name = "smyle"
-    elif source == "nmme":
-        source_dir = "NMME"
-        source_name = "nmme"
+        # Observed products share the observations/ tree; files keep the
+        # product prefix (e.g. era5_*, hadisst2_*).
+        source_dir = "observations"
+        source_name = str(settings["obs_product"]).lower()
     else:
-        source_dir = source
-        source_name = source
+        # Model products: folder and file prefix are the same name.
+        source_dir = source_name = output_source_name(source)
     source_root = outdir / source_dir / "modes_variability"
     field_name = f"{source_name}{init_token}_{str(settings['field']).lower()}_{settings['frequency']}_{grid_name}.nc"
     field_path = source_root / "fields" / field_name
     if legacy:
-        index_name = "era5_nao_reference.nc" if source == "obs" else f"{source}{init_token}_nao.nc"
+        index_name = "era5_nao_reference.nc" if source == "obs" else f"{source_name}{init_token}_nao.nc"
         return field_path, source_root / "indices" / index_name
     index_name = (
         f"{source_name}_{mode.lower()}_reference.nc"
         if source == "obs"
-        else f"{source}{init_token}_{mode.lower()}.nc"
+        else f"{source_name}{init_token}_{mode.lower()}.nc"
     )
     return field_path, source_root / "modes" / mode.lower() / "indices" / index_name
 

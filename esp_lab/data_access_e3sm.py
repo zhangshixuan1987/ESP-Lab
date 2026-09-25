@@ -1143,31 +1143,3 @@ def e3sm_regional_weights(
     return weights.where(region, 0).fillna(0)
 
 
-def e3sm_regional_mean(
-    da,
-    lonlat,
-    lat_name="lat",
-    lon_name="lon",
-    area=None,
-    mask=None,
-):
-    """
-    Area-weighted regional mean for E3SM lat/lon data.
-    """
-    reg_weights = e3sm_regional_weights(
-        da,
-        lonlat,
-        lat_name=lat_name,
-        lon_name=lon_name,
-        area=area,
-        mask=mask,
-    )
-    
-    # Calculate weighted mean over spatial dimensions
-    # For datasets with lat/lon named dimensions
-    spatial_dims = [dim for dim in [lat_name, lon_name] if dim in da.dims]
-    
-    if not spatial_dims:
-        raise ValueError(f"DataArray does not contain spatial dimensions: {lat_name}, {lon_name}")
-        
-    return da.weighted(reg_weights).mean(dim=spatial_dims, skipna=True)

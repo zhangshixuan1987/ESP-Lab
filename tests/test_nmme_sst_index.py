@@ -182,45 +182,6 @@ def test_nmme_initial_anomaly_uses_configured_climatology_window():
     assert float(np.abs(monthly_mean).max()) < 1.0e-12
 
 
-def test_nmme_observed_iod_is_west_anomaly_minus_east_anomaly():
-    time = xr.date_range(
-        "1980-01-01",
-        "2011-12-01",
-        freq="MS",
-        calendar="noleap",
-        use_cftime=True,
-    )
-    month = np.asarray(time.month)
-    year = np.asarray(time.year)
-    west = xr.DataArray(
-        28.0 + np.sin(2.0 * np.pi * month / 12.0) + 0.1 * (year - 1980),
-        dims="time",
-        coords={"time": time},
-    )
-    east = xr.DataArray(
-        24.0 + np.cos(2.0 * np.pi * month / 12.0) + 0.04 * (year - 1980),
-        dims="time",
-        coords={"time": time},
-    )
-
-    result = MODULE._derive_obs_indices(
-        {"IOD_West": west, "IOD_East": east},
-        ["IOD"],
-        1981,
-        2010,
-    )["IOD"]
-    expected = MODULE._obs_anom(west, 1981, 2010) - MODULE._obs_anom(
-        east,
-        1981,
-        2010,
-    )
-
-    xr.testing.assert_allclose(result, expected)
-    assert result.attrs["index_name"] == "DMI"
-    assert result.attrs["climatology_start_year"] == 1981
-    assert result.attrs["climatology_end_year"] == 2010
-
-
 def test_combined_timeseries_cache_checks_model_and_mask_contract(tmp_path):
     path = tmp_path / 'nmme.nc'
     attrs = dict(region='AtlMDR', climatology_start_year=1981, climatology_end_year=2010,

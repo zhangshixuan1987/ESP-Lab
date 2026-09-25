@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -54,7 +55,10 @@ def run_initial_shock(config):
                     "area": config.get("area"), "settings": config.get("settings", {})}
         payload = json.dumps(identity, sort_keys=True)
         digest = hashlib.sha256(payload.encode()).hexdigest()
-        path = diagnostic_dir(case, "initial_shock", "metrics", root=root) / f"std_index_{digest[:20]}.nc"
+        # Fixed name per case/variable; the identity digest is stored in the file
+        # (identity_sha256) and checked below, so a stale cache is rebuilt in place.
+        variable_token = re.sub(r"[^A-Za-z0-9]+", "_", str(spec["variable"])).strip("_")
+        path = diagnostic_dir(case, "initial_shock", "metrics", root=root) / f"std_index_{variable_token}.nc"
         result = None
         if mode != "rebuild" and path.exists():
             try:

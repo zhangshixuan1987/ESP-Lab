@@ -11,11 +11,9 @@ from esp_lab import eli_diagnostics
 from esp_lab.utils.resource_utils import ResourceTracker
 
 
-_eli_matches = list((Path(__file__).parents[1] / "jupyter").rglob("5a_eli_skill_ts.ipynb"))
-ELI_NOTEBOOK = _eli_matches[0] if _eli_matches else Path(__file__).parents[1] / "jupyter" / "5a_eli_skill_ts.ipynb"
-_eli_diag_matches = list((Path(__file__).parents[1] / "jupyter").rglob("5b_eli_diagnostics.ipynb"))
+ELI_NOTEBOOK = Path(__file__).parents[1] / "jupyter" / "s2d_skill" / "5a_eli_skill_ts.ipynb"
 ELI_DIAGNOSTICS_NOTEBOOK = (
-    _eli_diag_matches[0] if _eli_diag_matches else Path(__file__).parents[1] / "jupyter" / "5b_eli_diagnostics.ipynb"
+    Path(__file__).parents[1] / "jupyter" / "s2d_skill" / "5b_eli_diagnostics.ipynb"
 )
 
 
@@ -25,11 +23,13 @@ def test_eli_notebook_resolves_index_in_model_filename_templates():
         "".join(cell.get("source", [])) for cell in notebook["cells"]
     )
 
-    assert 'f"E3SMLE{{init_month:02d}}_{INDEX}' in source
-    assert 'f"BSMYLE{{init_month:02d}}_{INDEX}' in source
-    assert '"E3SMLE{init_month:02d}_{INDEX}' not in source
-    assert '"BSMYLE{init_month:02d}_{INDEX}' not in source
-    assert '"cache_mode": "auto"' in source
+    # Model files start with their source folder name (cache tag / CESM-SMYLE).
+    assert 'f"{{prefix}}_init{{init_month:02d}}_{INDEX}' in source
+    assert 'f"CESM-SMYLE_init{{init_month:02d}}_{INDEX}' in source
+    assert 'e3sm_template.replace("{prefix}", entry["cache_tag"])' in source
+    assert "E3SMLE{" not in source and "BSMYLE{" not in source
+    assert 'derivation_mode = "auto"' in source
+    assert '"cache_mode": derivation_mode' in source
     assert "run_process_native_eli.py" in source
     assert "REPO_ROOT = Path(eli_tools.__file__).resolve().parents[1]" in source
     assert "str(NATIVE_ELI_SCRIPT)" in source
@@ -85,7 +85,8 @@ def test_eli_diagnostics_reorganized_nmme_helper_is_complete_and_explicit():
     assert "return xr.Dataset(" in source
     assert "_compute_all_available_skill(month, plot_cfg, obs_lookup, rng)" in source
     assert 'if not config["detrend"]' in source
-    assert 'ELI_CACHE_MODE = "auto"' in source
+    assert 'derivation_mode = "auto"' in source
+    assert 'ELI_CACHE_MODE = derivation_mode' in source
     assert '"--year-end", str(END_YEAR)' in source
     assert 'subprocess.run(command, check=True)' in source
     assert '"E3SM-4DEnVarOcn": "4DEnVarOcn"' in source

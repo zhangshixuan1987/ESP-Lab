@@ -20,7 +20,7 @@ from typing import Optional
 import yaml
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_REPO_ROOT = _SCRIPT_DIR.parent.parent.parent
+_REPO_ROOT = _SCRIPT_DIR.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
@@ -41,7 +41,7 @@ def _expand_env(value: str) -> str:
 
 
 def load_config(config_path: Path) -> dict:
-    """Load and post-process config.yaml, expanding env-var references."""
+    """Load and post-process ic_config.yaml, expanding env-var references."""
     with open(config_path) as fh:
         cfg = yaml.safe_load(fh)
     cfg["experiments"]["ref_root"] = _expand_env(cfg["experiments"]["ref_root"])

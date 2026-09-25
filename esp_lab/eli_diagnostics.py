@@ -11,6 +11,8 @@ import pandas as pd
 import xarray as xr
 from scipy.stats import pearsonr
 
+from esp_lab.utils.filename_utils import resolve_year_span_path
+
 
 @dataclass(frozen=True)
 class ELIModelSpec:
@@ -23,13 +25,24 @@ class ELIModelSpec:
     ensemble_size: int
     color: str
     marker: str
+    year_start: int | None = None
+    year_end: int | None = None
 
     def path(self, init_month: int, nlead: int) -> Path:
-        return Path(self.root) / self.filename_template.format(
+        """Return the cache for this spec, or the narrowest one covering its years.
+
+        Templates may use ``{year_start}``/``{year_end}`` for the ``y<a>-<b>``
+        span token; a longer series is accepted because years are selected
+        after loading.
+        """
+        name = self.filename_template.format(
             init_month=int(init_month),
             nens=int(self.ensemble_size),
             nlead=int(nlead),
+            year_start=self.year_start,
+            year_end=self.year_end,
         )
+        return resolve_year_span_path(Path(self.root) / name)
 
 
 def initialization_years(values) -> np.ndarray:

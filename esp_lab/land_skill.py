@@ -1,6 +1,6 @@
 """Lead-time ACC skill utilities for E3SM land variables.
 
-This module supports ``jupyter/1b_lnd_leadtime_acc_skill_map.ipynb``
+This module supports ``jupyter/1a_lnd_leadtime_acc_skill_map.ipynb``
 using the execution and cache contracts established by the atmospheric workflow.
 It deliberately leaves the observational product configurable: snow water
 equivalent, total water storage, and soil moisture generally require different
@@ -85,7 +85,11 @@ def staged_land_input_path(
     init_month: int | None = None,
     depth_range_m: tuple[float, float] | None = None,
 ):
-    """Construct one analysis-ready staged land-input path."""
+    """Construct one analysis-ready staged land-input path.
+
+    Files sit under ``<root>/<source>/leadtime_acc/prepared_skill/lnd/<FIELD>/``,
+    matching the atm/ocn prepared-skill layout.
+    """
     from .paths import leadtime_acc_dir
 
     field = field.upper()
@@ -97,7 +101,7 @@ def staged_land_input_path(
     if init_month is not None:
         if not 1 <= int(init_month) <= 12:
             raise ValueError("init_month must be between 1 and 12")
-        parts[-1] = f"{source_token}{int(init_month):02d}"
+        parts.append(f"init{int(init_month):02d}")
     parts.append(field)
     if depth:
         parts.append(depth)
@@ -106,32 +110,34 @@ def staged_land_input_path(
         raise ValueError("grid_tag must contain a filename-safe character")
     parts.extend(("seasonal", grid_token))
     directory = leadtime_acc_dir(
-        source_token, "inputs", "land", field, root=root
+        source_token, "prepared_skill", "lnd", field, root=root
     )
     return directory / ("_".join(parts) + ".nc")
 
 
-def expected_staged_land_input_attrs(field: str, source_kind: str, grid_tag: str):
-    """Return the required contract for one staged land input."""
-    return {
-        "processing_stage": "analysis_ready_land_acc_input_v2",
-        "field": field.upper(),
-        "source_kind": source_kind,
-        "horizontal_grid": grid_tag,
-        "seasonal_convention": "centered_3month_DJF_MAM_JJA_SON",
-    }
+def reference_land_input_path(
+    root,
+    product: str,
+    field: str,
+    grid_tag: str,
+    *,
+    depth_range_m: tuple[float, float] | None = None,
+):
+    """Construct the analysis-ready path of one land reference (observation) input.
 
+    References sit with the other realms' prepared observations under
+    ``<root>/observations/leadtime_acc/prepared_skill/lnd/<FIELD>/``; the
+    product-prefixed filename matches :func:`staged_land_input_path`.
+    """
+    from .paths import leadtime_acc_dir
 
-def validate_staged_land_input(da, path, source_kind: str, grid_tag: str):
-    """Validate the preprocessing contract attached to a staged input."""
-    expected = expected_staged_land_input_attrs(da.name, source_kind, grid_tag)
-    mismatches = {
-        key: (da.attrs.get(key), value)
-        for key, value in expected.items()
-        if da.attrs.get(key) != value
-    }
-    if mismatches:
-        raise ValueError(f"Input contract mismatch in {path}: {mismatches}")
+    filename = staged_land_input_path(
+        root, product, field, grid_tag, depth_range_m=depth_range_m
+    ).name
+    directory = leadtime_acc_dir(
+        "observations", "prepared_skill", "lnd", field.upper(), root=root
+    )
+    return directory / filename
 
 
 def normalized_target_years(target_years_by_lead: Mapping) -> dict[int, list[int]]:
@@ -146,7 +152,12 @@ def normalized_target_years(target_years_by_lead: Mapping) -> dict[int, list[int
 
 
 def land_cohort_token(target_years_by_lead: Mapping) -> str:
-    """Return a readable token plus digest for exact lead-dependent cohorts."""
+    """Return a fixed, readable token for lead-dependent cohorts.
+
+    The exact per-lead years are recorded in the skill file's attributes
+    (``target_years_digest``) and checked on reuse, so they are not encoded
+    in the filename.
+    """
     cohorts = normalized_target_years(target_years_by_lead)
     all_years = [year for years in cohorts.values() for year in years]
     sample_counts = {len(years) for years in cohorts.values()}
@@ -157,8 +168,7 @@ def land_cohort_token(target_years_by_lead: Mapping) -> str:
     )
     year_token = f"y{min(all_years)}-{max(all_years)}_{count_token}"
     lead_token = f"l{min(cohorts)}-{max(cohorts)}_nl{len(cohorts)}"
-    digest = provenance_digest(cohorts, length=10)
-    return f"{year_token}_{lead_token}_c{digest}"
+    return f"{year_token}_{lead_token}"
 
 
 def expected_land_skill_attrs(
@@ -474,36 +484,6 @@ def complete_calendar_seasonal_mean(
     return seasonal
 
 
-def complete_calendar_monthly_change(monthly: xr.DataArray) -> xr.DataArray:
-    """Approximate monthly storage change from consecutive monthly means.
-
-    The result at month ``t`` is ``monthly(t) - monthly(t-1)`` and retains the
-    timestamp of ``t``. Missing calendar months are inserted before
-    differencing, so gaps cannot be mistaken for one-month changes.
-    """
-    if "time" not in monthly.dims:
-        raise ValueError("monthly reference must contain a time dimension")
-    if monthly.indexes["time"].has_duplicates:
-        raise ValueError("monthly reference contains duplicate timestamps")
-
-    attrs = dict(monthly.attrs)
-    complete = monthly.sortby("time").resample(time="MS").asfreq()
-    if complete.chunks is not None:
-        complete = complete.chunk({"time": min(24, complete.sizes["time"])})
-    change = complete.diff("time", label="upper")
-    change.attrs.update(attrs)
-    change.attrs.update(
-        {
-            "long_name": "monthly change in snow water equivalent",
-            "change_definition": "SWE(t) - SWE(t-1) from consecutive monthly means",
-            "change_timestamp": "later month t",
-            "change_approximation": "difference of monthly-mean storage values",
-            "calendar_completeness": "both consecutive calendar months required",
-        }
-    )
-    return change
-
-
 def retain_reference_supported_leads(
     data: xr.DataArray,
     valid_time: xr.DataArray,
@@ -678,30 +658,6 @@ def load_e3sm_land_monthly(
     )
 
 
-def seasonal_land_hindcast(
-    monthly: xr.Dataset | xr.DataArray,
-    field: str,
-    *,
-    soil_layer: int | None = None,
-    soil_depth_m: float | None = None,
-    soil_depth_range_m: tuple[float, float] | None = None,
-    soil_layer_bounds_m: xr.DataArray | np.ndarray | Sequence[float] | None = None,
-    min_soil_coverage_fraction: float = 0.999,
-    soil_output: str = "volumetric_mean",
-) -> xr.DataArray:
-    """Select a land map field and form centered DJF/MAM/JJA/SON means."""
-    return seasonal_land_hindcast_dataset(
-        monthly,
-        field,
-        soil_layer=soil_layer,
-        soil_depth_m=soil_depth_m,
-        soil_depth_range_m=soil_depth_range_m,
-        soil_layer_bounds_m=soil_layer_bounds_m,
-        min_soil_coverage_fraction=min_soil_coverage_fraction,
-        soil_output=soil_output,
-    )[get_land_variable_spec(field).field]
-
-
 def seasonal_land_hindcast_dataset(
     monthly: xr.Dataset | xr.DataArray,
     field: str,
@@ -746,54 +702,6 @@ def seasonal_land_hindcast_dataset(
             map(str, dropped)
         )
     return seasonal
-
-
-def monthly_land_hindcast_change_dataset(
-    monthly: xr.Dataset | xr.DataArray,
-    field: str = "H2OSNO",
-) -> xr.Dataset:
-    """Return monthly storage changes and their later-month valid times.
-
-    Lead 1 is dropped because no preceding hindcast month is available. The
-    output at lead ``L`` is the monthly-mean field at ``L`` minus that at
-    ``L-1``. Verification timestamps label the later month.
-    """
-    da = prepare_land_field(monthly, field)
-    if "L" not in da.dims:
-        raise ValueError("monthly hindcast field must contain an L dimension")
-    if isinstance(monthly, xr.Dataset) and "time" in monthly:
-        valid_time = monthly["time"]
-    elif "time" in da.coords:
-        valid_time = da["time"]
-    else:
-        raise ValueError("monthly hindcast input must provide verification time")
-    if not {"Y", "L"}.issubset(valid_time.dims):
-        raise ValueError("verification time must contain Y and L dimensions")
-    if da.sizes["L"] < 2:
-        raise ValueError("at least two monthly leads are required")
-
-    serial_month = valid_time.dt.year * 12 + valid_time.dt.month
-    spacing = serial_month.diff("L")
-    if spacing.chunks is not None:
-        spacing = spacing.compute()
-    if not bool((spacing == 1).all()):
-        raise ValueError("hindcast verification times must be consecutive months")
-
-    change = da.diff("L", label="upper").rename("DELTA_H2OSNO")
-    later_time = valid_time.isel(L=slice(1, None)).assign_coords(L=change.L)
-    change.attrs.update(da.attrs)
-    change.attrs.update(
-        {
-            "long_name": "monthly change in snow water equivalent",
-            "change_definition": "SWE(L) - SWE(L-1) from consecutive monthly means",
-            "change_timestamp": "later forecast month L",
-            "change_approximation": "difference of monthly-mean storage values",
-            "source_field": field,
-        }
-    )
-    out = change.to_dataset(name=change.name)
-    out["time"] = later_time
-    return out
 
 
 def retain_valid_seasonal_leads(
@@ -1082,146 +990,28 @@ def compute_land_acc_skill(
     return skill
 
 
-def compute_land_monthly_acc_skill(
-    forecast_change: xr.DataArray,
-    valid_time: xr.DataArray,
-    reference_change: xr.DataArray,
-    climy0: int,
-    climy1: int,
-    *,
-    detrend: bool = True,
-    target_years_by_lead=None,
-) -> xr.Dataset:
-    """Remove lead-dependent drift and compute monthly ΔSWE map skill."""
-    required = {"Y", "L", "M"}
-    missing = required - set(forecast_change.dims)
-    if missing:
-        raise ValueError(f"forecast change is missing dimensions: {sorted(missing)}")
-    if not {"Y", "L"}.issubset(valid_time.dims):
-        raise ValueError("valid_time must contain Y and L dimensions")
-    if "time" not in reference_change.dims:
-        raise ValueError("reference change must contain time")
-    validate_land_reference_compatibility(forecast_change, reference_change)
-
-    model_anom, _ = stats.remove_drift(
-        forecast_change, valid_time, climy0, climy1
-    )
-    skill = stats.compute_skill_seasonal(
-        model_anom,
-        valid_time,
-        reference_change,
-        climy0,
-        climy1,
-        nleadavg=1,
-        nleads=forecast_change.sizes["L"],
-        resamp=0,
-        detrend=detrend,
-        monthly=True,
-        is_anomaly=False,
-        target_years_by_lead=target_years_by_lead,
-    )
-    skill.attrs.update(
-        {
-            "climatology": f"{climy0}-{climy1}",
-            "detrend": str(bool(detrend)).lower(),
-            "metric": "monthly delta-SWE lead-time ACC",
-            "field": "DELTA_H2OSNO",
-            "change_definition": "SWE(t) - SWE(t-1) from consecutive monthly means",
-        }
-    )
-    return skill
-
-
-def plot_land_acc_maps(
-    skill: xr.Dataset,
-    *,
-    leads: Sequence[int] | None = None,
-    significance_level: float | None = None,
-    ncols: int = 2,
-    cmap: str = "RdBu_r",
-):
-    """Plot ACC maps for selected leads and return ``(figure, axes)``.
-
-    Cartopy and matplotlib are imported lazily so calculation-only workflows do
-    not need to initialize a plotting stack.
-    """
-    import matplotlib.pyplot as plt
-    import cartopy.crs as ccrs
-
-    if "corr" not in skill or "L" not in skill["corr"].dims:
-        raise ValueError("skill must contain corr with an L dimension")
-    if not {"lat", "lon"}.issubset(skill["corr"].dims):
-        raise ValueError("corr must contain lat and lon dimensions")
-    selected = list(skill.L.values if leads is None else leads)
-    if not selected:
-        raise ValueError("at least one lead must be selected")
-    unknown = [lead for lead in selected if lead not in skill.L.values]
-    if unknown:
-        raise KeyError(f"lead values not present in skill: {unknown}")
-    if significance_level is not None and not 0 < significance_level < 1:
-        raise ValueError("significance_level must be between 0 and 1")
-
-    ncols = max(1, min(int(ncols), len(selected)))
-    nrows = int(np.ceil(len(selected) / ncols))
-    projection = ccrs.PlateCarree()
-    fig, axes = plt.subplots(
-        nrows,
-        ncols,
-        figsize=(5 * ncols, 2.9 * nrows),
-        subplot_kw={"projection": projection},
-        squeeze=False,
-    )
-    mappable = None
-    for ax, lead in zip(axes.ravel(), selected):
-        corr = skill["corr"].sel(L=lead)
-        if significance_level is not None:
-            if "pval" not in skill:
-                raise ValueError("significance masking requires skill['pval']")
-            corr = corr.where(skill["pval"].sel(L=lead) < significance_level)
-        mappable = corr.plot.pcolormesh(
-            ax=ax,
-            transform=projection,
-            cmap=cmap,
-            vmin=-1,
-            vmax=1,
-            add_colorbar=False,
-        )
-        ax.coastlines(linewidth=0.6)
-        ax.set_title(f"Lead {lead}")
-    for ax in axes.ravel()[len(selected) :]:
-        ax.set_visible(False)
-    fig.colorbar(mappable, ax=list(axes.ravel()[: len(selected)]), label="ACC", shrink=0.85)
-    return fig, axes
-
-
 __all__ = [
     "LAND_SKILL_REQUIRED_VARIABLES",
     "LAND_VARIABLES",
     "LandVariableSpec",
     "compute_land_acc_skill",
-    "compute_land_monthly_acc_skill",
-    "complete_calendar_monthly_change",
     "depth_integrated_soil_water_mm",
     "depth_weighted_soil_moisture",
     "elm_soil_layer_bounds",
     "get_land_variable_spec",
     "expected_land_skill_attrs",
-    "expected_staged_land_input_attrs",
     "land_cohort_token",
     "land_depth_token",
     "land_skill_cache_status",
     "load_e3sm_land_monthly",
     "mask_c3s_swe_flags",
-    "monthly_land_hindcast_change_dataset",
-    "plot_land_acc_maps",
     "prepare_land_field",
     "complete_calendar_seasonal_mean",
     "retain_reference_supported_leads",
-    "seasonal_land_hindcast",
     "seasonal_land_hindcast_dataset",
     "staged_land_input_path",
+    "reference_land_input_path",
     "validate_land_skill_dataset",
-    "validate_staged_land_input",
     "retain_valid_seasonal_leads",
     "validate_land_reference_compatibility",
 ]

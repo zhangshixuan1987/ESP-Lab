@@ -1,6 +1,6 @@
 import numpy as np
 import xarray as xr
-from esp_lab.data_access_e3sm import e3sm_regional_mean, e3sm_region_mask
+from esp_lab.data_access_e3sm import e3sm_region_mask
 
 
 def _uniform_global_field():
@@ -11,17 +11,6 @@ def _uniform_global_field():
         coords={"lat": lat, "lon": lon},
         dims=("lat", "lon"),
     )
-
-
-def test_e3sm_regional_mean_uniform_field():
-    res = e3sm_regional_mean(_uniform_global_field(), [-10, 10, -10, 10])
-    assert np.isclose(float(res), 1.0)
-
-
-def test_e3sm_regional_mean_uniform_field_across_dateline():
-    result = e3sm_regional_mean(_uniform_global_field(), [170, 290, -5, 5])
-
-    assert np.isclose(float(result), 1.0)
 
 
 def test_nino34_mask_is_nonempty_and_respects_latitude_bounds():

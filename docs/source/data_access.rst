@@ -1,12 +1,18 @@
-Data Access Modules
-===================
+data_access.py (Legacy)
+-----------------------
 
-ESP-Lab provides dedicated, format-specific data access modules for reading, slicing, and preparing hindcast and observational datasets:
+.. deprecated::
+   This module (``esp_lab.data_access``) is the original monolithic data accessor
+   inherited from the pre-refactor ``SMYLEutils`` / ``esp-tools`` era.
+   It is retained for backward compatibility only.
 
-- **E3SM Hindcast Data**: :mod:`esp_lab.data_access_e3sm`
-- **CESM-SMYLE Hindcast Data**: :mod:`esp_lab.data_access_cesm_smyle`
-- **Observational References**: :mod:`esp_lab.data_access_obs`
-- **NMME Forecast Data**: :mod:`esp_lab.data_access_nmme`
-- **Legacy SMYLE Accessor**: :mod:`esp_lab.data_access_smyle`
+   For new workflows, use the purpose-specific accessors instead:
 
-For complete API documentation on each module, see the :doc:`reference/api`.
+   - **E3SM hindcast data**: :mod:`esp_lab.data_access_e3sm`
+   - **CESM-SMYLE hindcast data**: :mod:`esp_lab.data_access_cesm_smyle`
+   - **Observational references**: :mod:`esp_lab.data_access_obs`
+   - **NMME model data**: :mod:`esp_lab.data_access_nmme`
+
+.. automodule:: esp_lab.data_access
+    :members:
+    :undoc-members:

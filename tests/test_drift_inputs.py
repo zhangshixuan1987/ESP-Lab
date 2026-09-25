@@ -79,7 +79,7 @@ class DriftInputsTests(unittest.TestCase):
 
     def test_load_regional_manifest_and_helpers(self):
         path = inputs.regional_product_path('PSL', 5, 'JRA55_FOSIRL', output_root=self.kw['output_root'])
-        self.assertEqual(path.name, 'JRA55_FOSIRL_PSL_05_regional.nc')
+        self.assertEqual(path.name, 'JRA55_FOSIRL_init05_PSL_regional.nc')
         self.assertEqual(inputs.figure_size(10, 5, scale=2.0), (20.0, 10.0))
 
         with patch.object(inputs, 'default_variable_config', return_value={

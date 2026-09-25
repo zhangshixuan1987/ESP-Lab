@@ -29,18 +29,16 @@ cd ESP-Lab
 pip install -e .
 ```
 
-## Pip Installation
+Use an editable install (`pip install -e .`): the notebooks import the `workflows`
+package and read the reference index files under `external/` from the repository
+checkout. `7a_tc_method_analysis.ipynb` also needs `global-land-mask`, which
+`environment.yml` installs (otherwise `pip install global-land-mask`).
 
-ESP-Lab can also be installed from PyPI:
+Data and output roots default to the NERSC E3SM paths. Override them per account with
+`ESP_LAB_S2D_DIAG_ROOT`, `ESP_LAB_FIGURE_ROOT`, `ESP_LAB_RAW_MODEL_ROOT`,
+`ESP_LAB_OBS_ROOT`, and `ESP_LAB_DATA_ROOT`.
 
-```bash
-python -m pip install esp-lab
-```
+## PyPI Package
 
-## Conda Installation
-
-When released to conda-forge:
-
-```bash
-conda install esp-lab --channel conda-forge
-```
+The `esp-lab` package on PyPI is the upstream CESM ESP-Lab release (1.1.x). It does not
+include the E3SM S2D extensions, workflows, or notebooks, so install from source as above.

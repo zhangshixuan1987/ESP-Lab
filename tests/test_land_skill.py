@@ -10,8 +10,12 @@ import xarray as xr
 from esp_lab import land_skill
 
 
-_land_nb_matches = list((Path(__file__).parents[1] / "jupyter").rglob("1b_lnd_leadtime_acc_skill_map.ipynb"))
-LAND_NOTEBOOK = _land_nb_matches[0] if _land_nb_matches else (Path(__file__).parents[1] / "jupyter" / "1b_lnd_leadtime_acc_skill_map.ipynb")
+LAND_NOTEBOOK = (
+    Path(__file__).parents[1]
+    / "jupyter"
+    / "s2d_skill"
+    / "1a_lnd_leadtime_acc_skill_map.ipynb"
+)
 
 
 def _land_dataset():
@@ -89,62 +93,6 @@ def test_complete_calendar_seasonal_mean_can_retain_missing_seasons():
     assert out.sel(time="2000-07-01").isnull()
     assert out.sel(time="2000-10-01").isnull()
     assert out.attrs["missing_season_representation"] == "explicit all-NaN time slices"
-
-
-def test_complete_calendar_monthly_change_does_not_bridge_gaps():
-    monthly = xr.DataArray(
-        [10.0, 13.0, 20.0, 25.0],
-        dims="time",
-        coords={"time": pd.to_datetime([
-            "2000-04-01", "2000-05-01", "2000-10-01", "2000-11-01"
-        ])},
-        attrs={"units": "mm"},
-    )
-
-    out = land_skill.complete_calendar_monthly_change(monthly)
-
-    assert float(out.sel(time="2000-05-01")) == pytest.approx(3.0)
-    assert np.isnan(out.sel(time="2000-10-01"))
-    assert float(out.sel(time="2000-11-01")) == pytest.approx(5.0)
-    assert out.attrs["units"] == "mm"
-    assert "SWE(t) - SWE(t-1)" in out.attrs["change_definition"]
-
-
-def test_monthly_land_hindcast_change_uses_later_lead_and_time():
-    y = ["2000050100"]
-    monthly = xr.Dataset(
-        {
-            "H2OSNO": (("Y", "L", "M"), [[[2.0], [5.0], [4.0]]]),
-            "time": (("Y", "L"), np.asarray([[
-                cftime.DatetimeNoLeap(2000, 5, 15),
-                cftime.DatetimeNoLeap(2000, 6, 15),
-                cftime.DatetimeNoLeap(2000, 7, 15),
-            ]], dtype=object)),
-        },
-        coords={"Y": y, "L": [1, 2, 3], "M": ["EN00"]},
-    )
-
-    out = land_skill.monthly_land_hindcast_change_dataset(monthly)
-
-    assert out.L.values.tolist() == [2, 3]
-    np.testing.assert_allclose(out.DELTA_H2OSNO.values.ravel(), [3.0, -1.0])
-    assert out.time.dt.month.values.tolist() == [[6, 7]]
-
-
-def test_monthly_land_hindcast_change_rejects_nonconsecutive_time():
-    monthly = xr.Dataset(
-        {
-            "H2OSNO": (("Y", "L", "M"), [[[2.0], [5.0]]]),
-            "time": (("Y", "L"), np.asarray([[
-                cftime.DatetimeNoLeap(2000, 5, 15),
-                cftime.DatetimeNoLeap(2000, 7, 15),
-            ]], dtype=object)),
-        },
-        coords={"Y": ["2000050100"], "L": [1, 2], "M": ["EN00"]},
-    )
-
-    with pytest.raises(ValueError, match="consecutive months"):
-        land_skill.monthly_land_hindcast_change_dataset(monthly)
 
 
 def test_retain_reference_supported_leads_uses_verification_month():
@@ -313,22 +261,40 @@ def test_staged_land_input_path_preserves_source_identity(tmp_path):
     )
 
     assert path.parent == (
-        tmp_path / "JRA55_FOSIRL" / "leadtime_acc" / "inputs" / "land" / "H2OSOI"
+        tmp_path / "JRA55_FOSIRL" / "leadtime_acc" / "prepared_skill" / "lnd" / "H2OSOI"
     )
     assert path.name == (
-        "JRA55_FOSIRL05_H2OSOI_depth0-1.6m_integrated_mm_"
+        "JRA55_FOSIRL_init05_H2OSOI_depth0-1.6m_integrated_mm_"
         "seasonal_1x1deg_cell_centered.nc"
     )
 
 
-def test_land_cohort_token_changes_when_one_lead_cohort_changes():
-    first = {3: [1980, 1981], 6: [1980, 1981]}
-    second = {3: [1980, 1981], 6: [1980, 1982]}
-
-    assert land_skill.land_cohort_token(first) != land_skill.land_cohort_token(second)
-    assert land_skill.land_cohort_token(first).startswith(
-        "y1980-1981_n2perlead_l3-6_nl2"
+def test_reference_land_input_path_uses_observations_tree(tmp_path):
+    path = land_skill.reference_land_input_path(
+        tmp_path,
+        "CPC_Soil_Moisture_V2",
+        "h2osoi",
+        "1x1deg_cell_centered",
+        depth_range_m=(0.0, 1.6),
     )
+
+    assert path.parent == (
+        tmp_path / "observations" / "leadtime_acc" / "prepared_skill" / "lnd" / "H2OSOI"
+    )
+    assert path.name == (
+        "CPC_Soil_Moisture_V2_H2OSOI_depth0-1.6m_integrated_mm_"
+        "seasonal_1x1deg_cell_centered.nc"
+    )
+
+
+def test_land_cohort_token_is_fixed_and_readable():
+    first = {3: [1980, 1981], 6: [1980, 1981]}
+    shifted = {3: [1980, 1981], 6: [1981, 1980]}
+    wider = {3: [1980, 1981], 6: [1980, 1982]}
+
+    assert land_skill.land_cohort_token(first) == "y1980-1981_n2perlead_l3-6_nl2"
+    assert land_skill.land_cohort_token(shifted) == land_skill.land_cohort_token(first)
+    assert land_skill.land_cohort_token(wider) != land_skill.land_cohort_token(first)
 
 
 def test_validate_land_skill_dataset_checks_exact_provenance_and_cohorts():
@@ -438,24 +404,6 @@ def test_load_land_hindcast_forces_land_realm(monkeypatch):
     assert called["field"] == "TWS"
     assert called["verify_field_name"] is True
     assert called["resolved_files"] == [["/data/TWS_200005_200204.nc"]]
-
-
-def test_seasonal_land_hindcast_preserves_dataset_time_variable(monkeypatch):
-    monthly = _land_dataset().rename({"time": "L"}).expand_dims(Y=[2000], M=[0])
-    monthly["time"] = xr.DataArray(
-        np.arange(2).reshape(1, 2),
-        dims=("Y", "L"),
-        coords={"Y": monthly.Y, "L": monthly.L},
-    )
-
-    def fake_mon_to_seas(ds):
-        assert "time" in ds
-        return ds
-
-    monkeypatch.setattr(land_skill.calendar_utils, "mon_to_seas_dask", fake_mon_to_seas)
-    out = land_skill.seasonal_land_hindcast(monthly, "TWS")
-
-    assert out.name == "TWS"
 
 
 def test_seasonal_land_hindcast_dataset_returns_valid_time(monkeypatch):

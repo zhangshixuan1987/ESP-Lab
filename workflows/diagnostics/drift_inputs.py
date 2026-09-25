@@ -10,6 +10,7 @@ import xarray as xr
 
 from workflows.diagnostics import two_reference_drift as workflow
 from esp_lab.paths import leadtime_drift_dir
+from esp_lab.utils.filename_utils import source_init_prefix
 from esp_lab.diagnostics.two_reference_drift import (
     area_weighted_mean, regional_subset, compute_regime_fraction,
     run_pipeline,
@@ -300,7 +301,7 @@ def regional_product_path(variable, init_month, source, output_root=DEFAULT_OUTP
     specific folder, the file is placed directly inside ``output_root``.
     """
     root = Path(output_root)
-    filename = f'{source}_{variable}_{int(init_month):02d}_regional.nc'
+    filename = f'{source_init_prefix(source, init_month)}_{variable}_regional.nc'
     if root.name in ('regional', 'leadtime_drift', 'two_reference') or root.name == source:
         return root / filename
 
@@ -330,7 +331,7 @@ def comparison_product_path(comparison_name, variable, init_month, kind='regiona
     """
     root = Path(output_root)
     tag = 'regional' if kind == 'regional' else 'spatial_maps'
-    filename = f'{comparison_name}_{variable}_{int(init_month):02d}_{tag}.nc'
+    filename = f'{source_init_prefix(comparison_name, init_month)}_{variable}_{tag}.nc'
     canonical = root / 'multimodel' / 'leadtime_drift' / 'comparisons' / tag / filename
     if canonical.is_file():
         return canonical

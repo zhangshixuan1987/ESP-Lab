@@ -27,6 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from workflows.modes_of_variability import analysis as modes_analysis
+from esp_lab.utils.filename_utils import source_init_prefix
 
 
 LOG = logging.getLogger(__name__)
@@ -440,10 +441,8 @@ def process_one(
     force_field: bool = False,
 ) -> tuple[dict[str, str], dict[int, dict[str, object]] | None]:
     mode = str(settings["mode"])
-    output_source = (
-        str(getattr(args, "e3sm_cache_tag", "e3sm"))
-        if source == "e3sm"
-        else source
+    output_source = modes_analysis.output_source_name(
+        source, getattr(args, "e3sm_cache_tag", "e3sm")
     )
     field_path, index_path = modes_analysis.product_paths(
         Path(args.outdir),
@@ -570,7 +569,7 @@ def write_manifest(
     if args.legacy_nao_layout:
         path = Path(args.outdir) / "nao_manifest.json"
     else:
-        path = Path(args.outdir) / "_manifests" / "modes_manifest.json"
+        path = Path(args.outdir) / "tmp" / "_manifests" / "modes_manifest.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "schema_version": PRODUCT_CONFIGURATION_SCHEMA,
@@ -625,8 +624,13 @@ def write_manifest(
     lock_path = path.with_suffix(path.suffix + ".lock")
     with lock_path.open("w") as lock_file:
         fcntl.flock(lock_file, fcntl.LOCK_EX)
-        if getattr(args, "merge_manifest", False) and path.exists():
-            existing = json.loads(path.read_text())
+        source_manifest_path = path
+        if not source_manifest_path.exists():
+            legacy_path = Path(args.outdir) / "_manifests" / "modes_manifest.json"
+            if legacy_path.exists():
+                source_manifest_path = legacy_path
+        if getattr(args, "merge_manifest", False) and source_manifest_path.exists():
+            existing = json.loads(source_manifest_path.read_text())
             compatible_keys = (
                 "schema_version",
                 "processing_script",
@@ -812,9 +816,7 @@ def expected_products(args: argparse.Namespace) -> dict[str, dict[str, str]]:
             (source, month) for source in sources for month in args.init_months
         )
         for source, init_month in product_specs:
-            output_source = (
-                str(args.e3sm_cache_tag) if source == "e3sm" else source
-            )
+            output_source = modes_analysis.output_source_name(source, args.e3sm_cache_tag)
             field_path, index_path = modes_analysis.product_paths(
                 Path(args.outdir), mode, output_source, init_month,
                 modes_analysis.grid_token(args.target_dlat, args.target_dlon),
@@ -822,10 +824,10 @@ def expected_products(args: argparse.Namespace) -> dict[str, dict[str, str]]:
             )
             key = (
                 "era5" if args.legacy_nao_layout and source == "obs"
-                else f"{output_source}_init{init_month:02d}"
+                else source_init_prefix(output_source, init_month)
                 if args.legacy_nao_layout
                 else f"{mode}:reference" if source == "obs"
-                else f"{mode}:{output_source}_init{init_month:02d}"
+                else f"{mode}:{source_init_prefix(output_source, init_month)}"
             )
             products[key] = {
                 "field": str(field_path),
@@ -893,10 +895,8 @@ def run(args: argparse.Namespace) -> Path | None:
                 if source not in args.sources:
                     continue
                 for init_month in args.init_months:
-                    output_source = (
-                        str(getattr(args, "e3sm_cache_tag", "e3sm"))
-                        if source == "e3sm"
-                        else source
+                    output_source = modes_analysis.output_source_name(
+                        source, getattr(args, "e3sm_cache_tag", "e3sm")
                     )
                     field_path, _ = modes_analysis.product_paths(
                         Path(args.outdir), mode, output_source, init_month,
@@ -910,9 +910,9 @@ def run(args: argparse.Namespace) -> Path | None:
                     )
                     materialized_fields.add(str(field_path))
                     key = (
-                        f"{output_source}_init{init_month:02d}"
+                        source_init_prefix(output_source, init_month)
                         if args.legacy_nao_layout
-                        else f"{mode}:{output_source}_init{init_month:02d}"
+                        else f"{mode}:{source_init_prefix(output_source, init_month)}"
                     )
                     products[key] = product
 

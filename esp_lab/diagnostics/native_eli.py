@@ -20,6 +20,7 @@ from esp_lab.diagnostics.sst_index import (
     ELI_LON_MIN,
     TC_LAT_HALF,
 )
+from esp_lab.utils.filename_utils import sst_index_filename
 from esp_lab.utils.netcdf_utils import atomic_to_netcdf
 from esp_lab.utils.sst_utils import (
     SST_PREPROCESSING_VERSION,
@@ -405,8 +406,10 @@ def process_native_eli_case(
     written_paths: list[Path] = []
 
     for init_month in init_months:
-        outfile_mon = outdir / f"E3SMLE{init_month:02d}_ELI_native_N{nens:02d}_M{nlead:02d}.nc"
-        outfile_seas = outdir / f"E3SMLE{init_month:02d}_ELI_native_N{nens:02d}_M{nlead:02d}_seas.nc"
+        file_prefix = cache_tag or "E3SM"
+        name_args = (file_prefix, init_month, (year_start, year_end), nens, nlead)
+        outfile_mon = outdir / sst_index_filename(*name_args, native=True)
+        outfile_seas = outdir / sst_index_filename(*name_args, native=True, seasonal=True)
 
         target_months = (init_month - 1 + np.arange(nlead)) % 12 + 1
         seasonal_lead_indices = np.flatnonzero(np.isin(target_months, [1, 4, 7, 10]))
@@ -442,11 +445,13 @@ def process_native_eli_case(
 
         cases_for_month = [f"{case_prefix}_{year}{init_month:02d}0100" for year in lead_years]
         n_workers = max(1, min(int(workers), nens))
+        missing_case_dirs = []
 
         for yi, (year, case) in enumerate(zip(lead_years, cases_for_month)):
             case_dir = data_dir / case
             if not case_dir.is_dir():
                 LOG.warning("Case directory not found: %s", case_dir)
+                missing_case_dirs.append(case_dir)
                 continue
 
             tasks = [
@@ -487,6 +492,14 @@ def process_native_eli_case(
             finally:
                 if pool is not None:
                     pool.shutdown(wait=True)
+
+        if cases_for_month and len(missing_case_dirs) == len(cases_for_month):
+            # Never replace a cache with an all-missing file (e.g. a wrong
+            # case prefix or data directory that finds no case directories).
+            raise RuntimeError(
+                f"No case directories found for {case_prefix} init {init_month:02d} "
+                f"under {data_dir}; refusing to write an empty native ELI cache."
+            )
 
         attrs_common = {
             **expected_common,

@@ -1,10 +1,9 @@
 import numpy as np
 import xarray as xr
 
+from esp_lab.leadtime_skill_cache import provenance_digest
 from workflows.leadtime_skill.rmse_comparison import (
     absolute_rmse_from_skill,
-    area_weighted_mask_fraction,
-    bootstrap_rmse_diff_matched_ensemble_memorysafe,
     build_rmse_significance_dataset,
     compact_year_tag,
     direct_rmse_cache_attrs,
@@ -15,7 +14,6 @@ from workflows.leadtime_skill.rmse_comparison import (
     make_obs_like_model_leads,
     make_obs_like_model_time,
     normalize_direct_rmse_leads,
-    provenance_digest,
     require_available_lead,
     safe_model_name,
     valid_area_weighted_fraction,
@@ -41,7 +39,7 @@ def test_shared_direct_rmse_metadata_helpers():
     assert safe_model_name("E3SM / FOSIRL") == "E3SM___FOSIRL"
 
 
-def test_direct_rmse_difference_and_weighted_fraction():
+def test_direct_rmse_difference():
     coords = {"L": [3], "lat": [0.0, 60.0], "lon": [0.0]}
     left = xr.Dataset(
         {"rmse": (("L", "lat", "lon"), [[[1.0], [3.0]]])},
@@ -53,11 +51,9 @@ def test_direct_rmse_difference_and_weighted_fraction():
     )
 
     result = direct_rmse_difference(left, right)
-    mask = result["rmse_diff"].sel(L=3) < 0
 
     np.testing.assert_array_equal(result["rmse_diff"], [[[-1.0], [1.0]]])
     np.testing.assert_array_equal(result["rmse_ratio"], [[[0.5], [1.5]]])
-    assert np.isclose(area_weighted_mask_fraction(mask), 2.0 / 3.0)
 
 
 def test_valid_area_fraction_excludes_missing_domain_area():
@@ -137,7 +133,8 @@ def test_direct_rmse_cache_contract_and_name_are_provenance_aware(tmp_path):
         f"{provenance_digest(dict(attrs), length=12)}.nc"
     )
     legacy_file.touch()
-    fallback_path = direct_rmse_cache_path(
+    # Hashed legacy names are never picked up: the fixed name is the only path.
+    fixed_path = direct_rmse_cache_path(
         root=tmp_path,
         source=kwargs["source"],
         component="atm",
@@ -146,7 +143,7 @@ def test_direct_rmse_cache_contract_and_name_are_provenance_aware(tmp_path):
         verification_years=kwargs["verification_years"],
         expected_attrs=attrs,
     )
-    assert fallback_path == legacy_file
+    assert fixed_path == path
     legacy_file.unlink()
 
 
@@ -246,39 +243,6 @@ def test_make_obs_like_model_time_supports_dask_model_time():
     assert result.sel(Y=1980, L=3).item() == 3.5
 
 
-def test_matched_ensemble_bootstrap_identifies_lower_rmse():
-    coords = {
-        "Y": [1980, 1981, 1982, 1983],
-        "L": [3],
-        "lat": [30.0],
-        "lon": [250.0],
-    }
-    left = xr.DataArray(
-        np.full((4, 1, 2, 1, 1), 1.0),
-        dims=("Y", "L", "M", "lat", "lon"),
-        coords={**coords, "M": [0, 1]},
-    )
-    right = xr.DataArray(
-        np.full((4, 1, 4, 1, 1), 2.0),
-        dims=("Y", "L", "M", "lat", "lon"),
-        coords={**coords, "M": [0, 1, 2, 3]},
-    )
-
-    result = bootstrap_rmse_diff_matched_ensemble_memorysafe(
-        left,
-        right,
-        nboot=20,
-        seed=7,
-        alpha=0.1,
-    )
-
-    assert result.attrs["matched_ensemble_size"] == 2
-    assert result["rmse_diff"].item() == -1.0
-    assert result["prob_left_lower_rmse"].item() == 1.0
-    assert result["left_better"].item() == 1
-    assert result["right_better"].item() == 0
-
-
 def test_finite_ensemble_comparison_resamples_only_larger_ensemble():
     coords = {
         "Y": [1980, 1981, 1982, 1983],
@@ -359,15 +323,10 @@ def test_resampling_preserves_an_all_missing_boundary_lead():
         coords={**coords, "M": [0, 1, 2, 3]},
     )
 
-    for result in (
-        finite_ensemble_rmse_comparison_memorysafe(
-            left, right, n_iterations=4, seed=7, alpha=0.1
-        ),
-        bootstrap_rmse_diff_matched_ensemble_memorysafe(
-            left, right, nboot=4, seed=7, alpha=0.1
-        ),
-    ):
-        assert result["prob_left_lower_rmse"].sel(L=3).item() == 1.0
-        assert result["prob_left_lower_rmse"].sel(L=24).isnull().all()
-        assert result["left_better"].sel(L=24).isnull().all()
-        assert result["right_better"].sel(L=24).isnull().all()
+    result = finite_ensemble_rmse_comparison_memorysafe(
+        left, right, n_iterations=4, seed=7, alpha=0.1
+    )
+    assert result["prob_left_lower_rmse"].sel(L=3).item() == 1.0
+    assert result["prob_left_lower_rmse"].sel(L=24).isnull().all()
+    assert result["left_better"].sel(L=24).isnull().all()
+    assert result["right_better"].sel(L=24).isnull().all()

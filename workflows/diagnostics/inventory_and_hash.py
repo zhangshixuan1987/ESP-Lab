@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-01_inventory_and_hash.py
+inventory_and_hash.py
 ========================
 Step 1: Discover matched initialization pairs and build a file-level
         SHA-256 audit manifest.
 
 What this script does
 ---------------------
-1. Load config.yaml and build ICConfig.
+1. Load ic_config.yaml and build ICConfig.
 2. Discover all matched start-date directory pairs (BruteForce ↔ JRA55-FOSIRL).
 3. For each matched date and component:
    - Compute SHA-256 for every atmospheric EN00–EN09 member (control check).
@@ -20,16 +20,16 @@ What this script does
 Usage
 -----
     # Pilot date only (default)
-    python 01_inventory_and_hash.py
+    python -m workflows.diagnostics.inventory_and_hash
 
     # Full campaign
-    python 01_inventory_and_hash.py --full-campaign
+    python -m workflows.diagnostics.inventory_and_hash --full-campaign
 
     # Single date
-    python 01_inventory_and_hash.py --date 1980-05-01-00000
+    python -m workflows.diagnostics.inventory_and_hash --date 1980-05-01-00000
 
     # Skip hashing (just file existence check)
-    python 01_inventory_and_hash.py --no-hash
+    python -m workflows.diagnostics.inventory_and_hash --no-hash
 
 Outputs
 -------
@@ -53,7 +53,7 @@ import yaml
 # directly without installing esp_lab.
 # ---------------------------------------------------------------------------
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_REPO_ROOT = _SCRIPT_DIR.parent.parent.parent
+_REPO_ROOT = _SCRIPT_DIR.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
@@ -73,7 +73,7 @@ from esp_lab.diagnostics.ic_io import (
     write_audit_csv,
 )
 
-from .config import build_ic_config, load_config
+from .ic_config import build_ic_config, load_config
 
 
 
@@ -95,7 +95,7 @@ def run(
     Parameters
     ----------
     config_path:
-        Path to config.yaml.
+        Path to ic_config.yaml.
     pilot_only:
         Override the YAML pilot_only setting.
     single_date:
@@ -118,6 +118,7 @@ def run(
     pair = ic_cfg.experiment_pair
     ref_root = Path(pair.ref_root)
     test_root = Path(pair.test_root)
+    out_root = Path(config_path.parent) / ic_cfg.output_root
     subdirs = cfg.get("output", {}).get("subdirs", {})
     manifests_dir = out_root / subdirs.get("manifests", "paired_manifests")
     if not manifests_dir.exists() and (out_root / "manifests").exists():
@@ -233,8 +234,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--config",
-        default=str(Path(__file__).parent / "config.yaml"),
-        help="Path to config.yaml (default: %(default)s)",
+        default=str(Path(__file__).parent / "ic_config.yaml"),
+        help="Path to ic_config.yaml (default: %(default)s)",
     )
     parser.add_argument(
         "--full-campaign",

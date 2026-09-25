@@ -56,3 +56,5 @@ dependencies:
   - xrft # fourier transforms for xarray data
   - xskillscore>=0.0.24
   - zarr
+  - pip:
+      - global-land-mask # land mask used by 7a_tc_method_analysis

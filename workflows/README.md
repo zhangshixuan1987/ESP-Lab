@@ -1,25 +1,22 @@
 # Workflow package layout
 
-The `workflows` package contains high-level orchestration modules directly supporting the `jupyter/` analysis suite (0 through 7). Reusable calculations and data access primitives belong in `esp_lab`.
+The `workflows` package contains high-level orchestration modules directly supporting the `jupyter/s2d_skill/` analysis suite (0 through 8). Reusable calculations and data access primitives belong in `esp_lab`.
 
 | Package | Supported Notebooks | Purpose |
 |---|---|---|
-| `leadtime_skill` | `2b` | Lead-time RMSE comparison and multi-model metrics |
+| `leadtime_skill` | `1a_*`, `1b_*`, `1c_*`, `2a` | Monthly skill preparation, RMSE comparison, and regional ACC summaries |
 | `modes_of_variability` | `4a`, `4b` | Modes-of-variability processing, EOF projection, and teleconnection analysis |
 | `diagnostics` | `3b`, `4b`, `5c`, `6a`, `6b` | Teleconnections (`sst_teleconnections`, `mov_teleconnections`, `teleconnection_inputs`) and initial-shock archive runners |
 
 Each workflow package maintains configuration, discovery, preprocessing, diagnostics, and plotting together. Generated data, figures, and notebook checkpoints do not belong under this directory.
 
-## Additional Workflow Packages (Current Branch)
+## Drift, initialization, and S2S packages (`jupyter/s2d_drift/`, `jupyter/s2s_skill/`)
 
-| Package | Purpose |
+| Package / module | Purpose |
 |---|---|
-| `diagnostics/initial_conditions` | IC hash audit (SHA-256), variable statistics, spatial plots, cross-component physical consistency, and campaign summary across all start dates |
-| `diagnostics/physical_consistency` | Flux partitioning (EF & Bowen ratio), land-atmosphere coupling, precip–SM lag response, ocean coupling, and apparent surface energy residual |
-| `diagnostics/unified` | Master S2D orchestrator: field drift (Branch A), physical consistency (Branch B), model attractor (Branch C), and IC-to-drift attribution (Branch D) |
-| `diagnostics/daily_drift` | Daily-frequency two-reference drift — discovery, preprocessing, diagnostics, plotting, and CLI runner |
-| `diagnostics/monthly_drift` | Monthly-frequency two-reference drift — same structure as `daily_drift` |
-| `e3sm_analysis` | E3SM time-series diagnostics and multi-experiment comparisons |
-| `tropical_cyclones` | TC track density, lead-time diagnostics, and multi-method comparisons |
-
-Corresponding Jupyter notebooks: `5i` (IC analysis), `5j` (physical consistency), `5k` (unified diagnostics), `8a–8b` (tropical cyclones).
+| `diagnostics/{inventory_and_hash,compare_netcdf_structure,compute_ic_statistics,plot_component_differences,check_physical_consistency,summarize_campaign}` | Initial-condition audit steps configured by `diagnostics/ic_config.yaml` (`s2d_drift/0_refactor_ic_analysis`) |
+| `diagnostics/drift_inputs`, `diagnostics/two_reference_drift`, `diagnostics/drift_summary` | Two-reference drift inputs, pipeline, and summaries (`s2d_drift/1a`–`1e`) |
+| `diagnostics/daily_drift`, `diagnostics/monthly_drift` | Daily- and monthly-frequency two-reference drift: discovery, preprocessing, diagnostics, plotting, and CLI runners |
+| `diagnostics/physical_consistency` | Flux partitioning, land–atmosphere coupling, precipitation–soil-moisture response, ocean coupling, and energy/water budgets (`s2d_drift/2a`) |
+| `diagnostics/unified` | Unified S2D orchestrator: field drift, physical consistency, model attractor, and IC-to-drift attribution (`s2d_drift/2b`) |
+| `tropical_cyclones` | TC track density, lead-time diagnostics, and method comparisons (`s2d_skill/7a`, `7b`) |

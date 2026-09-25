@@ -37,7 +37,7 @@ def leadtime_acc_dir(
 ) -> Path:
     """Return a source-first lead-time ACC diagnostic directory.
 
-    Examples are ``<root>/<case>/leadtime_acc/inputs/land/H2OSOI`` and
+    Examples are ``<root>/<case>/leadtime_acc/prepared_skill/lnd/H2OSOI`` and
     ``<root>/<case>/leadtime_acc/skill/atm/TREFHT``. Passing ``root`` keeps
     notebook and command-line configurations explicit and machine portable.
     """

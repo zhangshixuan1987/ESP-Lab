@@ -18,7 +18,6 @@ from esp_lab.leadtime_skill_cache import (
     expected_skill_cache_attrs,
     generate_member_indices,
     member_indices_checksum,
-    provenance_digest,
 )
 from esp_lab.paths import leadtime_acc_dir
 from esp_lab.utils.unit_conversion import (
@@ -179,26 +178,21 @@ def direct_rmse_cache_path(
     verification_years,
     expected_attrs: Mapping | None = None,
 ):
-    """Return a deterministic path for one direct-RMSE result, with fallback to legacy hashed file."""
+    """Return the fixed path for one direct-RMSE result.
+
+    Provenance (``expected_attrs``) is validated from the file's attributes by
+    the caller, not encoded in the name; the argument is accepted for callers
+    that still pass it.
+    """
+    del expected_attrs
     directory = leadtime_acc_dir(
         source, "comparison", component, "direct_rmse", variable, root=root
     )
     directory.mkdir(parents=True, exist_ok=True)
-    canonical = directory / (
+    return directory / (
         f"{safe_model_name(source)}_{variable}_direct_rmse_init{int(init_month):02d}_"
         f"years_{compact_year_tag(verification_years)}.nc"
     )
-    if canonical.exists():
-        return canonical
-    if expected_attrs:
-        legacy = directory / (
-            f"{safe_model_name(source)}_{variable}_direct_rmse_init{int(init_month):02d}_"
-            f"years_{compact_year_tag(verification_years)}_"
-            f"{provenance_digest(dict(expected_attrs), length=12)}.nc"
-        )
-        if legacy.exists():
-            return legacy
-    return canonical
 
 
 def rmse_comparison_fraction(left_rmse, right_rmse, *, iteration_dim="iteration"):
@@ -274,11 +268,6 @@ def valid_area_weighted_fraction(
     numerator = area.where(valid & mask.fillna(False).astype(bool), 0).sum()
     denominator_value = float(denominator)
     return float(numerator / denominator) if denominator_value > 0 else np.nan
-
-
-def area_weighted_mask_fraction(mask):
-    """Return the cosine-latitude-weighted fraction where a mask is true."""
-    return valid_area_weighted_fraction(mask, valid=mask.notnull())
 
 
 def normalize_y_to_year(obj, require_y=False):
@@ -539,11 +528,6 @@ def prepare_member_error(model_da, obs_da, common_years):
     return model_da - obs_da
 
 
-def _nanmean_sq(arr):
-    """Mean of squared errors over year/member axes, preserving lat/lon."""
-    return _nanmean_preserve_missing(arr * arr, axis=(0, 1), dtype=np.float64)
-
-
 def _nanmean_preserve_missing(arr, axis=None, dtype=None):
     """Compute nanmean while allowing intentionally all-missing slices."""
     with warnings.catch_warnings():
@@ -565,216 +549,6 @@ def _finite_comparison_probability(left, right, axis=0):
         where=valid_count > 0,
     )
     return probability
-
-
-def bootstrap_rmse_diff_member_level_memorysafe(
-    e3sm_err,
-    smyle_err,
-    nboot=100,
-    seed=42,
-    alpha=0.05,
-):
-    """Memory-safe RMSE-difference bootstrap using year/member resampling."""
-    rng = np.random.default_rng(seed)
-    e3sm_err, smyle_err = xr.align(
-        e3sm_err, smyle_err, join="inner", exclude={"M"}
-    )
-
-    if set(e3sm_err["L"].values.tolist()) != set(smyle_err["L"].values.tolist()):
-        common_leads = np.intersect1d(e3sm_err["L"].values, smyle_err["L"].values)
-        e3sm_err = e3sm_err.sel(L=common_leads)
-        smyle_err = smyle_err.sel(L=common_leads)
-
-    leads = [int(l) for l in e3sm_err["L"].values]
-    lat = e3sm_err["lat"].values
-    lon = e3sm_err["lon"].values
-
-    out_rmse_diff = []
-    out_rmse_e3sm = []
-    out_rmse_smyle = []
-    out_prob = []
-    out_p = []
-    out_sig_better = []
-    out_sig_worse = []
-
-    for lead in leads:
-        print(f"    bootstrap lead L={lead}")
-
-        e = e3sm_err.sel(L=lead).transpose("Y", "M", "lat", "lon").astype("float32").load().values
-        s = smyle_err.sel(L=lead).transpose("Y", "M", "lat", "lon").astype("float32").load().values
-
-        n_year = e.shape[0]
-        nmem_e3sm = e.shape[1]
-        nmem_smyle = s.shape[1]
-
-        rmse_e_obs = np.sqrt(_nanmean_sq(e)).astype("float32")
-        rmse_s_obs = np.sqrt(_nanmean_sq(s)).astype("float32")
-        rmse_diff_obs = (rmse_e_obs - rmse_s_obs).astype("float32")
-        bootstrap_diffs = []
-
-        for _ in range(nboot):
-            y_index = rng.integers(0, n_year, size=n_year)
-            m_index_e3sm = rng.integers(0, nmem_e3sm, size=nmem_e3sm)
-            m_index_smyle = rng.integers(0, nmem_smyle, size=nmem_smyle)
-            e_sample = e[np.ix_(y_index, m_index_e3sm)]
-            s_sample = s[np.ix_(y_index, m_index_smyle)]
-            boot_diff = np.sqrt(_nanmean_sq(e_sample)) - np.sqrt(_nanmean_sq(s_sample))
-            bootstrap_diffs.append(boot_diff)
-
-        bootstrap_diffs = np.asarray(bootstrap_diffs)
-        prob = _finite_comparison_probability(
-            bootstrap_diffs,
-            np.zeros_like(bootstrap_diffs),
-        )
-        p_two = (2.0 * np.minimum(prob, 1.0 - prob)).clip(0, 1).astype("float32")
-        valid_prob = np.isfinite(prob)
-        sig_better = np.where(valid_prob, prob > (1.0 - alpha / 2.0), np.nan).astype("float32")
-        sig_worse = np.where(valid_prob, prob < (alpha / 2.0), np.nan).astype("float32")
-
-        coords = {"lat": lat, "lon": lon}
-        out_rmse_e3sm.append(xr.DataArray(rmse_e_obs, dims=("lat", "lon"), coords=coords).expand_dims(L=[lead]))
-        out_rmse_smyle.append(xr.DataArray(rmse_s_obs, dims=("lat", "lon"), coords=coords).expand_dims(L=[lead]))
-        out_rmse_diff.append(xr.DataArray(rmse_diff_obs, dims=("lat", "lon"), coords=coords).expand_dims(L=[lead]))
-        out_prob.append(xr.DataArray(prob, dims=("lat", "lon"), coords=coords).expand_dims(L=[lead]))
-        out_p.append(xr.DataArray(p_two, dims=("lat", "lon"), coords=coords).expand_dims(L=[lead]))
-        out_sig_better.append(xr.DataArray(sig_better, dims=("lat", "lon"), coords=coords).expand_dims(L=[lead]))
-        out_sig_worse.append(xr.DataArray(sig_worse, dims=("lat", "lon"), coords=coords).expand_dims(L=[lead]))
-
-        del e, s, bootstrap_diffs
-
-    ds_out = xr.Dataset(
-        {
-            "rmse_diff": xr.concat(out_rmse_diff, dim="L").astype("float32"),
-            "rmse_e3sm": xr.concat(out_rmse_e3sm, dim="L").astype("float32"),
-            "rmse_smyle": xr.concat(out_rmse_smyle, dim="L").astype("float32"),
-            "prob_e3sm_lower_rmse": xr.concat(out_prob, dim="L").astype("float32"),
-            "p_two_sided_bootstrap": xr.concat(out_p, dim="L").astype("float32"),
-            "significant_e3sm_better": xr.concat(out_sig_better, dim="L").astype("float32"),
-            "significant_e3sm_worse": xr.concat(out_sig_worse, dim="L").astype("float32"),
-        }
-    )
-    ds_out["rmse_diff"].attrs["description"] = "E3SM RMSE minus CESM-SMYLE RMSE; negative means E3SM lower RMSE"
-    ds_out["prob_e3sm_lower_rmse"].attrs["description"] = "Bootstrap fraction with E3SM RMSE lower than CESM-SMYLE"
-    ds_out.attrs["bootstrap_method"] = "Memory-safe year/member bootstrap; probability-based significance; exploratory for 3-4 years"
-    ds_out.attrs["nboot"] = int(nboot)
-    ds_out.attrs["alpha"] = float(alpha)
-    return ds_out
-
-
-def bootstrap_rmse_diff_matched_ensemble_memorysafe(
-    left_err,
-    right_err,
-    nboot=100,
-    seed=42,
-    alpha=0.1,
-):
-    """Bootstrap ensemble-mean RMSE differences using matched ensemble sizes.
-
-    Years are resampled as paired verification cases. For each bootstrap
-    replicate, both ensembles are sampled without replacement to the smaller
-    member count, averaged over members, and then scored over years.
-    """
-    rng = np.random.default_rng(seed)
-    left_err, right_err = xr.align(
-        left_err, right_err, join="inner", exclude={"M"}
-    )
-
-    common_leads = np.intersect1d(left_err["L"].values, right_err["L"].values)
-    left_err = left_err.sel(L=common_leads)
-    right_err = right_err.sel(L=common_leads)
-
-    leads = [int(lead) for lead in common_leads]
-    lat = left_err["lat"].values
-    lon = left_err["lon"].values
-
-    out_diff = []
-    out_prob = []
-    out_p = []
-    out_left_better = []
-    out_right_better = []
-
-    for lead in leads:
-        print(f"    matched-ensemble bootstrap lead L={lead}")
-
-        left = (
-            left_err.sel(L=lead)
-            .transpose("Y", "M", "lat", "lon")
-            .astype("float32")
-            .load()
-            .values
-        )
-        right = (
-            right_err.sel(L=lead)
-            .transpose("Y", "M", "lat", "lon")
-            .astype("float32")
-            .load()
-            .values
-        )
-
-        n_year = left.shape[0]
-        matched_nmem = min(left.shape[1], right.shape[1])
-        left_obs = np.sqrt(_nanmean_preserve_missing(_nanmean_preserve_missing(left, axis=1) ** 2, axis=0))
-        right_obs = np.sqrt(_nanmean_preserve_missing(_nanmean_preserve_missing(right, axis=1) ** 2, axis=0))
-        diff_obs = (left_obs - right_obs).astype("float32")
-        bootstrap_diffs = []
-
-        for _ in range(nboot):
-            year_index = rng.integers(0, n_year, size=n_year)
-            left_members = rng.choice(left.shape[1], matched_nmem, replace=False)
-            right_members = rng.choice(right.shape[1], matched_nmem, replace=False)
-
-            left_mean = left[np.ix_(year_index, left_members)].mean(axis=1)
-            right_mean = right[np.ix_(year_index, right_members)].mean(axis=1)
-            boot_diff = (
-                np.sqrt(_nanmean_preserve_missing(left_mean ** 2, axis=0))
-                - np.sqrt(_nanmean_preserve_missing(right_mean ** 2, axis=0))
-            )
-            bootstrap_diffs.append(boot_diff)
-
-        bootstrap_diffs = np.asarray(bootstrap_diffs)
-        prob = _finite_comparison_probability(
-            bootstrap_diffs,
-            np.zeros_like(bootstrap_diffs),
-        )
-        p_two = (2.0 * np.minimum(prob, 1.0 - prob)).clip(0, 1).astype("float32")
-        valid_prob = np.isfinite(prob)
-        left_better = np.where(valid_prob, prob >= 1.0 - alpha, np.nan).astype("float32")
-        right_better = np.where(valid_prob, prob <= alpha, np.nan).astype("float32")
-        coords = {"lat": lat, "lon": lon}
-
-        def as_lead(data):
-            return xr.DataArray(
-                data, dims=("lat", "lon"), coords=coords
-            ).expand_dims(L=[lead])
-
-        out_diff.append(as_lead(diff_obs))
-        out_prob.append(as_lead(prob))
-        out_p.append(as_lead(p_two))
-        out_left_better.append(as_lead(left_better))
-        out_right_better.append(as_lead(right_better))
-
-        del left, right, bootstrap_diffs
-
-    ds_out = xr.Dataset(
-        {
-            "rmse_diff": xr.concat(out_diff, dim="L").astype("float32"),
-            "prob_left_lower_rmse": xr.concat(out_prob, dim="L").astype("float32"),
-            "p_two_sided_bootstrap": xr.concat(out_p, dim="L").astype("float32"),
-            "left_better": xr.concat(out_left_better, dim="L").astype("float32"),
-            "right_better": xr.concat(out_right_better, dim="L").astype("float32"),
-        }
-    )
-    ds_out.attrs.update(
-        bootstrap_method=(
-            "Paired-year bootstrap with matched member subsampling; "
-            "ensemble mean before RMSE"
-        ),
-        nboot=int(nboot),
-        alpha=float(alpha),
-        matched_ensemble_size=int(matched_nmem),
-        interpretation="Exploratory robustness evidence for 3-4 verification years",
-    )
-    return ds_out
 
 
 def finite_ensemble_rmse_comparison_memorysafe(

@@ -1,6 +1,7 @@
 """Checks for standalone orchestration in the refactored MOV notebook."""
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -9,8 +10,9 @@ from workflows.modes_of_variability import orchestration
 from workflows.modes_of_variability import figure_config
 
 
-_mov_matches = list((Path(__file__).resolve().parents[1] / "jupyter").rglob("4a_mov_analysis.ipynb"))
-NOTEBOOK = _mov_matches[0] if _mov_matches else (Path(__file__).resolve().parents[1] / "jupyter" / "4a_mov_analysis.ipynb")
+NOTEBOOK = (
+    Path(__file__).resolve().parents[1] / "jupyter" / "s2d_skill" / "4a_mov_analysis.ipynb"
+)
 
 
 def _settings(tmp_path, **overrides):
@@ -58,8 +60,10 @@ def test_notebook_defaults_to_cache_only_analysis_policy():
         "".join(cell.get("source", []))
         for cell in json.loads(NOTEBOOK.read_text())["cells"]
     )
-    assert 'mov_input_mode = "require"' in source
-    assert "force_recompute_skill = False" in source
+    assert re.search(r'^derivation_mode = "(auto|rebuild|require)"', source, re.M)
+    assert "mov_input_mode = derivation_mode" in source
+    assert "recompute_skill = False" in source
+    assert "force_recompute_skill = recompute_skill" in source
     assert "ensure_mode_products(MOV_INPUT_SETTINGS)" in source
     assert "0_run*` notebook is a prerequisite" in source
 

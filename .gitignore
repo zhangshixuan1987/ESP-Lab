@@ -145,3 +145,4 @@ docs/source/tutorials/dask-worker*
 notebooks/
 temp/
 trash/
+scratch/

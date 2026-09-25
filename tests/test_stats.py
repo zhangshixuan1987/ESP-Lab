@@ -5,56 +5,11 @@ import pytest
 import xarray as xr
 import xskillscore as xs
 
-from esp_lab.stats import cor_ci_bootyears
 from esp_lab.stats import compute_skill_seasonal_batch
 from esp_lab.stats import compute_resampled_nrmse_prepared
 from esp_lab.stats import detrend_linear
 from esp_lab.stats import prepare_skill_seasonal_lead
 from esp_lab.stats import _climatology_mean_by_year
-
-
-def test_cor_ci_bootyears():
-    """
-    Test the cor_ci_bootyears function.
-    """
-    ts1 = np.array([1, 2, 3, 1, 2, 3, 1, 2, 3])
-    ts2 = ts1*1.3
-
-    result = cor_ci_bootyears(ts1, ts2)
-    if np.isnan(result[0]) or np.isnan(result[1]):
-        result = cor_ci_bootyears(ts1, ts2)
-
-    # Two very similar arrays should be highly correlated
-    if not np.isnan(result[0]):
-        if not np.isnan(result[1]):
-            assert result[0] > 0.9
-            assert result[1] < 1.1
-
-
-def test_cor_ci_bootyears_two_different_array_sizes():
-    """
-    Test that the cor_ci_bootyears function fails with
-    two differently sized arrays.
-    """
-    ts1 = np.array([1, 2, 3, 1, 2, 3, 1, 2, 3])
-    ts2 = np.array([1, 2, 3])
-
-    with pytest.raises(SystemExit) as e:
-        cor_ci_bootyears(ts1, ts2)
-
-    assert e.type == SystemExit
-
-
-def test_cor_ci_bootyears_seed():
-    """
-    Test that the cor_ci_bootyears function random seed
-    generates the same exact result each time
-    """
-    ts1 = np.array([15, 24, 35, 11, 52, 63, 71, 22, 83])
-    ts2 = np.array([10, 22, 34, 11, 33, 57, 22, 71, 90])
-    result = cor_ci_bootyears(ts1, ts2, seed=123)
-
-    assert result == (-0.22524093559047992, 0.9763300171129478)
 
 
 def test_detrend_linear():

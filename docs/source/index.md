@@ -3,7 +3,7 @@
 ESP-Lab provides tools and workflows for evaluating Earth System Prediction hindcasts, including lead-time skill maps, RMSE diagnostics, SST indices, modes of variability, equatorial longitude indices (ELI), initial-shock analyses, and interactive diagnostic web galleries across E3SM, CESM-SMYLE, NMME, and observation benchmarks.
 
 ## Live Diagnostics Gallery
-Browse precomputed diagnostic figures across all forecast leads, initialization seasons, and models in the interactive [ESP-Lab Diagnostics Portal](https://portal.nersc.gov/cfs/e3sm/zhan391/esp-lab_diag/index.html).
+Browse precomputed diagnostic figures across all forecast leads, initialization seasons, and models in the interactive [E3SM-S2D Diagnostics Portal](https://portal.nersc.gov/cfs/e3sm/zhan391/e3sm-s2d_diag/). The [Diagnostics Gallery](gallery.md) page describes its sections and shows example figures.
 
 ## Getting in touch
 
@@ -28,6 +28,7 @@ caption: User Guides & Tutorials
 
 how-to/index.md
 tutorials/index.md
+gallery.md
 reference/index.md
 ```
 

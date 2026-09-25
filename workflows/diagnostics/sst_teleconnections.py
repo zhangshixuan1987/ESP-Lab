@@ -13,9 +13,13 @@ import pandas as pd
 import xarray as xr
 from scipy import stats as scipy_stats
 
-DEFAULT_DIAG_ROOT = Path("/global/cfs/cdirs/e3sm/S2S2D/s2d_diag")
-DEFAULT_OUTPUT_DIR = Path("/global/cfs/cdirs/e3sm/S2S2D/s2d_diag/multimodel/leadtime_telec")
-DEFAULT_FIGURE_DIR = Path("/global/cfs/cdirs/e3sm/www/zhan391/esp-lab_diag/teleconnections")
+from esp_lab.leadtime_prepared_cache import grid_token
+from esp_lab import env_paths
+from esp_lab.utils.filename_utils import resolve_year_span_path, sst_index_filename
+
+DEFAULT_DIAG_ROOT = env_paths.s2d_diag_root()
+DEFAULT_OUTPUT_DIR = DEFAULT_DIAG_ROOT / "multimodel" / "leadtime_telec"
+DEFAULT_FIGURE_DIR = env_paths.figure_root() / "teleconnections"
 DEFAULT_DOWNSTREAM_TARGET_GRIDS = {
     "atmosphere": "latlon_1.0x1.0_periodic-True",
     "land": "1x1deg_cell_centered",
@@ -29,6 +33,17 @@ SYSTEM_DIR_MAP: dict[str, str] = {
     "E3SM-BruteForce": "Reanalysis",
     "CESM-SMYLE": "CESM-SMYLE",
 }
+
+
+def system_telec_path(diag_root: Path, system: str, filename: str) -> Path:
+    """Return one system's teleconnection slice, prefixed with its folder name."""
+    dir_name = SYSTEM_DIR_MAP.get(system, system)
+    return Path(diag_root) / dir_name / "leadtime_telec" / f"{dir_name}_{filename}"
+
+
+def observed_telec_path(diag_root: Path, filename: str) -> Path:
+    """Return the observed teleconnection slice under ``observations/leadtime_telec``."""
+    return Path(diag_root) / "observations" / "leadtime_telec" / f"observations_{filename}"
 
 
 MEMBER_DIMS = ("M", "member", "ensemble")
@@ -474,29 +489,32 @@ def upstream_sst_paths(
     eli_grid: str = "regridded",
     ensemble_member_count: int = 10,
     monthly_nlead: int = 24,
+    years: Sequence[int] = (1980, 2011),
 ) -> tuple[Path, Path]:
-    """Return forecast and observed seasonal upstream-index cache paths."""
+    """Return forecast and observed seasonal upstream-index cache paths.
+
+    The forecast file covering ``years`` is used, preferring an exact span and
+    otherwise the narrowest longer one (years are selected downstream).
+    """
     case = E3SM_CASES[system]
     base = diag_root / case["cache_tag"] / "sst_index" / "timeseries"
+    name_args = (case["cache_tag"], init_month, years, ensemble_member_count, monthly_nlead)
     if index_name == "ELI":
         if eli_grid not in {"regridded", "native"}:
             raise ValueError("inputs.eli_grid must be 'regridded' or 'native'")
-        native_tag = "_native" if eli_grid == "native" else ""
-        forecast = base / (
-            f"E3SMLE{init_month:02d}_ELI{native_tag}_"
-            f"N{int(ensemble_member_count):02d}_M{int(monthly_nlead):02d}_seas.nc"
-        )
+        forecast = resolve_year_span_path(base / sst_index_filename(
+            *name_args, native=eli_grid == "native", seasonal=True
+        ))
         observed = (
-            diag_root / "HadISST2" / "sst_index" / "timeseries"
+            diag_root / "observations" / "sst_index" / "timeseries"
             / "HadISST2_sst_ELI_seas.nc"
         )
     else:
-        forecast = base / (
-            f"E3SMLE{init_month:02d}_TS_N{int(ensemble_member_count):02d}_"
-            f"M{int(monthly_nlead):02d}_{index_name}SST_seas.nc"
-        )
+        forecast = resolve_year_span_path(base / sst_index_filename(
+            *name_args, index=index_name, field="TS", seasonal=True
+        ))
         observed = (
-            diag_root / "HadISST2" / "sst_index" / "timeseries"
+            diag_root / "observations" / "sst_index" / "timeseries"
             / f"HadISST2_sst_{index_name}SST_seas.nc"
         )
     return forecast, observed
@@ -530,11 +548,12 @@ def land_candidates(
     pattern = f"*{init_month:02d}*{depth}*.nc" if depth else f"*{init_month:02d}*.nc"
     obs_pattern = f"*{depth}*.nc" if depth else "*.nc"
 
-    m_root = diag_root / tag / "leadtime_acc" / "inputs" / "land" / variable
+    m_root = diag_root / tag / "leadtime_acc" / "prepared_skill" / "lnd" / variable
     model = list(m_root.glob(pattern)) if m_root.is_dir() else []
+    # References share one tree; keep only this variable's reference product.
     ref = DOWNSTREAM_VARIABLES[variable]["reference"]
-    o_root = diag_root / ref / "leadtime_acc" / "inputs" / "land" / variable
-    obs = list(o_root.glob(obs_pattern)) if o_root.is_dir() else []
+    o_root = diag_root / "observations" / "leadtime_acc" / "prepared_skill" / "lnd" / variable
+    obs = list(o_root.glob(f"{ref}_{obs_pattern}")) if o_root.is_dir() else []
     return model, obs
 
 
@@ -722,6 +741,7 @@ def build_teleconnection_inventory(config: Mapping[str, Any]) -> pd.DataFrame:
                 eli_grid=str(config.get("inputs", {}).get("eli_grid", "regridded")),
                 ensemble_member_count=int(config.get("inputs", {}).get("ensemble_member_count", 10)),
                 monthly_nlead=int(config.get("inputs", {}).get("monthly_nlead", 24)),
+                years=tuple(config.get("inputs", {}).get("initialization_years", (1980, 2011))),
             )
             for variable in downstream_vars:
                 spec = DOWNSTREAM_VARIABLES[variable]
@@ -866,6 +886,7 @@ def open_inputs(
         eli_grid=str(config.get("inputs", {}).get("eli_grid", "regridded")),
         ensemble_member_count=int(config.get("inputs", {}).get("ensemble_member_count", 10)),
         monthly_nlead=int(config.get("inputs", {}).get("monthly_nlead", 24)),
+        years=tuple(config.get("inputs", {}).get("initialization_years", (1980, 2011))),
     )
     fld_fcst_path, fld_obs_path = resolve_downstream_paths(
         system,
@@ -1153,10 +1174,7 @@ def ensure_teleconnection_dataset(
         else [str(s) for s in config.get("selection", {}).get("systems", [])]
     )
     if systems and cache_mode != "rebuild":
-        sys_files = [
-            diag_root / SYSTEM_DIR_MAP.get(s, s) / "leadtime_telec" / filename
-            for s in systems
-        ]
+        sys_files = [system_telec_path(diag_root, s, filename) for s in systems]
         if all(p.is_file() for p in sys_files):
             slices = []
             for p in sys_files:
@@ -1174,13 +1192,9 @@ def ensure_teleconnection_dataset(
 
     # 2. Fallback check: direct out_file or legacy candidates
     if not out_file.is_file():
-        clean_index = str(index_name).replace(".", "").strip()
         candidates = [
             diag_root / "multimodel" / "leadtime_telec" / filename,
             diag_root / "teleconnections" / filename,
-            output_dir / f"teleconnection_{clean_index}_{fingerprint}.nc",
-            diag_root / "multimodel" / "leadtime_telec" / f"teleconnection_{clean_index}_{fingerprint}.nc",
-            diag_root / "teleconnections" / f"teleconnection_{clean_index}_{fingerprint}.nc",
         ]
         for cand in candidates:
             if cand.is_file():
@@ -1229,21 +1243,19 @@ def ensure_teleconnection_dataset(
     # Save per-system slices to <Experiment>/leadtime_telec/
     if "system" in metrics_ds:
         for sys_val in metrics_ds["system"].values:
-            sys_str = str(sys_val)
-            dir_name = SYSTEM_DIR_MAP.get(sys_str, sys_str)
-            sys_dir = diag_root / dir_name / "leadtime_telec"
-            sys_dir.mkdir(parents=True, exist_ok=True)
-            sys_tmp = sys_dir / f".{filename}.tmp.nc"
+            sys_file = system_telec_path(diag_root, str(sys_val), filename)
+            sys_file.parent.mkdir(parents=True, exist_ok=True)
+            sys_tmp = sys_file.parent / f".{sys_file.name}.tmp.nc"
             metrics_ds.sel(system=[sys_val]).to_netcdf(sys_tmp)
-            sys_tmp.replace(sys_dir / filename)
+            sys_tmp.replace(sys_file)
 
     obs_vars = [v for v in metrics_ds.data_vars if "observed" in v or v == "downstream_lead"]
     if obs_vars:
-        obs_dir = diag_root / "observations" / "leadtime_telec"
-        obs_dir.mkdir(parents=True, exist_ok=True)
-        obs_tmp = obs_dir / f".{filename}.tmp.nc"
+        obs_file = observed_telec_path(diag_root, filename)
+        obs_file.parent.mkdir(parents=True, exist_ok=True)
+        obs_tmp = obs_file.parent / f".{obs_file.name}.tmp.nc"
         metrics_ds[obs_vars].isel(system=0).drop_vars("system", errors="ignore").to_netcdf(obs_tmp)
-        obs_tmp.replace(obs_dir / filename)
+        obs_tmp.replace(obs_file)
 
     # Only write to out_file if caller explicitly specified a non-multimodel output_dir (e.g. tests)
     if "multimodel" not in str(output_dir):
@@ -1253,9 +1265,7 @@ def ensure_teleconnection_dataset(
         tmp.replace(out_file)
 
     first_sys_file = (
-        diag_root / SYSTEM_DIR_MAP.get(systems[0], systems[0]) / "leadtime_telec" / filename
-        if systems
-        else out_file
+        system_telec_path(diag_root, systems[0], filename) if systems else out_file
     )
     return metrics_ds, first_sys_file, "computed"
 
@@ -1271,6 +1281,19 @@ def _ready_source_paths(inventory: pd.DataFrame) -> list[str]:
                     paths.append(str(val))
     return paths
 
+
+
+def output_grid_token(config: Mapping[str, Any], variables: Sequence[str]) -> str:
+    """Readable resolution tag (e.g. ``1x1deg``) for teleconnection output names.
+
+    Joins distinct grids with ``-`` when several downstream variables are
+    combined on different grids; empty when no known variable is given.
+    """
+    tokens = sorted({
+        grid_token(downstream_target_grid(config, variable))
+        for variable in variables if variable in DOWNSTREAM_VARIABLES
+    })
+    return "-".join(tokens)
 
 
 def teleconnection_cache_path(
@@ -1310,6 +1333,15 @@ def _teleconnection_cache_details(
     else:
         year_suffix = "_verify1981_2011"
 
+    if variable != "ALL":
+        grid_variables = [variable]
+    elif inventory is not None and "variable" in inventory.columns:
+        grid_variables = [str(v).upper() for v in inventory["variable"].dropna().unique()]
+    else:
+        grid_variables = []
+    grid_tag = output_grid_token(config, grid_variables)
+    grid_suffix = f"_{grid_tag}" if grid_tag else ""
+
     output_dir = Path(config["paths"].get("output_dir", DEFAULT_OUTPUT_DIR))
-    path = output_dir / f"teleconnection_{index_name}_{variable}{year_suffix}.nc"
+    path = output_dir / f"teleconnection_{index_name}_{variable}{year_suffix}{grid_suffix}.nc"
     return path, fingerprint, source_paths

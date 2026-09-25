@@ -46,7 +46,7 @@ def test_atmospheric_expected_uses_selected_run_and_regrid_contract():
         _config(), "E3SM-FOSIRL", 5, "TREFHT"
     )
 
-    assert path.name.startswith("JRA55_FOSIRL_05_TREFHT_seasonal_anomaly_")
+    assert path.name.startswith("JRA55_FOSIRL_init05_TREFHT_seasonal_anomaly_")
     assert expected["requested_year_count"] == 32
     assert expected["target_grid"] == "latlon_5.0x5.0_periodic-True"
     assert expected["regridding_method"] == "conservative"

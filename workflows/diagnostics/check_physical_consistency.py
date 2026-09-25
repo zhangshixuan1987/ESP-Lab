@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-05_check_physical_consistency.py
+check_physical_consistency.py
 =================================
 Step 5: Check cross-component physical consistency at coupled interfaces.
 
@@ -17,9 +17,9 @@ BruteForce–FOSIRL differences.
 
 Usage
 -----
-    python 05_check_physical_consistency.py
-    python 05_check_physical_consistency.py --full-campaign
-    python 05_check_physical_consistency.py --date 1980-05-01-00000
+    python -m workflows.diagnostics.check_physical_consistency
+    python -m workflows.diagnostics.check_physical_consistency --full-campaign
+    python -m workflows.diagnostics.check_physical_consistency --date 1980-05-01-00000
 
 Outputs
 -------
@@ -39,7 +39,7 @@ import pandas as pd
 import xarray as xr
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_REPO_ROOT = _SCRIPT_DIR.parent.parent.parent
+_REPO_ROOT = _SCRIPT_DIR.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
@@ -54,7 +54,7 @@ from esp_lab.diagnostics.ic_io import (
     open_restart_file,
 )
 
-from .config import build_ic_config, load_config
+from .ic_config import build_ic_config, load_config
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +308,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="IC Analysis Step 5: Check cross-component physical consistency."
     )
-    parser.add_argument("--config", default=str(_SCRIPT_DIR / "config.yaml"))
+    parser.add_argument("--config", default=str(_SCRIPT_DIR / "ic_config.yaml"))
     parser.add_argument("--full-campaign", action="store_true")
     parser.add_argument("--date", default=None)
     args = parser.parse_args()

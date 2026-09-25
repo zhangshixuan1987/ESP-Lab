@@ -15,6 +15,7 @@ import xarray as xr
 from esp_lab.paths import leadtime_acc_dir
 from esp_lab.leadtime_prepared_cache import cache_status
 from esp_lab.utils.netcdf_utils import atomic_to_netcdf
+from esp_lab.utils.filename_utils import source_init_prefix
 
 
 SOURCE_FINGERPRINT_VERSION = "1"
@@ -63,16 +64,16 @@ class SkillComparisonCacheLayout:
             f"seed{self.random_seed}_{year_token}"
         )
         smyle = self._directory("CESM-SMYLE", "comparison", "resampled_skill") / (
-            f"BSMYLE{init_month:02d}_{self._base}_"
+            f"{source_init_prefix('CESM-SMYLE', init_month)}_{self._base}_"
             f"resamp_to_{case_tag}_skill_{self._trend}_{mode}.nc"
         )
         e3sm = self._directory(case_tag, "comparison", "fixed_skill") / (
-            f"{case_tag}{init_month:02d}_{self._base}_fixed_skill_"
+            f"{source_init_prefix(case_tag, init_month)}_{self._base}_fixed_skill_"
             f"{self._trend}_{year_token}.nc"
         )
         fraction = self._directory(case_tag, "comparison", "fraction_gt_smyle") / (
-            f"BSMYLE_gt_{case_tag}{init_month:02d}_{self._base}_"
-            f"fraction_{self._trend}_{mode}.nc"
+            f"{source_init_prefix(case_tag, init_month)}_{self._base}_"
+            f"CESM-SMYLE_gt_fraction_{self._trend}_{mode}.nc"
         )
         return smyle, e3sm, fraction
 
@@ -80,11 +81,11 @@ class SkillComparisonCacheLayout:
         """Return SMYLE and E3SM comparison-anomaly paths."""
         year_token = self._year_token(years)
         smyle = self._directory("CESM-SMYLE", "comparison", "anomalies") / (
-            f"BSMYLE{init_month:02d}_{self._base}_"
+            f"{source_init_prefix('CESM-SMYLE', init_month)}_{self._base}_"
             f"compare_anom_for_{case_tag}_{self._trend}_{year_token}.nc"
         )
         e3sm = self._directory(case_tag, "comparison", "anomalies") / (
-            f"{case_tag}{init_month:02d}_{self._base}_compare_anom_"
+            f"{source_init_prefix(case_tag, init_month)}_{self._base}_compare_anom_"
             f"{self._trend}_{year_token}.nc"
         )
         return smyle, e3sm

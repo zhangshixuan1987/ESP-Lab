@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-06_summarize_campaign.py
+summarize_campaign.py
 =========================
 Step 6: Aggregate IC difference statistics across all matched start dates
         and produce the campaign-level summary.
@@ -22,8 +22,8 @@ What this script does
 
 Usage
 -----
-    python 06_summarize_campaign.py
-    python 06_summarize_campaign.py --full-campaign
+    python -m workflows.diagnostics.summarize_campaign
+    python -m workflows.diagnostics.summarize_campaign --full-campaign
 
 Outputs
 -------
@@ -47,15 +47,13 @@ import numpy as np
 import pandas as pd
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_REPO_ROOT = _SCRIPT_DIR.parent.parent.parent
+_REPO_ROOT = _SCRIPT_DIR.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from esp_lab.diagnostics.ic_core import aggregate_campaign_stats
-from esp_lab.diagnostics.products import standardize_product_table, write_product_bundle
-from esp_lab.diagnostics.store import config_fingerprint
 
-from .config import build_ic_config, load_config
+from .ic_config import build_ic_config, load_config
 
 FONTZ = 11
 FIG_DPI = 150
@@ -220,57 +218,6 @@ def run(
         except Exception as exc:
             warnings.warn(f"  Heatmap failed: {exc}", stacklevel=2)
 
-    # Standard Branch-0 products for 5f. Preserve one row per start and metric;
-    # native-grid difference fields stay in NetCDF and are linked by manifest.
-    metric_columns = [
-        name for name in (
-            "mean_diff", "mad", "rmse", "nrmse", "pattern_corr",
-            "p05_diff", "p50_diff", "p95_diff", "frac_exceeding_threshold",
-        )
-        if name in all_stats.columns
-    ]
-    product_rows = []
-    for record in all_stats.to_dict(orient="records"):
-        start = str(record.get("start_date", ""))
-        for metric in metric_columns:
-            value = record.get(metric)
-            if pd.isna(value):
-                continue
-            product_rows.append({
-                "start_date": start,
-                "init_year": int(start[:4]) if len(start) >= 4 else np.nan,
-                "init_month": int(start[5:7]) if len(start) >= 7 else np.nan,
-                "component": record.get("component"),
-                "variable": record.get("variable"),
-                "units": record.get("units", record.get("native_units")),
-                "native_grid_id": record.get("grid_signature", record.get("grid_id")),
-                "lead_units": "initial_condition",
-                "lead_start": 0, "lead_end": 0, "baseline": "time-zero restart",
-                "metric_name": f"ic_{metric}", "value": float(value),
-                "sample_count": record.get("n_valid"),
-            })
-    if product_rows:
-        fingerprint = config_fingerprint(ic_cfg, variable="all_initial_conditions")
-        product_table = standardize_product_table(
-            product_rows, workflow="5i_initial_conditions",
-            configuration_hash=fingerprint,
-            defaults={
-                "region": "native_grid", "member_aggregation": "per_restart_pair",
-                "significance_method": "not_applicable",
-            },
-        )
-        write_product_bundle(
-            cs_dir / "products", product_table,
-            workflow="5i_initial_conditions", configuration_hash=fingerprint,
-            field_paths=sorted(vs_dir.glob("*_diff.nc")),
-            metadata={
-                "inventory_status": "candidate_inventory",
-                "percentile_weighting": "recorded per variable in statistics metadata",
-                "cross_component_pointwise_comparison": False,
-                "native_grid_only": True,
-            },
-        )
-
     return campaign_df
 
 
@@ -278,7 +225,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="IC Analysis Step 6: Aggregate campaign-level summary."
     )
-    parser.add_argument("--config", default=str(_SCRIPT_DIR / "config.yaml"))
+    parser.add_argument("--config", default=str(_SCRIPT_DIR / "ic_config.yaml"))
     parser.add_argument("--full-campaign", action="store_true")
     args = parser.parse_args()
     run(

@@ -26,7 +26,7 @@ def test_upstream_mov_paths_default():
     diag_root = Path("/tmp/mock_diag_root")
     fcst, obs = mov_telecon.upstream_mov_paths("E3SM-FOSIRL", 5, "NAM", diag_root=diag_root)
     assert fcst == diag_root / "JRA55_FOSIRL/modes_variability/modes/nam/indices/JRA55_FOSIRL_init05_nam.nc"
-    assert obs == diag_root / "ERA5/modes_variability/modes/nam/indices/era5_nam_reference.nc"
+    assert obs == diag_root / "observations/modes_variability/modes/nam/indices/era5_nam_reference.nc"
 
 
 def test_upstream_mov_paths_with_manifest(tmp_path):
@@ -70,7 +70,7 @@ def test_mov_cache_path_is_descriptive_and_stable(tmp_path):
     }
 
     assert mov_telecon.mov_teleconnection_cache_path(config) == (
-        tmp_path / "teleconnection_NPO_H2OSOI_verify1981_2011.nc"
+        tmp_path / "teleconnection_NPO_H2OSOI_verify1981_2011_1x1deg.nc"
     )
 
 

@@ -19,7 +19,6 @@ from workflows.diagnostics.sst_teleconnections import (
     DOWNSTREAM_VARIABLES,
     E3SM_CASES,
     MEMBER_DIMS,
-    SYSTEM_DIR_MAP,
     assemble_teleconnection_dataset,
     corr_and_p,
     downstream_regrid_method,
@@ -34,14 +33,18 @@ from workflows.diagnostics.sst_teleconnections import (
     monthly_anomaly,
     open_dataset_readonly,
     observed_at_valid_time,
+    observed_telec_path,
+    output_grid_token,
     parse_init_years,
     resolve_downstream_paths,
     requested_leads,
+    system_telec_path,
     select_cache,
     standardize_spatial_grid,
     time_year_month,
     weighted_spatial_metrics,
 )
+from esp_lab.utils.filename_utils import source_init_prefix
 
 MOV_MODES: dict[str, dict[str, str]] = {
     "NAM": {"kind": "pressure", "description": "Northern Annular Mode"},
@@ -105,7 +108,7 @@ def upstream_mov_paths(
     tag = MOV_PRODUCT_TAGS.get(system, system)
     source_dir = MOV_SOURCE_DIRS.get(system, tag)
 
-    forecast = _manifest_index_path(manifest, f"{mode}:{tag}_init{init_month:02d}")
+    forecast = _manifest_index_path(manifest, f"{mode}:{source_init_prefix(tag, init_month)}")
     if forecast is None:
         forecast = (
             diag_root
@@ -114,7 +117,7 @@ def upstream_mov_paths(
             / "modes"
             / mode_token
             / "indices"
-            / f"{tag}_init{init_month:02d}_{mode_token}.nc"
+            / f"{source_init_prefix(tag, init_month)}_{mode_token}.nc"
         )
 
     observed = _manifest_index_path(manifest, f"{mode}:reference")
@@ -125,7 +128,7 @@ def upstream_mov_paths(
     if observed is None:
         standard_ref = (
             diag_root
-            / "ERA5"
+            / "observations"
             / "modes_variability"
             / "modes"
             / mode_token
@@ -467,9 +470,11 @@ def mov_teleconnection_cache_path(config: Mapping[str, Any]) -> Path:
     mode = str(selection["upstream_mode"]).upper().strip()
     variable = str(selection["downstream_variable"]).upper().strip()
     year_start, year_end = (int(year) for year in selection["verification_years"])
+    grid_tag = output_grid_token(config, [variable])
+    grid_suffix = f"_{grid_tag}" if grid_tag else ""
     output_dir = Path(config["paths"].get("output_dir", DEFAULT_OUTPUT_DIR))
     return output_dir / (
-        f"teleconnection_{mode}_{variable}_verify{year_start}_{year_end}.nc"
+        f"teleconnection_{mode}_{variable}_verify{year_start}_{year_end}{grid_suffix}.nc"
     )
 
 
@@ -530,10 +535,7 @@ def ensure_mov_teleconnection_dataset(
         else [str(s) for s in config.get("selection", {}).get("systems", [])]
     )
     if systems and cache_mode != "rebuild":
-        sys_files = [
-            diag_root / SYSTEM_DIR_MAP.get(s, s) / "leadtime_telec" / filename
-            for s in systems
-        ]
+        sys_files = [system_telec_path(diag_root, s, filename) for s in systems]
         if all(p.is_file() for p in sys_files):
             slices = []
             valid = True
@@ -604,21 +606,19 @@ def ensure_mov_teleconnection_dataset(
     # Save per-system slice to <Experiment>/leadtime_telec/
     if "system" in metrics_ds:
         for sys_val in metrics_ds["system"].values:
-            sys_str = str(sys_val)
-            dir_name = SYSTEM_DIR_MAP.get(sys_str, sys_str)
-            sys_dir = diag_root / dir_name / "leadtime_telec"
-            sys_dir.mkdir(parents=True, exist_ok=True)
-            sys_tmp = sys_dir / f".{filename}.tmp.nc"
+            sys_file = system_telec_path(diag_root, str(sys_val), filename)
+            sys_file.parent.mkdir(parents=True, exist_ok=True)
+            sys_tmp = sys_file.parent / f".{sys_file.name}.tmp.nc"
             metrics_ds.sel(system=[sys_val]).to_netcdf(sys_tmp)
-            sys_tmp.replace(sys_dir / filename)
+            sys_tmp.replace(sys_file)
 
     obs_vars = [v for v in metrics_ds.data_vars if "observed" in v or v == "downstream_lead"]
     if obs_vars:
-        obs_dir = diag_root / "observations" / "leadtime_telec"
-        obs_dir.mkdir(parents=True, exist_ok=True)
-        obs_tmp = obs_dir / f".{filename}.tmp.nc"
+        obs_file = observed_telec_path(diag_root, filename)
+        obs_file.parent.mkdir(parents=True, exist_ok=True)
+        obs_tmp = obs_file.parent / f".{obs_file.name}.tmp.nc"
         metrics_ds[obs_vars].isel(system=0).drop_vars("system", errors="ignore").to_netcdf(obs_tmp)
-        obs_tmp.replace(obs_dir / filename)
+        obs_tmp.replace(obs_file)
 
     # Only write to out_file if caller explicitly specified a non-multimodel output_dir (e.g. tests)
     if "multimodel" not in str(output_dir):
@@ -628,8 +628,6 @@ def ensure_mov_teleconnection_dataset(
         tmp.replace(out_file)
 
     first_sys_file = (
-        diag_root / SYSTEM_DIR_MAP.get(systems[0], systems[0]) / "leadtime_telec" / filename
-        if systems
-        else out_file
+        system_telec_path(diag_root, systems[0], filename) if systems else out_file
     )
     return metrics_ds, first_sys_file, "computed"

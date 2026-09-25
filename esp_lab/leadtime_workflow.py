@@ -48,7 +48,7 @@ def seasonal_cache_encoding(data, requested_chunks):
 
 
 def select_lead_range(model, time, lead_start, lead_end):
-    """Select an inclusive, one-based range of seasonal positions."""
+    """Select an inclusive, one-based range of lead positions."""
     if any(isinstance(v, bool) or not isinstance(v, (int, np.integer))
            for v in (lead_start, lead_end)):
         raise ValueError("lead_start and lead_end must be integers")
@@ -70,6 +70,27 @@ def compute_skill_lead_range(
     return stats.compute_skill_seasonal(
         model, time, observations, clim_start, clim_end,
         nleadavg=1, nleads=model.sizes["L"], **kwargs,
+    )
+
+
+def compute_monthly_skill_lead_range(
+    model, time, observations, clim_start, clim_end, lead_start=1, lead_end=None,
+    **kwargs,
+):
+    """Compute gridded monthly ACC/nRMSE for an inclusive one-based lead range.
+
+    ``model`` must contain monthly, lead-dependent-drift-corrected anomalies
+    with ``(Y, L, M, lat, lon)`` (or equivalent spatial) dimensions.
+    ``observations`` remains on its native monthly time axis; its
+    calendar-month climatology is removed inside :func:`stats.compute_skill_seasonal`.
+    The returned metrics retain monthly ``L`` coordinates, normally ``1..24``.
+    """
+    if lead_end is None:
+        lead_end = int(model.sizes["L"])
+    model, time = select_lead_range(model, time, lead_start, lead_end)
+    return stats.compute_skill_seasonal(
+        model, time, observations, clim_start, clim_end,
+        nleadavg=1, nleads=model.sizes["L"], monthly=True, **kwargs,
     )
 
 
@@ -134,6 +155,35 @@ def resolve_source_revision(
     finally:
         temporary.unlink(missing_ok=True)
     return revision
+
+
+def observation_source_identity(
+    *, archive_root, product, variable, years, path_pattern,
+    mode, configured_revision, snapshot_dir, paths=(),
+):
+    """Return the observation-source identity stored in prepared observation caches.
+
+    Every workflow that writes ``observations/.../prepared_skill`` caches (the
+    1a notebooks and the teleconnection inputs) must use this, so a cache built
+    by one is recognised as current by the others instead of being rebuilt.
+    ``paths`` are the files matched by ``path_pattern``; they are inventoried in
+    ``inventory`` mode and ignored in ``snapshot`` mode.
+    """
+    root = str(Path(path_pattern).parent)
+    year_start, year_end = (str(year) for year in years)
+    revision = resolve_source_revision(
+        mode, configured_revision,
+        identity={
+            "archive_root": root, "product": product, "variable": variable,
+            "years": [year_start, year_end],
+        },
+        snapshot_dir=snapshot_dir, paths=paths, root=root,
+    )
+    return source_fingerprint(
+        {"archive_root": str(archive_root), "product": product, "variable": variable,
+         "archive_years": f"{year_start}-{year_end}"},
+        source_revision=revision,
+    )
 
 
 def ocean_mask_identity(mask):

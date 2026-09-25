@@ -182,6 +182,34 @@ def test_prepared_path_changes_with_provenance(tmp_path):
     assert "_v2" not in first.name
 
 
+def test_prepared_path_is_fixed_across_source_revisions(tmp_path):
+    def path(**overrides):
+        return prepared_skill_path(
+            "case-a", "atm", "TREFHT", 1, (2000, 2001), root=tmp_path,
+            **{**PROVENANCE, **overrides},
+        )
+
+    def path_for(source):
+        return prepared_skill_path(
+            source, "atm", "TREFHT", 1, (2000, 2001), root=tmp_path, **PROVENANCE
+        )
+
+    first = path()
+    assert first.name == (
+        "case-a_init01_TREFHT_seasonal_anomaly_y2000-2002_ny3_clim_2000_2001_"
+        "m2_l2_1x1deg_kelvin_to_celsius_v1.nc"
+    )
+    # The prefix keeps hyphens so it matches the source folder (e.g. CESM-SMYLE).
+    assert path_for("CESM-SMYLE").name.startswith("CESM-SMYLE_init01_TREFHT_")
+    # Stale provenance is caught by the attribute check and rebuilt in place.
+    assert path(source_data_identity="/archive/case-a/TREFHT-new") == first
+    assert path(case_prefix="other-prefix") == first
+    assert path(regridding_method="bilinear") == first
+    # Genuinely different products keep separate files.
+    assert path(target_grid="latlon_5.0x5.0_periodic-True") != first
+    assert path(unit_conversion_version="leadtime_rmse_units_v1") != first
+
+
 def test_generic_cache_status_validates_skill_metadata(tmp_path):
     path = tmp_path / "skill.nc"
     xr.Dataset(

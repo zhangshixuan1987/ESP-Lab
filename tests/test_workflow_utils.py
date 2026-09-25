@@ -99,3 +99,22 @@ def test_sampled_drift_validation_accepts_consistent_anomaly(capsys):
     )
 
     assert "sample reconstruction PASS" in capsys.readouterr().out
+
+
+def test_atomic_to_netcdf_computes_dask_data_before_writing(tmp_path):
+    import dask.array as da
+    import numpy as np
+    import pytest
+    import xarray as xr
+
+    from esp_lab.utils.netcdf_utils import atomic_to_netcdf
+
+    lazy = xr.Dataset({"x": (("t",), da.arange(10, chunks=3).astype("float32"))})
+    out = atomic_to_netcdf(lazy, tmp_path / "small.nc")
+    with xr.open_dataset(out) as ds:
+        np.testing.assert_array_equal(ds["x"].values, np.arange(10))
+
+    # Above the in-memory limit the write stays lazy and says so.
+    with pytest.warns(RuntimeWarning, match="lazily"):
+        atomic_to_netcdf(lazy, tmp_path / "big.nc", max_in_memory_bytes=1)
+    assert (tmp_path / "big.nc").is_file()

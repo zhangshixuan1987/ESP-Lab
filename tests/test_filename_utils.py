@@ -24,15 +24,10 @@ def test_figure_filename_requires_a_usable_part():
         figure_filename(None, "", "雪")
 
 
-def test_figure_filename_bounds_long_names_deterministically():
-    first = figure_filename("a" * 400, ext="png", max_length=80)
-    second = figure_filename("a" * 400, ext="png", max_length=80)
-    different = figure_filename("a" * 399 + "b", ext="png", max_length=80)
-
-    assert first == second
-    assert first != different
-    assert len(first) == 80
-    assert first.endswith(".png")
+def test_figure_filename_rejects_names_over_max_length():
+    assert figure_filename("a" * 72, ext="png", max_length=80) == f"fig_{'a' * 72}.png"
+    with pytest.raises(ValueError, match="max_length=80"):
+        figure_filename("a" * 73, ext="png", max_length=80)
 
 
 @pytest.mark.parametrize("max_length", [True, 1.5, 10, 256])

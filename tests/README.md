@@ -1,8 +1,9 @@
 # Test organization
 
 Test modules are named for the scientific or workflow behavior they protect,
-not for when or why they were added. Prefer concise, readable domain prefixes such as
-`test_obs_time_selection.py`, `test_mov_teleconnections.py`, and `test_eli_diagnostics.py`.
+not for when or why they were added. Prefer names such as
+`test_observation_time_selection.py` and
+`test_modes_of_variability_teleconnections.py`.
 
 Maintenance rules:
 

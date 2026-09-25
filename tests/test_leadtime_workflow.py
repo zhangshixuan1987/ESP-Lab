@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from esp_lab import leadtime_prepared_cache, leadtime_skill_cache, stats
+from esp_lab import env_paths, leadtime_prepared_cache, leadtime_skill_cache, stats
 from esp_lab import leadtime_workflow as workflow
 from esp_lab.data_access_obs import mon_to_seas_obs
 from esp_lab.leadtime_validation import check_remove_drift_sample
@@ -21,12 +21,43 @@ from esp_lab.utils.netcdf_utils import atomic_to_netcdf, load_netcdf
 from esp_lab.utils.resource_utils import ResourceTracker
 
 
-_notebook_matches = list((Path(__file__).parents[1] / "jupyter").rglob("1a_atm_leadtime_acc_skill_map.ipynb"))
-NOTEBOOK = _notebook_matches[0] if _notebook_matches else Path(__file__).parents[1] / "jupyter/1a_atm_leadtime_acc_skill_map.ipynb"
+NOTEBOOK = Path(__file__).parents[1] / "jupyter/s2d_skill/1a_atm_leadtime_acc_skill_map.ipynb"
 
 
-def _cell(index):
-    cell = json.loads(NOTEBOOK.read_text())["cells"][index]
+# Stages are located by a line unique to their cell, not by position, so
+# reorganizing the notebook (inserting or splitting cells) does not silently
+# point the tests at different code.
+IMPORT_CELL = "from esp_lab import leadtime_realm_skill"
+CONFIG_CELL = 'E3SM_REFERENCE_CASE = "E3SM-FOSIRL"'
+LAYOUT_CELL = "def e3sm_leadtime_dir(case_info, stage, *parts):"
+PLAN_CELL = '"cleanup_temporary": WORKFLOW_SETTINGS["cache"].get("cleanup_temp_files", True),'
+SEASONAL_CACHE_CELL = 'debug = WORKFLOW_SETTINGS["cache"]["debug_seasonal_cache"]'
+PIPELINE_CELLS = (
+    'target_dlat = WORKFLOW_SETTINGS["regrid"]["target_dlat"]',  # regrid E3SM
+    'smyle_nens = WORKFLOW_SETTINGS["smyle"]["nens"]',  # CESM-SMYLE benchmark
+    'obs_dir = WORKFLOW_SETTINGS["obs"]["data_dir"]',  # observations
+    "init_month: e3sm_seas_by_case_month[case_key][init_month].time.load()",  # time axes
+    'prepared_reuse = prepared_mode != "rebuild"',  # E3SM prepared anomalies
+    "smyle05_time = smyle11_time = None",  # SMYLE prepared anomalies
+    'if WORKFLOW_SETTINGS["diagnostics"].get("run_drift_check", False):',  # drift check
+    'force_compute = WORKFLOW_SETTINGS["skill"]["force_compute"]',  # E3SM skill
+    "smyle_overlap_skill_by_month = {}",  # SMYLE skill
+    'compare_cfg = WORKFLOW_SETTINGS["finite_ensemble_compare"]',  # finite-ensemble compare
+)
+
+
+def _cell(key):
+    """Return a code cell's source by position or by a line unique to that cell."""
+    cells = json.loads(NOTEBOOK.read_text())["cells"]
+    if isinstance(key, int):
+        cell = cells[key]
+    else:
+        matches = [
+            c for c in cells
+            if c["cell_type"] == "code" and key in "".join(c["source"])
+        ]
+        assert len(matches) == 1, f"{len(matches)} notebook cells contain {key!r}"
+        cell = matches[0]
     return "".join(line for line in cell["source"] if not line.startswith("%"))
 
 
@@ -96,7 +127,7 @@ def test_monthly_to_seasonal_cache_write_and_restart(tmp_path, monthly_leads, re
         netcdf_write_options={}, workflow_resources=tracker,
     )
     try:
-        exec(_cell(13), ns)
+        exec(_cell(SEASONAL_CACHE_CELL), ns)
         with xr.open_dataset(path) as saved:
             xr.testing.assert_allclose(saved, expected)
             assert saved.attrs == attrs
@@ -108,7 +139,7 @@ def test_monthly_to_seasonal_cache_write_and_restart(tmp_path, monthly_leads, re
         # A restarted cell must reuse the file without accessing raw input.
         ns.update(e3sm_raw_by_case_month={}, cal=SimpleNamespace(mon_to_seas_dask=_forbid),
                   workflow_resources=ResourceTracker())
-        exec(_cell(13), ns)
+        exec(_cell(SEASONAL_CACHE_CELL), ns)
         assert path.stat().st_mtime_ns == stamp
         xr.testing.assert_allclose(ns["e3sm_seas_by_case_month"]["case-a"][11], expected)
     finally:
@@ -138,6 +169,32 @@ def test_selected_leads_match_full_skill_and_batch():
         model, time, obs, "2000", "2007", members, 2, 3, metrics=("corr",),
     )
     xr.testing.assert_allclose(batch, batch_full.isel(L=slice(1, 3)))
+
+
+def test_monthly_skill_entry_point_uses_monthly_metric_contract(monkeypatch):
+    """Monthly producer calls the shared metric kernel with monthly=True."""
+    model = xr.DataArray(
+        np.zeros((3, 4, 2)), dims=("Y", "L", "M"),
+        coords={"Y": [2000, 2001, 2002], "L": [1, 2, 3, 4], "M": [0, 1]},
+    )
+    time = xr.DataArray(
+        np.ones((3, 4)), dims=("Y", "L"), coords={"Y": model.Y, "L": model.L},
+    )
+    captured = {}
+
+    def fake_compute(model_arg, time_arg, obs_arg, *args, **kwargs):
+        captured.update(model=model_arg, time=time_arg, observations=obs_arg, kwargs=kwargs)
+        return xr.Dataset({"corr": model_arg.mean(("Y", "M"))})
+
+    monkeypatch.setattr(workflow.stats, "compute_skill_seasonal", fake_compute)
+    result = workflow.compute_monthly_skill_lead_range(
+        model, time, "observations", "1981", "2010", lead_start=2, lead_end=3,
+    )
+    assert captured["kwargs"]["monthly"] is True
+    assert captured["kwargs"]["nleadavg"] == 1
+    assert captured["kwargs"]["nleads"] == 2
+    assert captured["model"].L.values.tolist() == [2, 3]
+    assert result.corr.L.values.tolist() == [2, 3]
 
 
 @pytest.mark.parametrize("start,end", [(0, 2), (3, 2), (1, 5), (1.5, 3), (True, 3)])
@@ -189,21 +246,25 @@ def notebook_run(tmp_path):
         source_paths[name].write_bytes(name.encode())
     trackers = []
 
-    def run(field="SST", mode="inventory", cases=("case-a", "case-b"), cached=False):
+    def run(field="TS", mode="inventory", cases=("case-a", "case-b"), cached=False, has_smyle=True):
         ns = {}
         for module in (leadtime_prepared_cache, leadtime_skill_cache, workflow, unit_conversion):
             ns.update({k: v for k, v in vars(module).items() if not k.startswith("_")})
+        # Run the notebook's own import cell so the namespace tracks its imports;
+        # archive access and regridding are replaced with test doubles below.
+        exec(_cell(IMPORT_CELL), ns)
         tracker = ResourceTracker()
         trackers.append(tracker)
         ns.update(
             np=np, xr=xr, cftime=cftime, os=os, Path=Path, stats=stats,
+            env_paths=env_paths,
             workflow_resources=tracker, leadtime_acc_dir=leadtime_acc_dir,
             atomic_to_netcdf=atomic_to_netcdf, load_netcdf=load_netcdf,
             check_remove_drift_sample=check_remove_drift_sample,
         )
-        exec(_cell(7), ns)
+        exec(_cell(CONFIG_CELL), ns)
         ns["field"] = field
-        ns["cfg"] = ns["VAR_CONFIG"][field]
+        ns["cfg"] = dict(ns["VAR_CONFIG"][field], has_smyle_benchmark=has_smyle)
         ns["analysis_component"] = ns["cfg"].get("component", "atm")
         ns["e3sm_field"] = ns["cfg"].get("e3sm_field", field)
         ns["smyle_field"] = ns["cfg"].get("smyle_field", field)
@@ -218,10 +279,18 @@ def notebook_run(tmp_path):
         settings["e3sm"].update(data_dir=str(tmp_path), nens=2, nlead=12)
         settings["smyle"].update(benchmark_dir=str(tmp_path), nens=3, nlead=12)
         settings["obs"].update(data_dir=str(tmp_path), chunks={})
-        settings["prepared_skill"].update(mode="require" if mode == "snapshot" else "auto", chunks={})
+        # Pin the notebook's user-facing recompute toggles off so the test does
+        # not depend on how the notebook was last configured for a real run.
+        settings["prepared_skill"].update(
+            mode="require" if mode == "snapshot" else "auto", force_recompute=False, chunks={}
+        )
         settings["cache"]["source_identity_mode"] = mode
-        settings["skill"].update(lead_start=2, lead_end=3, model_chunks={}, obs_chunks={})
-        settings["finite_ensemble_compare"].update(iteration_batch_size=2, model_chunks={}, obs_chunks={})
+        settings["skill"].update(
+            force_compute=False, lead_start=2, lead_end=3, model_chunks={}, obs_chunks={}
+        )
+        settings["finite_ensemble_compare"].update(
+            force_recompute=False, iteration_batch_size=2, model_chunks={}, obs_chunks={}
+        )
         settings["finite_ensemble_compare"]["modes"]["final"] = dict(init_months=[11], iterations=3, lead_start=2, lead_end=3)
         settings["diagnostics"]["run_drift_check"] = True
         ns["data_access"] = SimpleNamespace(
@@ -232,12 +301,21 @@ def notebook_run(tmp_path):
         )
         smyle, smyle_time = _seasonal_data(3)
         ns["smyle_access"] = SimpleNamespace(
+            # The planning cell's inventory-identity code calls benchmark_path()
+            # unconditionally to build a cache key, independent of whether the
+            # field actually has a CESM-SMYLE benchmark; only load_benchmark()
+            # (the real data access) is gated by has_smyle_benchmark.
             benchmark_path=_forbid if cached else lambda *a, **kw: source_paths["smyle"],
-            load_benchmark=_forbid if cached else lambda **kw: xr.Dataset({ns["smyle_field"]: smyle, "time": smyle_time}),
+            load_benchmark=_forbid if (cached or not has_smyle) else lambda **kw: xr.Dataset({ns["smyle_field"]: smyle, "time": smyle_time}),
         )
         ns["obs_access"] = SimpleNamespace(
-            find_obs_file=_forbid if cached else lambda **kw: source_paths["obs"],
-            get_monthly_data=_forbid if cached else lambda **kw: _observations().to_dataset(name=ns["cfg"]["obs_var"]),
+            # Listing the configured obs_path_pattern is allowed on restart (it
+            # only inventories files); loading the data is not.
+            resolve_glob_files=lambda pattern: [source_paths["obs"]],
+            get_monthly_data_from_pattern=(
+                _forbid if cached
+                else lambda *a, **kw: _observations().to_dataset(name=ns["cfg"]["obs_var"])
+            ),
             mon_to_seas_obs=mon_to_seas_obs,
         )
         grid = xr.Dataset(coords={"lat": smyle.lat, "lon": smyle.lon})
@@ -249,15 +327,16 @@ def notebook_run(tmp_path):
         if cached:
             ns["compute_skill_lead_range"] = _forbid
             ns["compute_skill_lead_range_batch"] = _forbid
-        exec(_cell(9), ns)
-        # Inject already aggregated archive arrays at the boundary of cell 16.
+        exec(_cell(LAYOUT_CELL), ns)
+        exec(_cell(PLAN_CELL), ns)
+        # Inject already aggregated archive arrays at the regrid-stage boundary.
         ns["e3sm_seas_by_case_month"] = {}
         for case, months in ns["e3sm_months_to_prepare"].items():
             if months:
-                model, time = _seasonal_data(2, missing=(field == "SST" and case == "case-b"))
+                model, time = _seasonal_data(2)
                 ns["e3sm_seas_by_case_month"][case] = {11: xr.Dataset({field: model, "time": time})}
-        for index in (15, 17, 20, 23, 24, 25, 26, 27, 28, 32):
-            exec(compile(_cell(index), f"1a_cell_{index}", "exec"), ns)
+        for marker in PIPELINE_CELLS:
+            exec(compile(_cell(marker), f"1a_cell[{marker[:30]}]", "exec"), ns)
         return ns
 
     yield run, source_paths
@@ -265,7 +344,7 @@ def notebook_run(tmp_path):
         tracker.close()
 
 
-@pytest.mark.parametrize("field", ["PRECT", "SST"])
+@pytest.mark.parametrize("field", ["PRECT", "TS"])
 def test_notebook_inventory_to_snapshot_restart(notebook_run, field, capsys):
     run, sources = notebook_run
     first = run(field)
@@ -281,21 +360,30 @@ def test_notebook_inventory_to_snapshot_restart(notebook_run, field, capsys):
     assert "Skipping independent drift check for cached" in capsys.readouterr().out
 
 
-def test_sst_case_removal_recovers_domain_without_rebuilding_prepared_inputs(notebook_run):
+def test_has_smyle_benchmark_false_skips_smyle_without_archive_access(notebook_run, capsys):
+    """A field with has_smyle_benchmark=False must never touch smyle_access.
+
+    This is the contract land fields will rely on: skip every CESM-SMYLE cell
+    cleanly, leave its outputs as empty/None fallbacks, and still produce the
+    normal E3SM-only skill result.
+    """
     run, _ = notebook_run
-    first = run()
-    mask_identity = first["analysis_domain_identity"]
-    prepared_path = first["prepared_specs_by_case_month"]["case-a"][11][0]
-    with xr.open_dataset(prepared_path) as ds:
-        assert bool(ds.anomaly.isel(lon=0).notnull().all())
-    stamp = prepared_path.stat().st_mtime_ns
-    first["workflow_resources"].close()
-    reduced = run(cases=("case-a",))
-    assert reduced["e3sm_months_to_prepare"] == {"case-a": []}
-    assert prepared_path.stat().st_mtime_ns == stamp
-    assert reduced["analysis_domain_identity"] != mask_identity
-    assert bool(reduced["ocean_mask"].all())
-    assert bool(reduced["skill_by_month"][11].corr.isel(lon=0).notnull().all())
+    ns = run("PRECT", cases=("case-a",), has_smyle=False)
+
+    assert ns["smyle_anom_by_month"] == {}
+    assert ns["smyle_time_by_month"] == {}
+    assert ns["smyle05_anom"] is None and ns["smyle11_anom"] is None
+    assert ns["smyle_skill_by_month"] == {}
+    assert ns["smyle_overlap_skill_by_month"] == {}
+    assert ns["skill_delta_by_case_month"] == {"case-a": {}}
+
+    # The E3SM-only skill result is still produced normally.
+    assert bool(ns["skill_by_month"][11].corr.notnull().any())
+
+    skipped = capsys.readouterr().out
+    assert "Skipping the CESM-SMYLE benchmark load" in skipped
+    assert "Skipping the CESM-SMYLE benchmark skill computation" in skipped
+    assert "Skipping the CESM-SMYLE vs E3SM significance comparison" in skipped
 
 
 def test_snapshot_missing_observations_fails_without_archive_fallback(notebook_run):

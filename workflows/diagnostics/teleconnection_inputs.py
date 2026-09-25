@@ -12,11 +12,14 @@ import xarray as xr
 
 from esp_lab import data_access_e3sm, data_access_obs, land_input_cache, land_skill, stats
 from esp_lab.leadtime_skill_cache import source_fingerprint
+from esp_lab.leadtime_workflow import observation_source_identity
 from esp_lab.paths import leadtime_acc_dir
 from esp_lab.leadtime_prepared_cache import (
     build_prepared_skill_dataset,
     expected_prepared_skill_attrs,
+    grid_token,
     prepared_skill_path,
+    units_token,
     write_prepared_skill_dataset,
 )
 from esp_lab.utils import calendar_utils, regrid_utils
@@ -139,7 +142,7 @@ def ensure_sst_indices(
     common = [
         sys.executable, str(script), "--regions", str(selection["upstream_index"]),
         "--outdir", str(root), "--obs-outdir",
-        str(root / "HadISST2" / "sst_index" / "timeseries"),
+        str(root / "observations" / "sst_index" / "timeseries"),
         "--e3sm-data-dir", str(settings.get(
             "raw_model_root", "/global/cfs/cdirs/e3sm/S2S2D/post_process"
         )),
@@ -315,10 +318,14 @@ def prepare_atmospheric_observation(
         "observation_root", "/global/cfs/cdirs/e3sm/e3sm_diags/obs_for_e3sm_diags/time-series"
     ))
     obs_start, obs_end = spec["obs_years"]
-    identity = source_fingerprint(
-        {"archive_root": obs_root, "product": spec["obs_product"],
-         "variable": spec["obs_field"], "archive_years": f"{obs_start}-{obs_end}"},
-        source_revision=str(settings.get("observation_revision", "obs_archive_v1")),
+    obs_path_pattern = f"{obs_root}/{spec['obs_product']}/{spec['obs_field']}_*.nc"
+    # Same identity as the 1a notebooks, so either workflow reuses the other's cache.
+    identity = observation_source_identity(
+        archive_root=obs_root, product=spec["obs_product"], variable=spec["obs_field"],
+        years=(obs_start, obs_end), path_pattern=obs_path_pattern, mode="inventory",
+        configured_revision=str(settings.get("observation_revision", "obs_archive_v1")),
+        snapshot_dir=root / "tmp" / "source_inventory_snapshots",
+        paths=data_access_obs.resolve_glob_files(obs_path_pattern),
     )
     expected = {
         "cache_kind": "unmasked_prepared_observations_v1",
@@ -330,15 +337,18 @@ def prepare_atmospheric_observation(
             if variable == "SST" else "leadtime_skill_units_v1"
         ),
     }
-    token = source_fingerprint(expected, source_revision="v1").split(":")[-1]
+    # Same fixed name as the 1a notebooks; provenance is in `expected`, stored
+    # in the file's attributes.
     path = leadtime_acc_dir(
         "observations", "prepared_skill", spec["realm"], variable,
-        f"{spec['obs_product']}_{token}.nc", root=root,
+        f"{spec['obs_product']}_{variable}_seasonal_"
+        f"{grid_token(expected['target_grid'])}_"
+        f"{units_token(expected['unit_conversion_version'])}.nc",
+        root=root,
     )
     chunks = dict(settings.get("observation_chunks", {"time": 24, "lat": 90, "lon": 180}))
-    monthly = data_access_obs.get_monthly_data(
-        obs_dir=obs_root, field=variable,
-        field_map={variable: spec["obs_field"]}, product=spec["obs_product"],
+    monthly = data_access_obs.get_monthly_data_from_pattern(
+        obs_path_pattern, field=spec["obs_field"],
         start_year=str(obs_start), end_year=str(obs_end), chunks=chunks,
     )
     try:

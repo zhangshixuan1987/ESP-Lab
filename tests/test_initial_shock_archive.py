@@ -69,24 +69,25 @@ def test_archive_cache_uses_stable_exact_period_filename(archive_inputs):
 
     task = archive.plan_archive_run(settings, cases, variable)[0]
 
-    assert Path(task['path']).name == 'init05_1980_1981.nc'
+    assert Path(task['path']).name == f"{task['source']}_init05_1980_1981.nc"
 
 
-def test_plot_source_file_is_excluded_from_cache_identity(archive_inputs, monkeypatch):
+def test_cache_identity_fingerprints_functions_not_whole_files(archive_inputs, monkeypatch):
+    """Unrelated edits to a source file (plots, other helpers) must not rebuild caches."""
     settings, cases, variable = archive_inputs
-    diagnostic_path = Path(archive.initial_shock.__file__).resolve()
+    project = Path(archive.__file__).resolve().parents[2]
     read_bytes = Path.read_bytes
 
-    def reject_full_diagnostic_hash(path):
-        if path.resolve() == diagnostic_path:
-            raise AssertionError('Plot and numerical source file was hashed as a whole')
+    def reject_whole_source_hash(path):
+        resolved = path.resolve()
+        if resolved.suffix == '.py' and project in resolved.parents:
+            raise AssertionError(f'{resolved} was hashed as a whole file')
         return read_bytes(path)
 
-    monkeypatch.setattr(Path, 'read_bytes', reject_full_diagnostic_hash)
+    monkeypatch.setattr(Path, 'read_bytes', reject_whole_source_hash)
     plan = archive.plan_archive_run(settings, cases, variable)
     provenance = json.loads(plan[0]['provenance_json'])
-    scientific_key = f'{archive.initial_shock.__file__}::scientific-functions'
-    assert scientific_key in provenance['code']
+    assert set(provenance['code']) == {'archive_compute'}
 
 
 def test_incomplete_archive_stops_before_compute(archive_inputs,monkeypatch):
@@ -131,9 +132,8 @@ def test_sources_changing_after_plan_are_rejected(archive_inputs):
 
 def test_notebook_cells_smoke_execution(archive_inputs,tmp_path):
     settings,cases,variable=archive_inputs
-    _nb_matches = list((Path(__file__).parents[1] / "jupyter").rglob("6a_shock_ts.ipynb"))
-    notebook = _nb_matches[0] if _nb_matches else Path(__file__).parents[1] / "jupyter/6a_shock_ts.ipynb"
-    nb = json.loads(notebook.read_text())
+    notebook=Path(__file__).parents[1]/'jupyter/s2d_skill/6a_shock_ts.ipynb'
+    nb=json.loads(notebook.read_text())
     settings['paths']['figure_outdir']=str(tmp_path/'figures')
     settings['dask']={'enabled':False}
     ns={
@@ -215,8 +215,7 @@ def test_rmse_mae_archive_cache_and_notebook_smoke(archive_inputs, tmp_path):
     assert not second[0]['rebuild'] and not second[0]['error_rebuild']
     xr.testing.assert_allclose(error_archive.compute_archive_plan(second, settings, variable)[5], result)
 
-    _nb_matches = list((Path(__file__).parents[1] / "jupyter").rglob("6b_shock_index.ipynb"))
-    notebook = _nb_matches[0] if _nb_matches else Path(__file__).parents[1] / "jupyter/6b_shock_index.ipynb"
+    notebook = Path(__file__).parents[1] / 'jupyter/s2d_skill/6b_shock_index.ipynb'
     nb = json.loads(notebook.read_text())
     ns = {'WORKFLOW_SETTINGS': settings, 'E3SM_CASES': cases, 'variable': variable,
           'field': 'TREFHT',
@@ -252,4 +251,5 @@ def test_rmse_threshold_change_reuses_6a_cache_and_rebuilds_only_6b(archive_inpu
     assert not changed[0]['rebuild']
     assert changed[0]['path'] == initial[0]['path']
     assert changed[0]['error_rebuild']
-    assert changed[0]['error_path'] != initial[0]['error_path']
+    # Fixed name: the stale 6b cache is rebuilt in place, not written to a new file.
+    assert changed[0]['error_path'] == initial[0]['error_path']
