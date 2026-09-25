@@ -1,12 +1,17 @@
-Preprocessors are applied to individual time series files in order to return mean CAM fields with centered time coordinates.
+# How to use preprocessors
+
+Preprocessors are applied to individual time series files in order to return mean model fields with centered time coordinates aligned along standardized lead-time dimensions.
 
 The main steps in preprocessing are:
-1) Extract a time slice of size "nlead"
-2) Create a lead time coordinate "L" that is an integer sequence
-3) Swap "time" with "L" so that L becomes a shared coordinate to aggregate data over, while "time" becomes a data variable that will now have a "Y" dimension (hindcast start time)
-4) Extract only the chosen "field" from the data file (together with the new "time" variable)
-5) Chunk to include all "L" values (which all come from a single NetCDF file)
+1. Extract a time slice of size `nlead`.
+2. Create a lead time coordinate `L` as a 1-based integer sequence.
+3. Swap `time` with `L` so that `L` becomes a shared coordinate to aggregate data over, while `time` becomes a data variable indexed by initialization year (`Y`).
+4. Extract the requested field variable from the dataset.
+5. Chunk to include all `L` values (which all come from a single NetCDF file).
 
-The default preprocessor is described in [data_access.preprocessor()](https://esp-lab.readthedocs.io/en/latest/data_access.html#data_access.preprocessor).
+Preprocessors are tailored for specific model configurations:
+- **E3SM S2D**: `esp_lab.data_access_e3sm.preprocessor()`
+- **CESM SMYLE**: `esp_lab.data_access_cesm_smyle.preprocessor()`
+- **Legacy SMYLE**: `esp_lab.data_access_smyle.preprocessor()`
 
-However, the preprocessor can be adapted for a number of cases, such as to return a [seasonal mean field](https://github.com/NCAR/SMYLE-analysis/blob/main/notebooks/SMYLE_overview_GMD_2022/compute_SMYLE_zooC_skill.ipynb) or [POP SST](https://github.com/NCAR/SMYLE-analysis/blob/main/notebooks/SMYLE_overview_GMD_2022/Fig05_regionalSST_ACC_RMSE.ipynb). A few examples of different kinds of preprocessors are available on the [tutorial page](https://esp-lab.readthedocs.io/en/latest/tutorials/index.html).
+Workflow examples demonstrating how preprocessors are used in distributed evaluation pipelines can be found in the [Analysis Notebooks](../tutorials/index.md) and [`jupyter/`](https://github.com/zhangshixuan1987/ESP-Lab/tree/e3sm-esp/jupyter) directory.

@@ -1,28 +1,28 @@
 """
-This module provides utilities which support input/output processes.
-Functions in this module can provide methods to return dictionaries
-of filepaths keyed by initialization year, nested lists of files
-for particular start years and ensemble members, and dask arrays
-containing particular hindcast ensembles. This module also provides
-preprocessing which can assist in using intake-esm in conjunction
-with other data_access functions.
+esp_lab.data_access — DEPRECATED (Legacy Module)
+=================================================
+
+.. deprecated::
+    This module is the original monolithic SMYLE data accessor inherited from the
+    ``SMYLEutils`` / ``esp-tools`` era. It is retained for backward compatibility only
+    and will not be updated for new E3SM workflows.
+
+    For current workflows, use the purpose-specific accessors:
+
+    - E3SM hindcast data:     ``esp_lab.data_access_e3sm``
+    - CESM-SMYLE hindcast:    ``esp_lab.data_access_cesm_smyle``
+    - Observational refs:     ``esp_lab.data_access_obs``
+    - NMME model data:        ``esp_lab.data_access_nmme``
+
+Original description: Provides utilities for I/O operations on SMYLE data —
+filepaths keyed by initialization year, nested file lists by start year and
+ensemble member, and dask arrays containing particular hindcast ensembles.
+Also provides preprocessing for use with intake-esm.
 
 Authors
 -------
     - Steve Yeager
     - Elizabeth Maroon
-
-Use
----
-    Users wishing to utilize these tools may do so by importing
-    various functions, for example:
-    ::
-        from esp-tools.utils.io_utils import file_dict
-
-Dependencies
-------------
-    The user must have an activated conda environment which includes
-    xarray, numpy, glob, and functools.
 """
 
 import cftime

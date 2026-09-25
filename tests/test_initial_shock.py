@@ -1,0 +1,322 @@
+import numpy as np
+import pytest
+import xarray as xr
+
+from esp_lab.diagnostics.initial_shock import (
+    align_observation_months, compute_initial_shock_index,
+    plot_normalized_change, plot_std_ratio,
+)
+from workflows.diagnostics.initial_shock import run_initial_shock
+
+
+def fields(nmonths=60):
+    obs = xr.DataArray(
+        np.broadcast_to(np.repeat(np.arange(nmonths // 12), 12)[None, :, None, None], (2, nmonths, 2, 2)).copy().astype(float),
+        dims=("Y", "L", "lat", "lon"),
+        coords={"Y": [1981, 1986], "L": np.arange(nmonths), "lat": [-30., 30.], "lon": [0., 180.]},
+        attrs={"units": "degC"},
+    )
+    model = xr.concat([obs * 2 + 10, obs * 2 + 20], dim=xr.IndexVariable("M", [0, 1]))
+    model.attrs["units"] = "degC"
+    return model, obs
+
+
+def test_ncl_five_annual_samples_and_offset_invariance():
+    model, obs = fields()
+    result = compute_initial_shock_index(model, obs)
+    np.testing.assert_allclose(result.std_ratio, 2)
+    np.testing.assert_allclose(result.observation_std, np.std(np.arange(5), ddof=1))
+    np.testing.assert_allclose(result.model_index[0], np.arange(5) * 2 + 15)
+    assert (result.paired_sample_count == 5).all()
+    np.testing.assert_allclose(
+        compute_initial_shock_index(
+            (model + 100).assign_attrs(units="degC"),
+            obs.assign_attrs(units="degC"),
+        ).std_ratio,
+        2,
+    )
+
+
+def test_ensemble_mean_precedes_std():
+    model, obs = fields()
+    model.loc[dict(M=0)] = obs
+    model.loc[dict(M=1)] = -obs
+    assert (compute_initial_shock_index(model, obs).std_ratio == 0).all()
+
+
+def test_normalized_lead_year_change_uses_observed_climatology():
+    model, obs = fields(24)
+    obs.loc[dict(Y=1986)] += 2
+    model = xr.concat([obs * 2 + 10, obs * 2 + 20], dim=xr.IndexVariable("M", [0, 1]))
+    model.attrs["units"] = obs.attrs["units"] = "degC"
+    result = compute_initial_shock_index(
+        model, obs, window_months=24, climatology_years=(1981, 1986),
+    )
+    np.testing.assert_allclose(result.observation_climatology_std, np.sqrt(2))
+    assert int(result.observation_climatology_sample_count) == 2
+    np.testing.assert_allclose(result.model_lead_year_change, 2)
+    np.testing.assert_allclose(result.signed_normalized_change, np.sqrt(2))
+    np.testing.assert_allclose(result.absolute_normalized_change, np.sqrt(2))
+    np.testing.assert_allclose(result.excess_normalized_change, 1 / np.sqrt(2))
+    assert result.seasonal_signed_normalized_change.dims == ("Y", "season")
+    np.testing.assert_allclose(result.seasonal_observation_climatology_std, np.sqrt(2))
+    np.testing.assert_allclose(result.seasonal_model_year_change, 2)
+    np.testing.assert_allclose(result.seasonal_observation_year_change, 1)
+    np.testing.assert_allclose(result.seasonal_signed_normalized_change, np.sqrt(2))
+    np.testing.assert_allclose(result.seasonal_excess_normalized_change, 1 / np.sqrt(2))
+
+
+def test_seasonal_change_pairs_matching_seasons_not_adjacent_seasons():
+    seasonal_cycle = np.repeat([10.0, 20.0, 30.0, 40.0], 3)
+    one_forecast = np.concatenate([seasonal_cycle, seasonal_cycle + 1])
+    values = np.stack([one_forecast, one_forecast + 2])
+    values = np.broadcast_to(values[:, :, None, None], (2, 24, 2, 2)).copy()
+    obs = xr.DataArray(
+        values, dims=("Y", "L", "lat", "lon"),
+        coords={"Y": [1981, 1986], "L": np.arange(24),
+                "lat": [-30.0, 30.0], "lon": [0.0, 180.0]},
+        attrs={"units": "mm/day"},
+    )
+    starts = ["1981-05-01", "1986-05-01"]
+    times = np.stack([
+        np.asarray(xr.date_range(start, periods=24, freq="MS")) for start in starts
+    ])
+    obs = obs.assign_coords(verification_time=(("Y", "L"), times))
+    model = (obs + 2).assign_attrs(units=obs.attrs["units"])
+
+    result = compute_initial_shock_index(
+        model, obs, window_months=24, climatology_years=(1981, 1986),
+    )
+
+    np.testing.assert_allclose(result.seasonal_model_year_change, 1)
+    np.testing.assert_allclose(result.seasonal_observation_year_change, 1)
+    np.testing.assert_allclose(result.seasonal_observation_climatology_std, np.sqrt(2))
+    np.testing.assert_allclose(result.seasonal_signed_normalized_change, 1 / np.sqrt(2))
+    np.testing.assert_allclose(result.seasonal_excess_normalized_change, 0, atol=1e-14)
+    np.testing.assert_allclose(result.monthly_observation_climatology_std, np.sqrt(2))
+    np.testing.assert_allclose(result.monthly_standardized_error, np.sqrt(2))
+    np.testing.assert_allclose(
+        result.monthly_model_normalized_anomaly
+        - result.monthly_observation_normalized_anomaly,
+        result.monthly_standardized_error,
+    )
+    np.testing.assert_array_equal(
+        result.season_label, ["May-Jul", "Aug-Oct", "Nov-Jan", "Feb-Apr"],
+    )
+
+
+def test_shared_reference_monthly_climatology_applies_to_member_mean_and_observation():
+    reference_time = xr.date_range("1981-01-01", periods=36, freq="MS")
+    reference_values = np.array([
+        stamp.month * 10.0 + (stamp.year - 1981) * 2.0 for stamp in reference_time
+    ])
+    reference_values = np.broadcast_to(
+        reference_values[:, None, None], (36, 2, 2)
+    ).copy()
+    reference = xr.DataArray(
+        reference_values, dims=("time", "lat", "lon"),
+        coords={"time": reference_time, "lat": [-30.0, 30.0], "lon": [0.0, 180.0]},
+        attrs={"units": "mm/day"},
+    )
+    starts = ["1990-05-01", "1991-05-01"]
+    verification_time = np.stack([
+        np.asarray(xr.date_range(start, periods=24, freq="MS")) for start in starts
+    ])
+    observation_values = np.stack([
+        np.asarray(xr.DataArray(row, dims="time").dt.month) * 10.0 + 2.0
+        for row in verification_time
+    ])
+    observation_values = np.broadcast_to(
+        observation_values[:, :, None, None], (2, 24, 2, 2)
+    ).copy()
+    observation = xr.DataArray(
+        observation_values, dims=("Y", "L", "lat", "lon"),
+        coords={"Y": [1990, 1991], "L": np.arange(24),
+                "lat": [-30.0, 30.0], "lon": [0.0, 180.0],
+                "verification_time": (("Y", "L"), verification_time)},
+        attrs={"units": "mm/day"},
+    )
+    model = xr.concat(
+        [observation + 4.0, observation], dim=xr.IndexVariable("M", ["r1", "r2"]),
+    ).assign_attrs(units="mm/day")
+
+    result = compute_initial_shock_index(
+        model, observation, reference_observation=reference,
+        window_months=24, climatology_years=(1981, 1983),
+    )
+
+    np.testing.assert_allclose(result.monthly_observation_climatology_std, 2)
+    np.testing.assert_allclose(
+        result.monthly_observation_normalized_anomaly, 0, atol=1e-14
+    )
+    np.testing.assert_allclose(
+        result.monthly_first_member_normalized_anomaly, 2, atol=1e-14
+    )
+    np.testing.assert_allclose(result.monthly_model_normalized_anomaly, 1, atol=1e-14)
+    assert result.attrs["monthly_anomaly_climatology"] == (
+        "shared reference observation by calendar month"
+    )
+    assert result.attrs["first_ensemble_member"] == "r1"
+
+
+def test_missing_month_invalidates_whole_annual_block():
+    model, obs = fields()
+    model.loc[dict(L=2)] = np.nan
+    result = compute_initial_shock_index(model, obs)
+    assert result.std_ratio.isnull().all()
+    assert (result.paired_sample_count == 4).all()
+    assert result.model_index.sel(block=1).isnull().all()
+    relaxed = compute_initial_shock_index(model, obs, min_samples=4)
+    np.testing.assert_allclose(relaxed.std_ratio, 2)
+
+
+def test_constant_observation_and_area_coverage():
+    model, obs = fields()
+    assert compute_initial_shock_index(model, xr.zeros_like(obs)).std_ratio.isnull().all()
+    model.loc[dict(lat=-30)] = np.nan
+    result = compute_initial_shock_index(model, obs, min_area_fraction=.75)
+    np.testing.assert_allclose(result.model_area_fraction, .5)
+    assert result.std_ratio.isnull().all()
+
+
+def test_area_average_after_annual_average():
+    model, obs = fields()
+    model.loc[dict(L=0, lat=-30)] = np.nan
+    result = compute_initial_shock_index(model, obs)
+    assert (result.model_area_fraction.sel(block=1) == .5).all()
+    np.testing.assert_allclose(result.std_ratio, 2)
+
+
+@pytest.mark.parametrize('change', ['units', 'grid', 'lead', 'short'])
+def test_bad_inputs_fail(change):
+    model, obs = fields()
+    if change == 'units': obs.attrs['units'] = 'K'
+    if change == 'grid': obs = obs.assign_coords(lon=[1, 181])
+    if change == 'lead': model = model.assign_coords(L=np.arange(60) * 2)
+    if change == 'short': model, obs = model.isel(L=slice(24)), obs.isel(L=slice(24))
+    with pytest.raises(ValueError): compute_initial_shock_index(model, obs)
+
+
+def test_dask_matches_eager():
+    model, obs = fields()
+    eager = compute_initial_shock_index(model, obs)
+    lazy = compute_initial_shock_index(model.chunk({'L': 7}), obs.chunk({'L': 9})).compute()
+    xr.testing.assert_allclose(eager, lazy)
+
+
+def test_calendar_alignment_and_missing_duplicate_months():
+    obs = xr.DataArray(np.arange(24.), dims='time', coords={'time': xr.date_range('2000-01-01', periods=24, freq='MS', calendar='noleap', use_cftime=True)})
+    time = xr.DataArray(np.array(xr.date_range('2000-02-01', periods=12, freq='MS'))[None,:], dims=('Y','L'), coords={'Y':[2000], 'L':np.arange(12)})
+    np.testing.assert_array_equal(align_observation_months(obs, time), np.arange(1,13)[None,:])
+    with pytest.raises(ValueError, match='Missing'): align_observation_months(obs.isel(time=slice(5,None)),time)
+    with pytest.raises(ValueError, match='duplicate'): align_observation_months(xr.concat([obs,obs],dim='time'),time)
+
+
+def test_cached_workflow_and_plot(tmp_path):
+    model, obs = fields(24)
+    times = np.array(xr.date_range('1981-01-01', periods=48, freq='MS')).reshape(2,24)
+    model_ds = model.to_dataset(name='tas').assign(verification_time=(('Y','L'),times))
+    model_ds.to_netcdf(tmp_path/'model.nc')
+    obs_time = obs.rename(L='month').stack(time=('Y','month')).transpose('time','lat','lon').reset_index('time',drop=True).assign_coords(time=times.ravel())
+    obs_time.to_dataset(name='tas').to_netcdf(tmp_path/'obs.nc')
+    config={'output_root':str(tmp_path/'out'), 'cases':{'case1':{'path':str(tmp_path/'model.nc'),'variable':'tas','units':'degC'}},
+            'observation':{'path':str(tmp_path/'obs.nc'),'variable':'tas','units':'degC'},
+            'settings':{'window_months':24,'block_months':12},'figure_path':str(tmp_path/'plot.png')}
+    result, paths = run_initial_shock(config)
+    np.testing.assert_allclose(result.std_ratio, 2)
+    assert (tmp_path/'plot.png').stat().st_size > 0
+    stamp = paths[0].stat().st_mtime_ns
+    config['cache_mode']='require'
+    cached, same_paths = run_initial_shock(config)
+    assert same_paths == paths and paths[0].stat().st_mtime_ns == stamp
+    xr.testing.assert_allclose(cached, result)
+    config['settings']['block_months']=6
+    with pytest.raises(FileNotFoundError): run_initial_shock(config)
+    config['cache_mode'] = 'auto'
+    config['settings']['block_months'] = 12
+    model_ds['verification_time'] = (('Y', 'L'), times[::-1])
+    model_ds.to_netcdf(tmp_path / 'different_months.nc')
+    config['cases']['case2'] = dict(config['cases']['case1'], path=str(tmp_path / 'different_months.nc'))
+    with pytest.raises(ValueError, match='different verification months'):
+        run_initial_shock(config)
+
+
+def test_plot_distinguishes_below_equal_above_and_invalid():
+    ratio = xr.DataArray(
+        [[.8, 1., 1.2, np.nan]],
+        dims=("Y", "case"), coords={"Y": [2000], "case": ["low", "equal", "high", "invalid"]},
+    )
+    result = xr.Dataset({"std_ratio": ratio})
+    fig = plot_std_ratio(result)
+    image = fig.axes[0].images[0]
+    np.testing.assert_allclose(image.norm.boundaries, np.arange(.4, 3.01, .2))
+    colors = image.cmap(image.norm(np.array([.8, 1., 1.2])))
+    assert len({tuple(color) for color in colors}) == 3
+    assert tuple(image.cmap.get_bad()) not in {tuple(color) for color in colors}
+    assert tuple(image.cmap(image.norm(.2))) != tuple(image.cmap(image.norm(.5)))
+    assert tuple(image.cmap(image.norm(3.2))) != tuple(image.cmap(image.norm(2.9)))
+    assert fig.axes[0].get_legend().get_texts()[0].get_text() == "Invalid / missing"
+
+
+def test_plot_can_compose_multiple_panels():
+    import matplotlib.pyplot as plt
+
+    ratio = xr.DataArray(
+        [[.8], [1.2]], dims=("Y", "case"),
+        coords={"Y": [2000, 2001], "case": ["experiment"]},
+    )
+    result = xr.Dataset({"std_ratio": ratio})
+    fig, axes = plt.subplots(1, 2)
+    for ax, title in zip(axes, ("May initialization", "November initialization")):
+        returned = plot_std_ratio(
+            result, ax=ax, add_colorbar=False, add_invalid_legend=False, title=title,
+        )
+        assert returned is fig
+        assert ax.get_title() == title
+        assert len(ax.images) == 1
+        assert ax.get_legend() is None
+    assert len(fig.axes) == 2
+    plt.close(fig)
+
+
+@pytest.mark.parametrize(
+    "variable", [
+        "signed_normalized_change", "absolute_normalized_change", "excess_normalized_change",
+        "seasonal_signed_normalized_change", "seasonal_absolute_normalized_change",
+        "seasonal_excess_normalized_change",
+    ],
+)
+def test_normalized_change_plot(variable):
+    import matplotlib.pyplot as plt
+
+    values = xr.DataArray(
+        [[-1.0], [1.5]], dims=("Y", "case"),
+        coords={"Y": [2000, 2001], "case": ["experiment"]},
+    )
+    result = xr.Dataset({variable: values})
+    fig, ax = plt.subplots()
+    returned = plot_normalized_change(
+        result, variable=variable, ax=ax,
+        add_colorbar=False, add_invalid_legend=False,
+    )
+    assert returned is fig
+    assert len(ax.images) == 1
+    plt.close(fig)
+
+
+def test_normalized_change_plot_accepts_explicit_levels():
+    import matplotlib.pyplot as plt
+
+    values = xr.DataArray(
+        [[-1.0], [1.5]], dims=("Y", "case"),
+        coords={"Y": [2000, 2001], "case": ["experiment"]},
+    )
+    result = xr.Dataset({"signed_normalized_change": values})
+    levels = np.array([-2.0, -1.0, 0.0, 1.0, 2.0])
+    fig, ax = plt.subplots()
+    plot_normalized_change(
+        result, levels=levels, ax=ax,
+        add_colorbar=False, add_invalid_legend=False,
+    )
+    np.testing.assert_array_equal(ax.images[0].norm.boundaries, levels)
+    plt.close(fig)

@@ -1,19 +1,21 @@
 # Frequently Asked Questions
 
-### Q: How do I install ESP-Lab?
-A: See documentation at [https://esp-lab.readthedocs.io/en/latest/how-to/install-esp-lab.html](https://esp-lab.readthedocs.io/en/latest/how-to/install-esp-lab.html).
+## Q: How do I install ESP-Lab?
+See the installation guide at [Install ESP-Lab](../how-to/install-esp-lab.md).
 
-### Are there examples of using ESP-Lab tools?
-Notebooks with examples of the ESP-Lab tools are available at [https://github.com/CESM-ESPWG/ESP-Lab/tree/main/docs/source/tutorials](https://github.com/CESM-ESPWG/ESP-Lab/tree/main/docs/source/tutorials).
+## Q: Are there examples of using ESP-Lab tools?
+The primary S2D diagnostic suite is organized as a sequential series of Jupyter notebooks in the [`jupyter/`](https://github.com/zhangshixuan1987/ESP-Lab/tree/e3sm-esp/jupyter) directory, documented in the [Analysis Notebooks](../tutorials/index.md) guide.
 
-### Q: How can I set up a preprocessor?
-A: See documentation at [how-to/use_preprocessor.md](how-to/use_preprocessor.md).
+Precomputed diagnostic figures can also be explored in the [Live Diagnostics Portal](https://portal.nersc.gov/cfs/e3sm/zhan391/e3sm-s2d_diag/index.html).
 
-### Q: Where can I find an overview of changes made to the repository?
-A: ESP-Lab's [changelog](https://esp-lab.readthedocs.io/en/latest/reference/changelog.html) contains a list of changes made to the repository.
+## Q: How can I set up a preprocessor?
+See documentation at [Use Preprocessor](../how-to/use_preprocessor.md).
 
-### Q: Can I submit a feature request or bug report?
-A: Yes, please don't hesitate to make a post in our [Discussion](https://github.com/CESM-ESPWG/ESP-Lab/discussions) for feature requests or open an [Issue](https://github.com/CESM-ESPWG/ESP-Lab/issues) on GitHub to report a bug. If you have a solution to a problem you've encountered, feel free to create a pull request.
+## Q: Where can I find an overview of changes made to the repository?
+ESP-Lab's [changelog](changelog.md) contains a detailed record of updates across versions.
 
-### Need more help?
-Create an issue on GitHub at [https://github.com/CESM-ESPWG/ESP-Lab/issues](https://github.com/CESM-ESPWG/ESP-Lab/issues).
+## Q: Can I submit a feature request or bug report?
+Yes, please open an issue on GitHub at [zhangshixuan1987/ESP-Lab/issues](https://github.com/zhangshixuan1987/ESP-Lab/issues) to report bugs or request new diagnostics. Pull requests are always welcome!
+
+## Need more help?
+Create an issue on GitHub at [https://github.com/zhangshixuan1987/ESP-Lab/issues](https://github.com/zhangshixuan1987/ESP-Lab/issues).
