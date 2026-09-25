@@ -20,7 +20,7 @@ filtered by driving index or mode.
 | Section | Figures | Rows | Buttons | Produced by |
 |---|---:|---|---|---|
 | Lead-time ACC | 35 | TREFHT, TS, PRECT, PSL, SST, SSS, OHC700, H2OSNO, H2OSOI, TWS | ACC Skill Map, Model Compare, Difference, Sample Period Sensitivity, Case Difference | `1a_atm`, `1a_ocn`, `1a_lnd` |
-| Lead-time RMSE | 64 | the same 10 fields | RMSE Skill Map (Global/CONUS), nRMSE Difference, Case Difference, Total RMSE (Global/CONUS), RMSE Difference (May/Nov) | `1b_*`, `1c_*` |
+| Lead-time RMSE | 71 | the same 10 fields | RMSE Skill Map (Global/CONUS), nRMSE Difference, Case Difference, Total RMSE (Global/CONUS), RMSE Difference (May/Nov) | `1b_*`, `1c_*` |
 | Regional ACC / nRMSE | 84 | atmosphere, ocean, and land fields | Global, Land, Ocean, Tropics, NH/SH Extratropics, CONUS, North America, Eurasia | `2a` |
 | SST Index | 26 | 13 indices (Niño1+2, Niño3, Niño3.4, Niño4, ONI, RONI, TNI, IOD, TNA, TSA, AtlNino, AtlMDR, Pacific warm pool) | ACC Skill, Time Series | `3a` |
 | Modes of Variability | 72 | 12 modes (NAM, NAO, SAM, PNA, NPO, EA, SCA, PSA1, PSA2, PDO, NPGO, AMO) | Skill vs Lead, PC Time Series, EOF Year 1/2, Teleconnection May/Nov | `4a` |
@@ -29,7 +29,7 @@ filtered by driving index or mode.
 | Teleconnections | 624 | 26 drivers (SST indices, ELI, and modes) × 8 fields | Correlation Map, Summary, Taylor Diagram | `3b`, `4b`, `5c` |
 | Tropical Cyclones | 5 | tropical cyclones | Method, Sanity, Trajectory, and Lead-time Compare, ENSO Regression Map | `7a`, `7b` |
 
-Counts are from the September 2026 final pass (944 figures).
+Counts are from the September 2026 final pass, including the later land RMSE additions (951 figures).
 
 ## Example figures
 

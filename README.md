@@ -56,10 +56,10 @@ Fields without a CESM-SMYLE benchmark (ocean `SSS` and `OHC700`, and all land fi
 | [`1a_ocn_leadtime_acc_skill_map.ipynb`](jupyter/s2d_skill/1a_ocn_leadtime_acc_skill_map.ipynb) | Ocean Skill | Ocean lead-time ACC maps (SST, SSS, OHC700) |
 | [`1b_atm_leadtime_rmse_skill_map.ipynb`](jupyter/s2d_skill/1b_atm_leadtime_rmse_skill_map.ipynb) | Error Maps | Anomaly RMSE skill maps (atmosphere: TREFHT, TS, PRECT, PSL) |
 | [`1b_ocn_leadtime_rmse_skill_map.ipynb`](jupyter/s2d_skill/1b_ocn_leadtime_rmse_skill_map.ipynb) | Error Maps | Anomaly RMSE skill maps (ocean: SST, SSS, OHC700) |
-| [`1b_lnd_leadtime_rmse_skill_map.ipynb`](jupyter/s2d_skill/1b_lnd_leadtime_rmse_skill_map.ipynb) | Error Maps | Normalized RMSE skill maps (land: H2OSNO, H2OSOI, TWS) |
+| [`1b_lnd_leadtime_rmse_skill_map.ipynb`](jupyter/s2d_skill/1b_lnd_leadtime_rmse_skill_map.ipynb) | Error Maps | Normalized RMSE skill maps with a CONUS zoom (land: H2OSNO, H2OSOI, TWS) |
 | [`1c_atm_leadtime_rmse_compare.ipynb`](jupyter/s2d_skill/1c_atm_leadtime_rmse_compare.ipynb) | Model Comparison | Direct (bias-inclusive) RMSE and significance-tested model differences (atmosphere) |
 | [`1c_ocn_leadtime_rmse_compare.ipynb`](jupyter/s2d_skill/1c_ocn_leadtime_rmse_compare.ipynb) | Model Comparison | Direct (bias-inclusive) RMSE and significance-tested model differences (ocean: SST, SSS, OHC700) |
-| [`1c_lnd_leadtime_rmse_compare.ipynb`](jupyter/s2d_skill/1c_lnd_leadtime_rmse_compare.ipynb) | Model Comparison | Direct-RMSE comparison between E3SM land cases (absolute-value reference required; skipped for TWS) |
+| [`1c_lnd_leadtime_rmse_compare.ipynb`](jupyter/s2d_skill/1c_lnd_leadtime_rmse_compare.ipynb) | Model Comparison | Direct-RMSE comparison between E3SM land cases, global and CONUS (absolute-value reference required; skipped for TWS) |
 | [`2a_regional_acc_skill_ts.ipynb`](jupyter/s2d_skill/2a_regional_acc_skill_ts.ipynb) | Regional Skill | Global and regional ACC and nRMSE versus lead (seasonal from 1a, plus monthly all-start curves) for all atmosphere, ocean, and land fields |
 | [`3a_sst_skill_ts.ipynb`](jupyter/s2d_skill/3a_sst_skill_ts.ipynb) | Ocean Skill | SST index skill time series (E3SM, CESM-SMYLE, NMME) |
 | [`3b_sst_telecon.ipynb`](jupyter/s2d_skill/3b_sst_telecon.ipynb) | Teleconnections | Sea surface temperature teleconnection diagnostics |
@@ -111,7 +111,7 @@ Caches are reused only when their stored provenance attributes match the current
 ## Interactive Web Viewer
 ESP-Lab includes a responsive HTML web generator (`esp_lab.diagnostics.web`) that compiles all evaluation figures into a standalone, browsable diagnostics gallery.
 
-- **Live Web Gallery**: [NERSC CFS E3SM-S2D Diagnostics Portal](https://portal.nersc.gov/cfs/e3sm/zhan391/e3sm-s2d_diag/) — 944 figures across lead-time ACC and RMSE, regional skill, SST indices, modes of variability, ELI, initial shock, teleconnections, and tropical cyclones. See the [gallery overview](docs/source/gallery.md) for its sections and example figures.
+- **Live Web Gallery**: [NERSC CFS E3SM-S2D Diagnostics Portal](https://portal.nersc.gov/cfs/e3sm/zhan391/e3sm-s2d_diag/) — 951 figures across lead-time ACC and RMSE, regional skill, SST indices, modes of variability, ELI, initial shock, teleconnections, and tropical cyclones. See the [gallery overview](docs/source/gallery.md) for its sections and example figures.
 - **Features**:
   - **Quick Buttons View**: One-page matrix with one row per field (or index/mode) and one button per figure type; greyed buttons mark figures that do not exist for that row (e.g. no CESM-SMYLE comparison for SSS).
   - **Lead-time RMSE labels** say what each figure shows: `RMSE Skill Map` (1b anomaly RMSE), `nRMSE Difference` (E3SM minus CESM-SMYLE), `Case Difference` (E3SM minus control), `Total RMSE` and `RMSE Difference` (1c, bias included).
@@ -163,8 +163,8 @@ All diagnostic plots are published into a unified web-accessible root (e.g., `/g
 | **Atmospheric / Ocean ACC** | `1a_atm`, `1a_ocn` | `fig_{atm,ocn}_acc_{field}_acc[_{type}].png`, type ∈ `compare`, `difference`, `distribution`, `case_difference` | `fig_atm_acc_prect_acc.png`, `fig_ocn_acc_sss_acc_case_difference.png` |
 | **Land ACC** | `1a_lnd` | `fig_lnd_acc_{field}_acc[_case_difference].png` | `fig_lnd_acc_tws_acc.png`, `fig_lnd_acc_h2osoi_acc_case_difference.png` |
 | **Anomaly RMSE maps** | `1b_atm`, `1b_ocn` | `fig_{atm,ocn}_rmse_{field}_rmse_{global,conus,difference,case_difference}.png` | `fig_atm_rmse_prect_rmse_global.png`, `fig_ocn_rmse_ohc700_rmse_case_difference.png` |
-| **Land normalized RMSE** | `1b_lnd` | `fig_lnd_rmse_{field}_rmse[_case_difference].png` | `fig_lnd_rmse_h2osoi_rmse.png` |
-| **Direct RMSE comparison** | `1c_*` | `fig_rmse_compare_{field}_rmse_compare_{global,conus}.png`<br>`fig_rmse_compare_{field}_rmse_difference_compare_init{MM}.png` (atm/ocn), `..._rmse_difference_global.png` (land) | `fig_rmse_compare_prect_rmse_compare_global.png`, `fig_rmse_compare_prect_rmse_difference_compare_init05.png` |
+| **Land normalized RMSE** | `1b_lnd` | `fig_lnd_rmse_{field}_rmse[_{conus,case_difference}].png` | `fig_lnd_rmse_h2osoi_rmse.png` |
+| **Direct RMSE comparison** | `1c_*` | `fig_rmse_compare_{field}_rmse_compare_{global,conus}.png`<br>`fig_rmse_compare_{field}_rmse_difference_compare_init{MM}.png` (atm/ocn), `..._rmse_difference_global_init{MM}.png` (land) | `fig_rmse_compare_prect_rmse_compare_global.png`, `fig_rmse_compare_prect_rmse_difference_compare_init05.png` |
 | **Regional ACC / nRMSE** | `2a` | `fig_regional_acc_nrmse_{atm,ocn,lnd}_{field}_{region}.png` | `fig_regional_acc_nrmse_lnd_tws_global.png`, `fig_regional_acc_nrmse_ocn_sst_tropics.png` |
 | **SST Indices** | `3a` | `fig_sst_index_{index}_{acc_skill,time_series}.png` | `fig_sst_index_nino3_4_acc_skill.png`, `fig_sst_index_roni_time_series.png` |
 | **SST / MOV / ELI Teleconnections** | `3b`, `4b`, `5c` | `fig_teleconnection_{index}_{VAR}_{correlation_reference_comparison,summary,taylor_diagram}.png` | `fig_teleconnection_Nino34_TREFHT_summary.png`, `fig_teleconnection_NAO_PRECT_taylor_diagram.png` |

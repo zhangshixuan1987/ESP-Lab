@@ -18,10 +18,10 @@ Fields without a CESM-SMYLE benchmark (ocean `SSS` and `OHC700`, and all land fi
 | `1a_ocn_leadtime_acc_skill_map.ipynb` | Ocean Skill | Ocean lead-time ACC maps (SST, SSS, OHC700) |
 | `1b_atm_leadtime_rmse_skill_map.ipynb` | Error Maps | Anomaly RMSE skill maps (atmosphere: TREFHT, TS, PRECT, PSL) |
 | `1b_ocn_leadtime_rmse_skill_map.ipynb` | Error Maps | Anomaly RMSE skill maps (ocean: SST, SSS, OHC700) |
-| `1b_lnd_leadtime_rmse_skill_map.ipynb` | Error Maps | Normalized RMSE skill maps (land: H2OSNO, H2OSOI, TWS) |
+| `1b_lnd_leadtime_rmse_skill_map.ipynb` | Error Maps | Normalized RMSE skill maps with a CONUS zoom (land: H2OSNO, H2OSOI, TWS) |
 | `1c_atm_leadtime_rmse_compare.ipynb` | Model Comparison | Direct (bias-inclusive) RMSE and significance-tested model differences (atmosphere) |
 | `1c_ocn_leadtime_rmse_compare.ipynb` | Model Comparison | Direct (bias-inclusive) RMSE and significance-tested model differences (ocean: SST, SSS, OHC700) |
-| `1c_lnd_leadtime_rmse_compare.ipynb` | Model Comparison | Direct-RMSE comparison between E3SM land cases (absolute-value reference required; skipped for TWS) |
+| `1c_lnd_leadtime_rmse_compare.ipynb` | Model Comparison | Direct-RMSE comparison between E3SM land cases, global and CONUS (absolute-value reference required; skipped for TWS) |
 | `2a_regional_acc_skill_ts.ipynb` | Regional Skill | Global and regional ACC and nRMSE versus lead (seasonal from 1a, plus monthly all-start curves) for all atmosphere, ocean, and land fields |
 | `3a_sst_skill_ts.ipynb` | Ocean Skill | SST index skill time series (E3SM, CESM-SMYLE, NMME) |
 | `3b_sst_telecon.ipynb` | Teleconnections | Sea surface temperature teleconnection diagnostics |
