@@ -9,8 +9,9 @@ import pandas as pd
 import xarray as xr
 
 from workflows.diagnostics import two_reference_drift as workflow
-from esp_lab.paths import leadtime_drift_dir
-from esp_lab.utils.filename_utils import source_init_prefix
+from esp_lab import env_paths
+from esp_lab.paths import leadtime_drift_dir, multimodel_diagnostic_dir
+from esp_lab.utils.filename_utils import figure_filename, source_init_prefix
 from esp_lab.diagnostics.two_reference_drift import (
     area_weighted_mean, regional_subset, compute_regime_fraction,
     run_pipeline,
@@ -30,9 +31,9 @@ REGIONS = {
 
 
 def default_variable_config():
-    ARCHIVE_ROOT = Path('/global/cfs/cdirs/e3sm/S2S2D/E3SMLE')
-    OBS_ROOT = Path('/global/cfs/cdirs/e3sm/e3sm_diags/obs_for_e3sm_diags/time-series')
-    LAND_OBS_ROOT = Path('/global/cfs/cdirs/e3sm/zhan391/data/CPC_SOM/monthly')
+    ARCHIVE_ROOT = env_paths.e3smle_root()
+    OBS_ROOT = env_paths.obs_root()
+    LAND_OBS_ROOT = env_paths.data_root() / 'CPC_SOM' / 'monthly'
     VARIABLE_CONFIG = {
         'TREFHT': {
             'component': 'atm',
@@ -96,10 +97,14 @@ def _check_mode(mode):
 def ensure_reference(variable, init_month, source, *, mode='auto',
                      analysis_years=(1980, 2017), climatology_years=(1981, 2010),
                      variable_config=None,
-                     data_root='/global/cfs/cdirs/e3sm/S2S2D/post_process',
+                     data_root=None,
                      members=tuple(f'EN{i:02d}' for i in range(10))):
-    """Ensure a monthly hindcast and its observation/attractor reference pair."""
+    """Ensure a monthly hindcast and its observation/attractor reference pair.
+
+    ``data_root`` defaults to ``env_paths.raw_model_root()``.
+    """
     _check_mode(mode)
+    data_root = env_paths.raw_model_root() if data_root is None else data_root
     config = (variable_config or default_variable_config())[variable]
     job = dict(source=source, variable=variable, component=config['component'],
                init_month=int(init_month), hindcast_variable=config['hindcast_variable'], regrid=True)
@@ -192,7 +197,7 @@ def _regional_mean(field, regions):
 def ensure_regional_products(output_root, variables, init_months, sources, regions, *,
                              mode='auto', analysis_years=(1980, 2017),
                              variable_years=None, baseline_lead=1, distance_tolerance=1.e-6):
-    """Build only the compact regional diagnostics required by 5b/5c/5d."""
+    """Build only the compact regional diagnostics required by the 1b/1c/1d notebooks."""
     _check_mode(mode)
     invalid = set(sources) - set(CASE_PREFIXES)
     if invalid:
@@ -259,12 +264,15 @@ def ensure_regional_products(output_root, variables, init_months, sources, regio
     return pd.DataFrame(rows)
 
 
-DEFAULT_S2D_DIAG_ROOT = Path('/global/cfs/cdirs/e3sm/S2S2D/s2d_diag')
+# Roots follow the s2d_skill convention: durable products under the
+# s2d_diag tree, published figures flat under one figure root, and
+# cross-source tables under multimodel/<diagnostic>/tables.
+DEFAULT_S2D_DIAG_ROOT = env_paths.s2d_diag_root()
 DEFAULT_OUTPUT_ROOT = DEFAULT_S2D_DIAG_ROOT
-DEFAULT_LEGACY_OUTPUT_ROOT = Path(
-    '/global/cfs/cdirs/e3sm/S2S2D/s2d_diag/multimodel/leadtime_drift/two_reference'
+DEFAULT_FIGURE_ROOT = env_paths.drift_figure_root()
+DEFAULT_TABLE_ROOT = multimodel_diagnostic_dir(
+    'leadtime_drift', 'tables', root=DEFAULT_S2D_DIAG_ROOT
 )
-DEFAULT_FIGURE_ROOT = Path('/global/cfs/cdirs/e3sm/www/zhan391/esp-lab_diag')
 
 DEFAULT_VARIABLES = ('TREFHT', 'SST', 'PSL', 'PRECT', 'H2OSOI')
 DEFAULT_INIT_MONTHS = (5, 11)
@@ -293,35 +301,34 @@ DEFAULT_REGION_FILE_LABELS = {
 MONTH_NAMES = {5: 'May', 11: 'November'}
 
 
+def init_months_token(init_months):
+    """Return the ``init05-init11`` token used in figure names, as in s2d_skill."""
+    return '-'.join(f'init{int(month):02d}' for month in init_months)
+
+
+def drift_figure_filename(diagnostic, variable, *parts, init_months=None, ext='png'):
+    """Return ``fig_drift_<diagnostic>_<variable>_<initMM...>_<parts>.png``.
+
+    Mirrors the s2d_skill figure names (``fig_<diagnostic>_<field>_...``): a
+    fixed ``fig_drift_`` prefix, lower-case tokens, and the initialization
+    months as their own ``initMM`` tokens.
+    """
+    month_token = init_months_token(init_months) if init_months else None
+    return figure_filename('drift', diagnostic, variable, month_token, *parts, ext=ext)
+
+
 def regional_product_path(variable, init_month, source, output_root=DEFAULT_OUTPUT_ROOT):
     """Standard filename and path for regional two-reference diagnostic products.
 
     Places experiment-specific products under ``<output_root>/<source>/leadtime_drift/regional/``.
-    If ``output_root`` already ends in ``regional``, ``leadtime_drift``, or points directly to a
-    specific folder, the file is placed directly inside ``output_root``.
+    If ``output_root`` already ends in ``regional`` or ``leadtime_drift``, or is the source
+    folder itself, the file is placed directly inside ``output_root``.
     """
     root = Path(output_root)
     filename = f'{source_init_prefix(source, init_month)}_{variable}_regional.nc'
-    if root.name in ('regional', 'leadtime_drift', 'two_reference') or root.name == source:
+    if root.name in ('regional', 'leadtime_drift') or root.name == source:
         return root / filename
-
-    canonical = leadtime_drift_dir(source, 'regional', filename, root=root)
-    if canonical.is_file():
-        return canonical
-
-    prior_exp = leadtime_drift_dir(source, filename, root=root)
-    if prior_exp.is_file():
-        return prior_exp
-
-    multimodel_comp = root / 'multimodel' / 'leadtime_drift' / 'comparisons' / 'regional' / filename
-    if multimodel_comp.is_file():
-        return multimodel_comp
-
-    legacy = root / 'multimodel' / 'leadtime_drift' / 'two_reference' / filename
-    if legacy.is_file():
-        return legacy
-
-    return canonical
+    return leadtime_drift_dir(source, 'regional', filename, root=root)
 
 
 def comparison_product_path(comparison_name, variable, init_month, kind='regional', output_root=DEFAULT_OUTPUT_ROOT):
@@ -329,16 +336,11 @@ def comparison_product_path(comparison_name, variable, init_month, kind='regiona
 
     Places comparison products under ``<output_root>/multimodel/leadtime_drift/comparisons/<kind>/``.
     """
-    root = Path(output_root)
     tag = 'regional' if kind == 'regional' else 'spatial_maps'
     filename = f'{source_init_prefix(comparison_name, init_month)}_{variable}_{tag}.nc'
-    canonical = root / 'multimodel' / 'leadtime_drift' / 'comparisons' / tag / filename
-    if canonical.is_file():
-        return canonical
-    legacy = root / 'multimodel' / 'leadtime_drift' / 'two_reference' / filename
-    if legacy.is_file():
-        return legacy
-    return canonical
+    return multimodel_diagnostic_dir(
+        'leadtime_drift', 'comparisons', tag, filename, root=output_root
+    )
 
 
 def figure_size(width, height, scale=1.0):

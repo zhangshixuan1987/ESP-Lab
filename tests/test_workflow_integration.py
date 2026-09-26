@@ -8,6 +8,7 @@ import xarray as xr
 
 from esp_lab.diagnostics.ic_core import DEFAULT_COMPONENTS
 from esp_lab.diagnostics.ic_io import AUDIT_MANIFEST_COLUMNS, build_file_manifest
+from esp_lab import env_paths
 from esp_lab.paths import leadtime_acc_dir
 from esp_lab.diagnostics.store import (
     diagnostic_store_is_valid,
@@ -89,15 +90,14 @@ def test_monthly_workflow_uses_fixed_diagnostic_and_figure_roots():
     assert DEFAULT_OUTPUT_ROOT.parts[-4:] == (
         "multimodel", "leadtime_drift", "atm", "monthly_spatial"
     )
-    assert DEFAULT_FIGURE_OUTDIR == Path(
-        "/global/cfs/cdirs/e3sm/www/zhan391/esp-lab_diag"
-    ) / "leadtime_drift" / "atm" / "monthly_spatial"
+    # Figures are published flat under the drift figure root, as in s2d_skill.
+    assert DEFAULT_FIGURE_OUTDIR == env_paths.drift_figure_root()
 
 
 def test_workflow_configs_declare_explicit_path_roots():
     expected = {
-        "s2d_diag_root": Path("/global/cfs/cdirs/e3sm/S2S2D/s2d_diag"),
-        "figure_outdir": Path("/global/cfs/cdirs/e3sm/www/zhan391/esp-lab_diag"),
+        "s2d_diag_root": env_paths.s2d_diag_root(),
+        "figure_outdir": env_paths.drift_figure_root(),
     }
 
     assert DAILY_PATH_SETTINGS == expected
@@ -228,6 +228,9 @@ def test_diagnostic_store_round_trip(tmp_path):
     )
     assert loaded_results[5]["window"]["init_years"] == [1980, 1981]
     assert "lower" in loaded_bootstrap[5]["window"]
+    # Fixed, readable names: no fingerprint directory, field-and-month file names.
+    assert path == tmp_path / "diagnostics" / "monthly_drift" / "PRECT"
+    assert sorted(p.name for p in path.glob("*.nc")) == ["PRECT_init05_monthly_drift.nc"]
 
 
 def test_physical_members_are_unique():
@@ -291,10 +294,97 @@ def test_regional_product_path_follows_model_first_layout(tmp_path):
     comp_path = comparison_product_path("FOSIRL_minus_Reanalysis", "TREFHT", 5, kind="regional", output_root=tmp_path)
     assert comp_path == tmp_path / "multimodel" / "leadtime_drift" / "comparisons" / "regional" / "FOSIRL_minus_Reanalysis_init05_TREFHT_regional.nc"
 
-    # Legacy two_reference fallback if file exists
+    # Files in retired locations are never picked up; the canonical path is fixed.
     legacy_dir = tmp_path / "multimodel" / "leadtime_drift" / "two_reference"
     legacy_dir.mkdir(parents=True, exist_ok=True)
-    legacy_file = legacy_dir / "Reanalysis_init11_TREFHT_regional.nc"
-    legacy_file.touch()
-    resolved_legacy = regional_product_path("TREFHT", 11, "Reanalysis", output_root=tmp_path)
-    assert resolved_legacy == legacy_file
+    (legacy_dir / "Reanalysis_init11_TREFHT_regional.nc").touch()
+    resolved = regional_product_path("TREFHT", 11, "Reanalysis", output_root=tmp_path)
+    assert resolved == (
+        tmp_path / "Reanalysis" / "leadtime_drift" / "regional"
+        / "Reanalysis_init11_TREFHT_regional.nc"
+    )
+
+
+def test_drift_figure_and_table_names_follow_s2d_skill_convention():
+    from workflows.diagnostics.drift_inputs import (
+        DEFAULT_FIGURE_ROOT, DEFAULT_TABLE_ROOT, drift_figure_filename, init_months_token,
+    )
+
+    assert DEFAULT_FIGURE_ROOT == env_paths.drift_figure_root()
+    assert DEFAULT_TABLE_ROOT == (
+        env_paths.s2d_diag_root() / "multimodel" / "leadtime_drift" / "tables"
+    )
+    assert init_months_token((5, 11)) == "init05-init11"
+    assert (
+        drift_figure_filename("region", "TREFHT", "nino34", "drift", init_months=(5, 11))
+        == "fig_drift_region_trefht_init05_init11_nino34_drift.png"
+    )
+    assert (
+        drift_figure_filename("map", "H2OSOI", "L13minusL1", "abs_distance_change", init_months=(5, 11))
+        == "fig_drift_map_h2osoi_init05_init11_l13minusl1_abs_distance_change.png"
+    )
+
+
+def test_drift_figure_root_defaults_to_s2s_site_and_is_overridable(monkeypatch, tmp_path):
+    monkeypatch.delenv("ESP_LAB_DRIFT_FIGURE_ROOT", raising=False)
+    assert env_paths.drift_figure_root() == Path(
+        "/global/cfs/cdirs/e3sm/www/zhan391/e3sm-s2s_diag"
+    )
+    monkeypatch.setenv("ESP_LAB_DRIFT_FIGURE_ROOT", str(tmp_path))
+    assert env_paths.drift_figure_root() == tmp_path
+
+
+def test_two_reference_caches_follow_source_first_layout(tmp_path):
+    from workflows.diagnostics import two_reference_drift as drift
+
+    job = {"source": "JRA55_FOSIRL", "init_month": 5, "variable": "SST", "component": "ocn"}
+    base = tmp_path / "JRA55_FOSIRL" / "leadtime_drift"
+    assert drift.reference_output_path(job, root=tmp_path) == (
+        base / "references" / "ocn" / "SST" / "JRA55_FOSIRL_init05_SST_monthly_references.nc"
+    )
+    assert drift.output_path(job, root=tmp_path) == (
+        base / "diagnostics" / "ocn" / "SST"
+        / "JRA55_FOSIRL_init05_SST_two_reference_monthly_drift.nc"
+    )
+    assert drift.monthly_hindcast_output_path(job, member_count=10, root=tmp_path) == (
+        tmp_path / "JRA55_FOSIRL" / "leadtime_acc" / "inputs" / "ocn" / "SST"
+        / "JRA55_FOSIRL_init05_SST_N10_M24_mon.nc"
+    )
+
+
+def test_ic_config_roots_fall_back_to_env_paths(monkeypatch):
+    from workflows.diagnostics.ic_config import load_config
+
+    config_path = Path(__file__).parents[1] / "workflows" / "diagnostics" / "ic_config.yaml"
+    for name in ("ESP_LAB_IC_OUTPUT_ROOT", "ESP_LAB_IC_FIGURE_ROOT"):
+        monkeypatch.delenv(name, raising=False)
+    output = load_config(config_path)["output"]
+    assert Path(output["output_root"]) == (
+        env_paths.s2d_diag_root() / "multimodel" / "initial_conditions"
+    )
+    assert Path(output["figure_outdir"]) == env_paths.drift_figure_root()
+
+    monkeypatch.setenv("ESP_LAB_IC_FIGURE_ROOT", "/tmp/ic_figs")
+    assert load_config(config_path)["output"]["figure_outdir"] == "/tmp/ic_figs"
+
+
+def test_gallery_groups_drift_and_ic_figures():
+    from esp_lab.diagnostics.web import _infer_shortname_and_type, _infer_workflow_group
+
+    cases = {
+        "fig_drift_region_trefht_init05_init11_nino34_drift.png": ("DRIFT", "TREFHT", "Regional · Niño3.4 drift"),
+        "fig_drift_summary_prect_shock_skill_scatter_obs_nino3_4.png": ("DRIFT", "PRECT", "Summary · shock skill scatter Niño3.4"),
+        "fig_ic_1980_05_01_00000_en00_ocn_temperature_vertical_rmse.png": ("IC_AUDIT", "OCN", "Vertical RMSE"),
+        "fig_ic_campaign_summary.png": ("IC_AUDIT", "Campaign", "Campaign Summary"),
+    }
+    for name, (group, shortname, button) in cases.items():
+        assert _infer_workflow_group(name, "", "") == group
+        assert _infer_shortname_and_type(name, group) == (shortname, button)
+    # Existing s2d_skill figures keep their groups.
+    assert _infer_workflow_group("fig_shock_ts_ts_init05_1980_2011_seasonal.png", "", "") == "INITIAL_SHOCK"
+
+
+def test_esp_dev_figure_root_is_isolated_from_stable_gallery(monkeypatch):
+    # esp-dev must never publish into the stable checkout's e3sm-s2d_diag gallery.
+    monkeypatch.delenv("ESP_LAB_FIGURE_ROOT", raising=False)
+    assert env_paths.figure_root() == Path("/global/cfs/cdirs/e3sm/www/zhan391/e3sm-s2d_dev")

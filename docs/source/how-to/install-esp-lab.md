@@ -36,7 +36,10 @@ checkout. `7a_tc_method_analysis.ipynb` also needs `global-land-mask`, which
 
 Data and output roots default to the NERSC E3SM paths. Override them per account with
 `ESP_LAB_S2D_DIAG_ROOT`, `ESP_LAB_FIGURE_ROOT`, `ESP_LAB_RAW_MODEL_ROOT`,
-`ESP_LAB_OBS_ROOT`, and `ESP_LAB_DATA_ROOT`.
+`ESP_LAB_OBS_ROOT`, and `ESP_LAB_DATA_ROOT`. The drift suite (`jupyter/s2d_drift/`)
+also reads `ESP_LAB_E3SMLE_ROOT` (E3SM Large Ensemble attractor statistics) and
+publishes its figures under `ESP_LAB_DRIFT_FIGURE_ROOT`
+(default `/global/cfs/cdirs/e3sm/www/zhan391/e3sm-s2s_diag`).
 
 ## PyPI Package
 

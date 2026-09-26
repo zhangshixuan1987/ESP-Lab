@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import fields, is_dataclass
 from hashlib import sha256
 import json
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -93,30 +94,30 @@ def diagnostic_store_path(
     variable: str,
     context: Mapping[str, Any] | None = None,
 ) -> Path:
-    token = config_fingerprint(config, variable=variable, context=context)
-    base = Path(output_root) / "diagnostics" / workflow / variable
-    target = base / token
-    if target.exists():
-        return target
+    """Return the fixed store directory ``<output_root>/diagnostics/<workflow>/<VAR>``.
 
-    # Stores written before output locations were excluded from the science
-    # fingerprint retain a different directory token. Reuse one when its
-    # manifest differs only by those location-only settings.
-    for manifest_path in sorted(base.glob("*/manifest.json")):
-        try:
-            manifest = json.loads(manifest_path.read_text())
-        except (OSError, ValueError):
-            continue
-        if (
-            manifest.get("workflow") == workflow
-            and manifest.get("variable") == variable
-            and _jsonable(manifest.get("context", {})) == _jsonable(context or {})
-            and config_fingerprint(
-                manifest.get("config", {}), variable=variable, context=context
-            ) == token
-        ):
-            return manifest_path.parent
-    return target
+    Following the s2d_diag convention, names are fixed and readable: the
+    configuration fingerprint lives in ``manifest.json`` (checked by
+    :func:`diagnostic_store_is_valid`) and a stale store is rebuilt in place.
+    ``config`` and ``context`` are accepted for API compatibility.
+    """
+    del config, context
+    return Path(output_root) / "diagnostics" / workflow / variable
+
+
+def diagnostic_store_filename(variable: str, init_month: int, workflow: str) -> str:
+    """Return ``<VAR>_init<MM>_<workflow>.nc`` for one initialization month."""
+    return f"{variable}_init{int(init_month):02d}_{workflow}.nc"
+
+
+def diagnostic_store_files(path: str | Path) -> list[Path]:
+    """Return the month files recorded in a store manifest (empty when absent)."""
+    root = Path(path)
+    try:
+        manifest = json.loads((root / "manifest.json").read_text())
+    except (OSError, ValueError):
+        return []
+    return [root / name for name in manifest.get("month_files", [])]
 
 
 def _encode_month(
@@ -169,7 +170,7 @@ def save_diagnostic_store(
 
     for month, month_results in sorted(results.items()):
         dataset = _encode_month(month_results, bootstrap.get(month, {}))
-        target = root / f"init_month_{int(month):02d}.nc"
+        target = root / diagnostic_store_filename(variable, month, workflow)
         temporary = target.with_suffix(".nc.tmp")
         encoding = {
             name: {"zlib": True, "complevel": 2}
@@ -241,7 +242,7 @@ def load_diagnostic_store(
     results: dict[int, dict[str, Any]] = {}
     bootstrap: dict[int, dict[str, Any]] = {}
     for filename in manifest["month_files"]:
-        month = int(Path(filename).stem.rsplit("_", 1)[-1])
+        month = int(re.search(r"init(?:_month_)?(\d{2})", Path(filename).stem).group(1))
         dataset = xr.open_dataset(root / filename, chunks=chunks)
         month_results: dict[str, Any] = {}
         month_bootstrap: dict[str, Any] = {}
@@ -272,6 +273,8 @@ def load_diagnostic_store(
 __all__ = [
     "config_fingerprint",
     "dataframe_fingerprint",
+    "diagnostic_store_files",
+    "diagnostic_store_filename",
     "diagnostic_store_is_valid",
     "diagnostic_store_path",
     "file_fingerprint",

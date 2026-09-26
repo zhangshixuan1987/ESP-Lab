@@ -9,6 +9,31 @@ from typing import Union
 FIGURE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".webp"}
 # Lead-time ACC/RMSE fields, matched as whole underscore-separated tokens.
 LEAD_FIELDS = ("PRECT", "PSL", "TREFHT", "TS", "SST", "SSS", "OHC700", "H2OSNO", "H2OSOI", "TWS")
+# Drift-suite figures (jupyter/s2d_drift) are named fig_drift_<diagnostic>_... and
+# the initial-condition audit fig_ic_...; the second token picks the button family.
+DRIFT_DIAGNOSTIC_LABELS = {
+    "map": "Distance-change Map",
+    "region": "Regional",
+    "regime": "Regime Fraction",
+    "skill": "Drift–Skill",
+    "summary": "Summary",
+    "monthly": "Monthly Spatial",
+    "daily": "Daily Spatial",
+}
+DRIFT_REGION_LABELS = (
+    ("nino3_4", "Niño3.4"),
+    ("nino34", "Niño3.4"),
+    ("north_atlantic", "North-Atlantic"),
+    ("global_land", "Global-Land"),
+)
+IC_FIGURE_LABELS = (
+    ("campaign_summary", "Campaign Summary"),
+    ("fingerprint", "Fingerprint"),
+    ("distribution", "Distribution"),
+    ("zonal_mean", "Zonal Mean"),
+    ("vertical_rmse", "Vertical RMSE"),
+    ("rmse_bar", "RMSE Ranking"),
+)
 # Lead-time RMSE buttons. 1b figures (``fig_{realm}_rmse_*``) are skill maps of
 # the detrended anomaly RMSE (nRMSE for land) and nRMSE differences; 1c figures
 # (``fig_rmse_compare_*``) show direct model-minus-observation RMSE, bias
@@ -221,6 +246,11 @@ def _infer_workflow_group(filename: str, metric: str, mode: str) -> str:
     path_str = str(path_obj).lower()
     metric_lower = metric.lower()
 
+    # Suite prefixes win over keyword rules (drift names contain "shock", "rmse", ...).
+    if stem.startswith("fig_ic_"):
+        return "IC_AUDIT"
+    if stem.startswith("fig_drift_"):
+        return "DRIFT"
     if (
         stem.startswith(("fig_shock_", "fig_6a_", "fig_6b_"))
         or "initial_shock" in path_str
@@ -477,6 +507,31 @@ def _infer_shortname_and_type(
         else:
             shortname = "Teleconnection"
             btn_type = "Map"
+
+    elif group == "DRIFT":
+        parts = stem_lower.split("_")
+        diagnostic = parts[2] if len(parts) > 2 else ""
+        family = DRIFT_DIAGNOSTIC_LABELS.get(diagnostic, "Drift")
+        shortname = next(
+            (v for v in LEAD_FIELDS if f"_{v.lower()}_" in f"_{stem_lower}_"), "Coupled"
+        )
+        detail = "_".join(
+            token for token in parts[3:]
+            if token not in {shortname.lower(), "obs"} and not re.fullmatch(r"init\d{2}", token)
+        )
+        for raw, label in DRIFT_REGION_LABELS:
+            detail = detail.replace(raw, label)
+        detail = detail.replace("_", " ").strip()
+        btn_type = f"{family} · {detail}" if detail else family
+
+    elif group == "IC_AUDIT":
+        shortname = next(
+            (c.upper() for c in ("atm", "ocn", "lnd", "ice", "rof") if f"_{c}_" in f"_{stem_lower}_"),
+            "Campaign",
+        )
+        btn_type = next(
+            (label for key, label in IC_FIGURE_LABELS if key in stem_lower), "IC Diagnostic"
+        )
 
     elif group == "TC":
         shortname = "Tropical Cyclones"
@@ -2445,6 +2500,8 @@ def _build_html_template(manifest: dict) -> str:
             "INITIAL_SHOCK": "Initial Shock",
             "TELECONNECTIONS": "Teleconnections",
             "TC": "Tropical Cyclones",
+            "DRIFT": "Lead-time Drift",
+            "IC_AUDIT": "Initial-condition Audit",
             "OTHER": "Other"
         };
 
@@ -2459,6 +2516,8 @@ def _build_html_template(manifest: dict) -> str:
             "INITIAL_SHOCK": "Quantification of initialization shock, step changes between seasonal start dates, scatter distributions, and error heatmaps.",
             "TELECONNECTIONS": "Global climate mode teleconnection pattern correlation maps, comprehensive summaries, and Taylor diagrams.",
             "TC": "Tropical cyclone statistics and track density diagnostics.",
+            "DRIFT": "Two-reference drift maps, regional drift and skill, drift regimes, drift–skill attribution, and drift summaries (jupyter/s2d_drift).",
+            "IC_AUDIT": "Initial-condition differences between initialization strategies: fingerprints, distributions, profiles, and campaign summaries.",
             "OTHER": "Additional workflow diagnostics."
         };
 
@@ -2595,6 +2654,18 @@ def _build_html_template(manifest: dict) -> str:
                 if (file.includes("evolution")) return "EVOLUTION";
                 if (file.includes("anomaly")) return "ANOMALY";
                 return "CHANGE_MAP";
+            }
+            if (fig.group === "DRIFT") {
+                if (file.includes("fig_drift_map_") || file.includes("fig_drift_monthly_") || file.includes("fig_drift_daily_")) return "CHANGE_MAP";
+                if (file.includes("fig_drift_region_")) return "TIME_SERIES";
+                if (file.includes("fig_drift_skill_") || file.includes("scatter")) return "SCATTER";
+                if (file.includes("fig_drift_regime_") || file.includes("fig_drift_summary_")) return "SUMMARY";
+                return "DRIFT";
+            }
+            if (fig.group === "IC_AUDIT") {
+                if (file.includes("campaign_summary") || file.includes("rmse_bar")) return "SUMMARY";
+                if (file.includes("fingerprint")) return "CHANGE_MAP";
+                return "OTHER";
             }
             if (fig.group === "TELECONNECTIONS") {
                 if (file.includes("taylor")) return "TAYLOR_DIAGRAM";
@@ -2851,7 +2922,7 @@ def _build_html_template(manifest: dict) -> str:
             });
 
             const workflowOrder = [
-                "LEAD_ACC", "LEAD_RMSE", "REGIONAL_SKILL", "SST_INDEX", "MOV", "ELI", "INITIAL_SHOCK", "TELECONNECTIONS", "TC", "OTHER"
+                "LEAD_ACC", "LEAD_RMSE", "REGIONAL_SKILL", "SST_INDEX", "MOV", "ELI", "INITIAL_SHOCK", "TELECONNECTIONS", "TC", "DRIFT", "IC_AUDIT", "OTHER"
             ];
             const groups = Object.keys(counts)
                 .filter(g => g !== "ALL")
@@ -3011,7 +3082,7 @@ def _build_html_template(manifest: dict) -> str:
             }
 
             const workflowOrder = [
-                "LEAD_ACC", "LEAD_RMSE", "REGIONAL_SKILL", "SST_INDEX", "MOV", "ELI", "INITIAL_SHOCK", "TELECONNECTIONS", "TC", "OTHER"
+                "LEAD_ACC", "LEAD_RMSE", "REGIONAL_SKILL", "SST_INDEX", "MOV", "ELI", "INITIAL_SHOCK", "TELECONNECTIONS", "TC", "DRIFT", "IC_AUDIT", "OTHER"
             ];
             const byGroup = {};
             list.forEach(fig => {

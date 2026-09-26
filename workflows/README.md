@@ -19,4 +19,14 @@ Each workflow package maintains configuration, discovery, preprocessing, diagnos
 | `diagnostics/daily_drift`, `diagnostics/monthly_drift` | Daily- and monthly-frequency two-reference drift: discovery, preprocessing, diagnostics, plotting, and CLI runners |
 | `diagnostics/physical_consistency` | Flux partitioning, land–atmosphere coupling, precipitation–soil-moisture response, ocean coupling, and energy/water budgets (`s2d_drift/2a`) |
 | `diagnostics/unified` | Unified S2D orchestrator: field drift, physical consistency, model attractor, and IC-to-drift attribution (`s2d_drift/2b`) |
+
+The drift modules follow the `s2d_skill` I/O conventions. Roots come from `esp_lab.env_paths`.
+Per-source products live under `<s2d_diag>/<source>/leadtime_drift/{references,diagnostics,regional,spatial_maps}/`
+with `<source>_init<MM>_<FIELD>_…` names. Cross-source products and tables live under
+`<s2d_diag>/multimodel/<diagnostic>/`, and IC audit products under `<s2d_diag>/multimodel/initial_conditions/`.
+Figures are written flat to `env_paths.drift_figure_root()` through `figure_filename`, as
+`fig_drift_<diagnostic>_<field>_init<MM>…png` or `fig_ic_…png`. The monthly and daily drift
+stores live in the fixed folder `diagnostics/<workflow>/<VAR>/` as `<VAR>_init<MM>_<workflow>.nc`.
+Their configuration fingerprint is kept in `manifest.json`, and a stale store is rebuilt in place.
+`s2d_drift/3_run_viewer_webpage.ipynb` builds the gallery, which groups figures as Lead-time Drift and Initial-condition Audit.
 | `tropical_cyclones` | TC track density, lead-time diagnostics, and method comparisons (`s2d_skill/7a`, `7b`) |

@@ -12,8 +12,9 @@ Figure suite per (variable, init_month, window)
 5.  RMSE bar chart   — top-N variables by window-mean ΔD
 6.  Regional table   — compact global + Niño-3.4 bias statistics
 
-Figures are saved under the configured figure output directory. Diagnostic
-summary tables remain under ``{output_root}/summary_tables``.
+Figures are saved flat under the configured figure output directory as
+``fig_drift_monthly_<var>_init<MM>_<window>_<kind>.png``. Diagnostic summary
+tables are written under ``{output_root}/tables``.
 
 Design notes
 ------------
@@ -45,6 +46,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from esp_lab.diagnostics.monthly_core import MonthlyConfig
+from esp_lab.utils.filename_utils import figure_filename
 from .config import DEFAULT_FIGURE_OUTDIR
 
 
@@ -556,7 +558,7 @@ def run_plotting(
 
     for init_month, month_results in results.items():
         season_str = {5: "May", 11: "November"}.get(init_month, f"month{init_month:02d}")
-        season_token = season_str.lower()
+        init_token = f"init{int(init_month):02d}"
 
         if verbose:
             print("=" * 70)
@@ -573,10 +575,8 @@ def run_plotting(
                 plot_bias_map(
                     da,
                     title=f"{label}  |  {season_str}  lead=1  {variable}",
-                    outpath=(
-                        out_root
-                        / f"fig_{variable.lower()}_monthly_drift_"
-                          f"{season_token}_lead1_{key}.png"
+                    outpath=out_root / figure_filename(
+                        "drift_monthly", variable, init_token, "lead1", key
                     ),
                     units=units,
                 )
@@ -598,10 +598,9 @@ def run_plotting(
                     title_left=f"D  {ref_label}",
                     title_right=f"D  {test_label}",
                     suptitle=f"IC drift adjustment  |  {variable}  {season_str}  {win_name}",
-                    outpath=(
-                        out_root
-                        / f"fig_{variable.lower()}_monthly_drift_"
-                          f"{season_token}_{win_name}_adjustment_comparison.png"
+                    outpath=out_root / figure_filename(
+                        "drift_monthly", variable, init_token, win_name,
+                        "adjustment_comparison",
                     ),
                     units=units,
                 )
@@ -610,10 +609,8 @@ def run_plotting(
             plot_zonal_mean(
                 paired,
                 title=f"Zonal mean ΔD  |  {variable}  {season_str}  {win_name}",
-                outpath=(
-                    out_root
-                    / f"fig_{variable.lower()}_monthly_drift_"
-                      f"{season_token}_{win_name}_zonal_mean.png"
+                outpath=out_root / figure_filename(
+                    "drift_monthly", variable, init_token, win_name, "zonal_mean"
                 ),
                 units=units,
             )
@@ -635,8 +632,8 @@ def run_plotting(
                 pass
 
     # One paired-difference figure for every lead window and initialization.
-    paired_grid_path = (
-        out_root / f"fig_{variable.lower()}_monthly_drift_paired_diff_grid.png"
+    paired_grid_path = out_root / figure_filename(
+        "drift_monthly", variable, "paired_diff_grid"
     )
     plot_paired_diff_grid(
         results=results,
@@ -651,9 +648,9 @@ def run_plotting(
 
     summary_df = pd.DataFrame(summary_rows)
     if not summary_df.empty:
-        summary_dir = Path(config.output_root) / "summary_tables"
+        summary_dir = Path(config.output_root) / "tables"
         summary_dir.mkdir(parents=True, exist_ok=True)
-        tbl_path = summary_dir / f"{variable.lower()}_monthly_spatial_drift_summary.csv"
+        tbl_path = summary_dir / f"{variable}_monthly_spatial_drift_summary.csv"
         summary_df.to_csv(tbl_path, index=False)
         if verbose:
             print(f"\n  Summary table → {tbl_path}")

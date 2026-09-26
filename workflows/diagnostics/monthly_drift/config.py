@@ -40,7 +40,8 @@ from esp_lab.diagnostics.monthly_core import (
     convert_prect_to_mmday,
     no_conversion,
 )
-from esp_lab.paths import figure_output_dir, multimodel_diagnostic_dir
+from esp_lab import env_paths
+from esp_lab.paths import multimodel_diagnostic_dir
 
 
 # ===========================================================================
@@ -49,13 +50,13 @@ from esp_lab.paths import figure_output_dir, multimodel_diagnostic_dir
 
 DATA_DIR = os.environ.get(
     "ESP_LAB_MONTHLY_DATA_DIR",
-    "/global/cfs/cdirs/e3sm/S2S2D/post_process",
+    str(env_paths.raw_model_root()),
 )
 
 # Durable diagnostic products and public figures live outside the checkout.
 PATH_SETTINGS = {
-    "s2d_diag_root": Path("/global/cfs/cdirs/e3sm/S2S2D/s2d_diag"),
-    "figure_outdir": Path("/global/cfs/cdirs/e3sm/www/zhan391/esp-lab_diag"),
+    "s2d_diag_root": env_paths.s2d_diag_root(),
+    "figure_outdir": env_paths.drift_figure_root(),
 }
 
 DEFAULT_OUTPUT_ROOT = multimodel_diagnostic_dir(
@@ -64,12 +65,8 @@ DEFAULT_OUTPUT_ROOT = multimodel_diagnostic_dir(
     "monthly_spatial",
     root=PATH_SETTINGS["s2d_diag_root"],
 )
-DEFAULT_FIGURE_OUTDIR = figure_output_dir(
-    "leadtime_drift",
-    "atm",
-    "monthly_spatial",
-    root=PATH_SETTINGS["figure_outdir"],
-)
+# Figures are published flat under the drift figure root, as in s2d_skill.
+DEFAULT_FIGURE_OUTDIR = PATH_SETTINGS["figure_outdir"]
 
 INIT_YEARS:  List[int] = list(range(1980, 1987))   # 1980–1986
 INIT_MONTHS: List[int] = [5, 11]                    # May and November

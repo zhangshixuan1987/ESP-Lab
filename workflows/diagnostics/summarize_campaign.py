@@ -27,10 +27,10 @@ Usage
 
 Outputs
 -------
-    output/campaign_summary/campaign_stats.csv           (main table)
-    output/campaign_summary/may_vs_nov_contrast.csv
-    output/campaign_summary/top_variables_by_nrmse.csv
-    output/campaign_summary/campaign_summary.png         (heatmap figure)
+    <output_root>/campaign_summary/campaign_stats.csv    (main table)
+    <output_root>/campaign_summary/may_vs_nov_contrast.csv
+    <output_root>/campaign_summary/top_variables_by_nrmse.csv
+    <figure_outdir>/fig_ic_campaign_summary.png           (heatmap figure)
 """
 
 from __future__ import annotations
@@ -53,6 +53,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from esp_lab.diagnostics.ic_core import aggregate_campaign_stats
 
+from esp_lab.utils.filename_utils import figure_filename
 from .ic_config import build_ic_config, load_config
 
 FONTZ = 11
@@ -117,6 +118,7 @@ def _campaign_heatmap(pivot: pd.DataFrame, title: str, outpath: Path) -> None:
 def run(
     config_path: Path,
     pilot_only: bool | None = None,
+    figure_outdir: str | Path | None = None,
     verbose: bool = True,
 ) -> pd.DataFrame:
     cfg = load_config(config_path)
@@ -129,6 +131,11 @@ def run(
         vs_dir = out_root / "variable_statistics"
     cs_dir = out_root / subdirs.get("campaign_summary", "campaign_summary")
     cs_dir.mkdir(parents=True, exist_ok=True)
+    figure_root = Path(
+        figure_outdir or cfg.get("output", {}).get("figure_outdir", out_root)
+    )
+    figure_root.mkdir(parents=True, exist_ok=True)
+    heatmap_path = figure_root / campaign_summary_figure_name()
 
     if verbose:
         print("=" * 70)
@@ -211,14 +218,19 @@ def run(
                     f"{ic_cfg.experiment_pair.ref_label}\n"
                     f"({len(all_stats['start_date'].unique())} start dates)"
                 ),
-                outpath=cs_dir / "campaign_summary.png",
+                outpath=heatmap_path,
             )
             if verbose:
-                print(f"\n  Campaign heatmap → {cs_dir / 'campaign_summary.png'}")
+                print(f"\n  Campaign heatmap → {heatmap_path}")
         except Exception as exc:
             warnings.warn(f"  Heatmap failed: {exc}", stacklevel=2)
 
     return campaign_df
+
+
+def campaign_summary_figure_name() -> str:
+    """Return the fixed campaign heatmap name, ``fig_ic_campaign_summary.png``."""
+    return figure_filename("ic", "campaign_summary")
 
 
 def main() -> None:
@@ -227,10 +239,12 @@ def main() -> None:
     )
     parser.add_argument("--config", default=str(_SCRIPT_DIR / "ic_config.yaml"))
     parser.add_argument("--full-campaign", action="store_true")
+    parser.add_argument("--figure-outdir", default=None)
     args = parser.parse_args()
     run(
         config_path=Path(args.config),
         pilot_only=False if args.full_campaign else None,
+        figure_outdir=args.figure_outdir,
     )
 
 

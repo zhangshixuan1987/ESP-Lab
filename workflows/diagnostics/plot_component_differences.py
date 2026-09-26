@@ -25,11 +25,13 @@ Usage
 
 Outputs
 -------
-    output/maps/<date>_<component>_<var>_fingerprint.png
-    output/maps/<date>_<component>_<var>_distribution.png
-    output/profiles/<date>_<component>_<var>_zonal_mean.png
-    output/profiles/<date>_<component>_<var>_vertical_rmse.png
-    output/maps/<date>_<component>_rmse_bar.png
+Figures are written flat under ``output.figure_outdir`` with s2d_skill-style names:
+
+    fig_ic_<date>_<member>_<component>_<var>_fingerprint.png
+    fig_ic_<date>_<member>_<component>_<var>_distribution.png
+    fig_ic_<date>_<member>_<component>_<var>_zonal_mean.png
+    fig_ic_<date>_<member>_<component>_<var>_vertical_rmse.png
+    fig_ic_<date>_<component>_rmse_bar.png
 """
 
 from __future__ import annotations
@@ -51,6 +53,7 @@ _REPO_ROOT = _SCRIPT_DIR.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from esp_lab.utils.filename_utils import figure_filename
 from .ic_config import build_ic_config, load_config
 
 # ---------------------------------------------------------------------------
@@ -296,10 +299,7 @@ def run(
     figure_root = Path(
         figure_outdir or cfg.get("output", {}).get("figure_outdir", out_root)
     )
-    maps_dir = figure_root / subdirs.get("maps", "maps")
-    profiles_dir = figure_root / subdirs.get("profiles", "profiles")
-    maps_dir.mkdir(parents=True, exist_ok=True)
-    profiles_dir.mkdir(parents=True, exist_ok=True)
+    figure_root.mkdir(parents=True, exist_ok=True)
 
     active_dates = [single_date] if single_date else ic_cfg.active_dates
     fingerprint_keywords = cfg.get("diagnostics", {}).get("fingerprint_keywords", {})
@@ -344,26 +344,28 @@ def run(
                     ds_diff.close()
                     continue
                 diff_da = ds_diff.get("signed_difference", ds_diff[next(iter(ds_diff.data_vars))])
-                base = f"{date}_{member}_{comp}_{var}"
+                base = ("ic", date, member, comp, var)
                 title_base = f"IC fingerprint ({comp.upper()} · {var} · {member}) | {date}"
-                _fingerprint_plot(ds_diff, title_base, maps_dir / f"{base}_fingerprint.png")
+                _fingerprint_plot(
+                    ds_diff, title_base, figure_root / figure_filename(*base, "fingerprint")
+                )
                 _distribution_plot(
                     diff_da,
                     f"ΔX distribution | {comp.upper()} {var} {member} | {date}",
-                    maps_dir / f"{base}_distribution.png",
+                    figure_root / figure_filename(*base, "distribution"),
                 )
                 if "lat" in diff_da.dims or diff_da.ndim >= 2:
                     _zonal_mean_plot(
                         diff_da, var,
                         title=f"Zonal mean ΔX | {comp.upper()} {var} {member} | {date}",
-                        outpath=profiles_dir / f"{base}_zonal_mean.png",
+                        outpath=figure_root / figure_filename(*base, "zonal_mean"),
                     )
                 depth_dim = _detect_depth_dim(diff_da)
                 if depth_dim and diff_da.ndim >= 2:
                     _vertical_rmse_plot(
                         diff_da, depth_dim,
                         title=f"Vertical RMSE | {comp.upper()} {var} {member} | {date}",
-                        outpath=profiles_dir / f"{base}_vertical_rmse.png",
+                        outpath=figure_root / figure_filename(*base, "vertical_rmse"),
                     )
                 ds_diff.close()
 
@@ -379,14 +381,15 @@ def run(
                     if not stat_df.empty and "rmse" in stat_df.columns:
                         _rmse_bar_chart(
                             stat_df, date, comp, top_n,
-                            outpath=maps_dir / f"{date}_{comp}_rmse_bar.png",
+                            outpath=figure_root / figure_filename(
+                                "ic", date, comp, "rmse_bar"
+                            ),
                         )
                 except Exception as exc:
                     warnings.warn(f"  RMSE bar chart: {exc}", stacklevel=2)
 
     if verbose:
-        print(f"\n  Maps   → {maps_dir}")
-        print(f"  Profiles → {profiles_dir}")
+        print(f"\n  Figures → {figure_root}")
 
 
 def main() -> None:

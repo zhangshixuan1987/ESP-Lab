@@ -28,6 +28,7 @@ from . import preprocess as _preprocess
 from esp_lab.diagnostics.store import (
     config_fingerprint,
     diagnostic_store_is_valid,
+    diagnostic_store_files,
     diagnostic_store_path,
     dataframe_fingerprint,
     file_fingerprint,
@@ -175,7 +176,7 @@ def run(
                 configuration_hash=config_fingerprint(
                     config, variable=var, context=store_context
                 ),
-                field_paths=sorted(store_path.glob("init_month_*.nc")),
+                field_paths=diagnostic_store_files(store_path),
                 metadata={
                     "baseline_day": config.baseline_day,
                     "baseline_window": config.baseline_window,

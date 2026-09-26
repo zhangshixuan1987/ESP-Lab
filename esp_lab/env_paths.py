@@ -7,6 +7,10 @@ find-replace. These helpers keep the same defaults for the existing
 workflow but let any of them be overridden with an ``ESP_LAB_*``
 environment variable, so notebooks stay runnable out of the box while
 remaining portable.
+
+This is the ``esp-dev`` development line: its figure root defaults to
+``e3sm-s2d_dev`` so development runs never touch the ``e3sm-s2d_diag``
+gallery published from the stable (``main``) checkout.
 """
 
 from __future__ import annotations
@@ -17,9 +21,11 @@ from pathlib import Path
 _DEFAULTS = {
     "S2D_DIAG_ROOT": "/global/cfs/cdirs/e3sm/S2S2D/s2d_diag",
     "RAW_MODEL_ROOT": "/global/cfs/cdirs/e3sm/S2S2D/post_process",
-    "FIGURE_ROOT": "/global/cfs/cdirs/e3sm/www/zhan391/e3sm-s2d_diag",
+    "FIGURE_ROOT": "/global/cfs/cdirs/e3sm/www/zhan391/e3sm-s2d_dev",
     "OBS_ROOT": "/global/cfs/cdirs/e3sm/e3sm_diags/obs_for_e3sm_diags/time-series",
     "DATA_ROOT": "/global/cfs/cdirs/e3sm/zhan391/data",
+    "E3SMLE_ROOT": "/global/cfs/cdirs/e3sm/S2S2D/E3SMLE",
+    "DRIFT_FIGURE_ROOT": "/global/cfs/cdirs/e3sm/www/zhan391/e3sm-s2s_diag",
 }
 
 
@@ -52,10 +58,22 @@ def data_root() -> Path:
     return _resolve("DATA_ROOT")
 
 
+def e3smle_root() -> Path:
+    """Root for the E3SM Large Ensemble historical statistics (drift attractor)."""
+    return _resolve("E3SMLE_ROOT")
+
+
+def drift_figure_root() -> Path:
+    """Root for published drift, physical-consistency and IC-audit figures."""
+    return _resolve("DRIFT_FIGURE_ROOT")
+
+
 __all__ = [
     "s2d_diag_root",
     "raw_model_root",
     "figure_root",
     "obs_root",
     "data_root",
+    "e3smle_root",
+    "drift_figure_root",
 ]

@@ -48,6 +48,11 @@ Fields without a CESM-SMYLE benchmark (ocean `SSS` and `OHC700`, and all land fi
 | `1e_refactor_drift_summary.ipynb` | S2D Summary | Integrated bias/drift/spread, ENSO frequency, and scorecards |
 | `2a_refactor_physical_consistency.ipynb` | Physical Consistency | Flux partitioning, land coupling, ocean coupling, energy & water budget |
 | `2b_refactor_unified_diagnostics.ipynb` | Unified S2D | Master orchestrator: field drift, physical consistency, model attractor, IC attribution |
+| `3_run_viewer_webpage.ipynb` | Gallery Webpage | Drift/IC figure gallery (Lead-time Drift and Initial-condition Audit groups) |
+
+Drift products follow the same source-first `s2d_diag` layout as the skill suite
+(`<source>/leadtime_drift/…`, `multimodel/<diagnostic>/tables`). Figures are published flat
+under `ESP_LAB_DRIFT_FIGURE_ROOT` (default `…/www/zhan391/e3sm-s2s_diag`) as `fig_drift_*` and `fig_ic_*`.
 
 ## S2S Weekly Skill Suite (`jupyter/s2s_skill/`)
 

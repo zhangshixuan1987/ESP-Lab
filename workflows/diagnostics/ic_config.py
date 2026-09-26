@@ -24,6 +24,8 @@ _REPO_ROOT = _SCRIPT_DIR.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from esp_lab import env_paths
+from esp_lab.paths import multimodel_diagnostic_dir
 from esp_lab.diagnostics.ic_core import (
     ComponentSpec,
     DEFAULT_COMPONENTS,
@@ -47,10 +49,14 @@ def load_config(config_path: Path) -> dict:
     cfg["experiments"]["ref_root"] = _expand_env(cfg["experiments"]["ref_root"])
     cfg["experiments"]["test_root"] = _expand_env(cfg["experiments"]["test_root"])
     output = cfg.setdefault("output", {})
-    if "output_root" in output:
-        output["output_root"] = _expand_env(output["output_root"])
-    if "figure_outdir" in output:
-        output["figure_outdir"] = _expand_env(output["figure_outdir"])
+    # Blank roots fall back to the shared env_paths defaults, so ESP_LAB_S2D_DIAG_ROOT
+    # and ESP_LAB_DRIFT_FIGURE_ROOT relocate the IC audit like every other workflow.
+    output["output_root"] = _expand_env(output.get("output_root", "")) or str(
+        multimodel_diagnostic_dir("initial_conditions", root=env_paths.s2d_diag_root())
+    )
+    output["figure_outdir"] = _expand_env(output.get("figure_outdir", "")) or str(
+        env_paths.drift_figure_root()
+    )
     return cfg
 
 

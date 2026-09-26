@@ -9,28 +9,24 @@ import cftime
 import numpy as np
 import xarray as xr
 
+from esp_lab.utils.filename_utils import figure_filename as _shared_figure_filename
+
 
 # -----------------------------------------------------------------------------
 # Filename & Token Sanitization
 # -----------------------------------------------------------------------------
 
 def figure_filename(*parts, ext: str = "png") -> str:
-    """Build standardized, readable figure filenames: fig_<diagnostic>_<model>_<reference>_<period>_<other>.ext."""
-    clean_parts = ["fig"]
-    for part in parts:
-        if part is None:
-            continue
-        text = str(part).strip()
-        if not text:
-            continue
-        text = re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_").lower()
-        if text:
-            clean_parts.append(text)
-    return "_".join(clean_parts) + f".{ext.lstrip('.').lower()}"
+    """Build ``fig_<diagnostic>_<model>_<reference>_<period>_<other>.ext``.
+
+    Delegates to the shared :func:`esp_lab.utils.filename_utils.figure_filename`
+    so drift figures follow the same naming rules as the s2d_skill suite.
+    """
+    return _shared_figure_filename(*parts, ext=ext)
 
 
 def safe_token(value: object) -> str:
-    """Sanitize arbitrary strings/values for filenames and keys."""
+    """Sanitize strings for keys and source folder names, preserving case."""
     return re.sub(r"[^A-Za-z0-9]+", "_", str(value)).strip("_")
 
 

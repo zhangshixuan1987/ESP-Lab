@@ -34,6 +34,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from esp_lab.diagnostics.daily_core import DailyDriftConfig
+from esp_lab.utils.filename_utils import figure_filename
 from .config import DEFAULT_FIGURE_OUTDIR
 
 try:
@@ -203,7 +204,7 @@ def run_plotting(
 
     for init_month, month_results in results.items():
         season_str = {5: "May", 11: "November"}.get(init_month, f"month{init_month:02d}")
-        fig_dir = out_root / season_str
+        init_token = f"init{int(init_month):02d}"
 
         if verbose:
             print("=" * 70)
@@ -217,7 +218,9 @@ def run_plotting(
                 ref_ts, test_ts,
                 ref_label=ref_label, test_label=test_label,
                 title=f"Days 1–84 adjustment evolution  |  {variable}  {season_str}",
-                outpath=fig_dir / f"daily_timeseries_{variable}_{season_str}.png",
+                outpath=out_root / figure_filename(
+                    "drift_daily", variable, init_token, "timeseries"
+                ),
                 units=units,
             )
 
@@ -232,7 +235,6 @@ def run_plotting(
             if paired is None:
                 continue
 
-            win_dir = fig_dir / win_name
             sig = boot_results.get(init_month, {}).get(win_name, {}).get("significant")
 
             # Figure 1: Adjustment maps
@@ -242,7 +244,10 @@ def run_plotting(
                     title_left=f"D  {ref_label}",
                     title_right=f"D  {test_label}",
                     suptitle=f"Daily IC drift adjustment  |  {variable}  {season_str}  {win_name}",
-                    outpath=win_dir / f"adj_comparison_{variable}_{season_str}_{win_name}.png",
+                    outpath=out_root / figure_filename(
+                        "drift_daily", variable, init_token, win_name,
+                        "adjustment_comparison",
+                    ),
                     units=units,
                 )
 
@@ -250,13 +255,15 @@ def run_plotting(
             plot_paired_diff_map(
                 paired,
                 title=f"ΔD = D({test_label}) − D({ref_label})  |  {variable}  {season_str}  {win_name}",
-                outpath=win_dir / f"paired_diff_{variable}_{season_str}_{win_name}.png",
+                outpath=out_root / figure_filename(
+                    "drift_daily", variable, init_token, win_name, "paired_diff"
+                ),
                 units=units,
                 significance=sig,
             )
 
             if verbose:
-                print(f"  {season_str}/{win_name}  → {win_dir}")
+                print(f"  {season_str}/{win_name}  → {out_root}")
 
             try:
                 weighted_mean, weighted_rmse = _spatial_summary(paired)
@@ -272,9 +279,9 @@ def run_plotting(
 
     summary_df = pd.DataFrame(summary_rows)
     if not summary_df.empty:
-        summary_dir = Path(config.output_root) / "summary_tables"
+        summary_dir = Path(config.output_root) / "tables"
         summary_dir.mkdir(parents=True, exist_ok=True)
-        tbl_path = summary_dir / f"daily_summary_{variable}.csv"
+        tbl_path = summary_dir / f"{variable}_daily_drift_summary.csv"
         summary_df.to_csv(tbl_path, index=False)
         if verbose:
             print(f"\n  Daily summary table → {tbl_path}")

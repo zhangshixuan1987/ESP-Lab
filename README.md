@@ -96,6 +96,7 @@ Caches are reused only when their stored provenance attributes match the current
 | [`1e_refactor_drift_summary.ipynb`](jupyter/s2d_drift/1e_refactor_drift_summary.ipynb) | S2D Summary | Integrated bias/drift/spread, ENSO frequency, and scorecards |
 | [`2a_refactor_physical_consistency.ipynb`](jupyter/s2d_drift/2a_refactor_physical_consistency.ipynb) | Physical Consistency | Flux partitioning, land coupling, ocean coupling, energy & water budget |
 | [`2b_refactor_unified_diagnostics.ipynb`](jupyter/s2d_drift/2b_refactor_unified_diagnostics.ipynb) | Unified S2D | Master orchestrator: field drift, physical consistency, model attractor, IC attribution |
+| [`3_run_viewer_webpage.ipynb`](jupyter/s2d_drift/3_run_viewer_webpage.ipynb) | Gallery Webpage | Drift/IC figure gallery built from the drift figure root (`ESP_LAB_DRIFT_FIGURE_ROOT`) |
 
 ### S2S Weekly Skill Suite (`jupyter/s2s_skill/`)
 
@@ -121,7 +122,7 @@ ESP-Lab includes a responsive HTML web generator (`esp_lab.diagnostics.web`) tha
 ## Data Organization & Output Conventions
 Diagnostic outputs are structured in two complementary layers: analysis NetCDF datasets (`S2D_DIAG_ROOT`) and public web figures (`FIGURE_OUTDIR`).
 
-All notebooks resolve their machine-specific roots (`S2D_DIAG_ROOT`, `FIGURE_OUTDIR`, the raw model archive, the obs archive, and the supplemental reference-data directory) through `esp_lab.env_paths`, which defaults to the paths documented below but can be overridden per account with `ESP_LAB_S2D_DIAG_ROOT`, `ESP_LAB_FIGURE_ROOT`, `ESP_LAB_RAW_MODEL_ROOT`, `ESP_LAB_OBS_ROOT`, and `ESP_LAB_DATA_ROOT` environment variables, so a different NERSC account can run the workflow without editing notebook source.
+All notebooks resolve their machine-specific roots (`S2D_DIAG_ROOT`, `FIGURE_OUTDIR`, the raw model archive, the obs archive, and the supplemental reference-data directory) through `esp_lab.env_paths`, which defaults to the paths documented below but can be overridden per account with `ESP_LAB_S2D_DIAG_ROOT`, `ESP_LAB_FIGURE_ROOT`, `ESP_LAB_RAW_MODEL_ROOT`, `ESP_LAB_OBS_ROOT`, `ESP_LAB_DATA_ROOT`, `ESP_LAB_E3SMLE_ROOT`, and `ESP_LAB_DRIFT_FIGURE_ROOT` environment variables, so a different NERSC account can run the workflow without editing notebook source.
 
 ### Diagnostic Data Layout (`S2D_DIAG_ROOT`)
 The analysis archive follows an **experiment-first** and **observation-first** canonical structure:
@@ -156,7 +157,7 @@ Within each experiment or multi-model directory, subdirectories partition datase
 Every file name starts with its folder's source name (`JRA55_FOSIRL`, `Reanalysis`, `4DEnVarOcn`, `CESM-SMYLE`, `NMME`, or an observation product such as `ERA5`), the initialization month is its own `_init{MM}_` token, and names carry no provenance hashes: provenance lives in NetCDF attributes and a stale cache is rebuilt in place.
 
 ### Figure Naming Conventions (`FIGURE_OUTDIR`)
-All diagnostic plots are published into a unified web-accessible root (e.g., `/global/cfs/cdirs/e3sm/www/zhan391/e3sm-s2d_diag/`) with semantic, self-describing scientific naming:
+All diagnostic plots are published into a unified web-accessible root (on `esp-dev`, `/global/cfs/cdirs/e3sm/www/zhan391/e3sm-s2d_dev/`; the stable `main` gallery is `e3sm-s2d_diag/`) with semantic, self-describing scientific naming:
 
 | Diagnostic Group | Notebook | Figure Filename Pattern | Example Figures |
 |:---|:---:|:---|:---|

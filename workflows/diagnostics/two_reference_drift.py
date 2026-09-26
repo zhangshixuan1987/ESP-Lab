@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from esp_lab import data_access_e3sm
+from esp_lab import data_access_e3sm, env_paths
 from esp_lab.land_skill import depth_integrated_soil_water_mm
 from esp_lab.diagnostics.two_reference_drift import (
     compute_diagnostics,
@@ -26,16 +26,18 @@ from esp_lab.diagnostics.two_reference_drift import (
     match_observation_to_valid_time,
     validate_compatible_fields,
 )
+from esp_lab.paths import leadtime_drift_dir
 from esp_lab.utils.calendar_utils import time_set_midmonth
+from esp_lab.utils.filename_utils import source_init_prefix
 from esp_lab.utils import regrid_utils as regrid
 
 
 EXPECTED_MONTHLY_LEADS = np.arange(1, 25)
 PATH_SETTINGS = {
-    "s2d_diag_root": Path("/global/cfs/cdirs/e3sm/S2S2D/s2d_diag"),
+    "s2d_diag_root": env_paths.s2d_diag_root(),
 }
 S2D_DIAG_ROOT = PATH_SETTINGS["s2d_diag_root"]
-E3SMLE_ROOT = Path("/global/cfs/cdirs/e3sm/S2S2D/E3SMLE")
+E3SMLE_ROOT = env_paths.e3smle_root()
 E3SMLE_ENSMEAN_ROOT = E3SMLE_ROOT / "ensmean" / "post"
 E3SMLE_ENSSPREAD_ROOT = E3SMLE_ROOT / "ensspread" / "post"
 E3SMLE_GRID = "180x360_aave"
@@ -277,7 +279,7 @@ def monthly_hindcast_output_path(
         / str(job["component"]) / str(job["variable"])
     )
     filename = (
-        f"{job['source']}_{int(job['init_month']):02d}_{job['variable']}"
+        f"{source_init_prefix(job['source'], job['init_month'])}_{job['variable']}"
         f"_N{member_count:02d}_M{lead_count:02d}_mon.nc"
     )
     return directory / filename
@@ -658,30 +660,32 @@ def _historical_reference_label(paths: Sequence[Path]) -> str:
 def output_path(
     job: Mapping[str, object], *, root: str | Path = S2D_DIAG_ROOT
 ) -> Path:
-    """Return the component-aware reusable diagnostic path."""
+    """Return ``<root>/<source>/leadtime_drift/diagnostics/<component>/<VAR>/`` path."""
     filename = (
-        f"{job['source']}_{int(job['init_month']):02d}_{job['variable']}"
+        f"{source_init_prefix(job['source'], job['init_month'])}_{job['variable']}"
         "_two_reference_monthly_drift.nc"
     )
-    return (
-        Path(root)
-        / "drift_diagnostics"
-        / str(job["variable"])
-        / str(job["source"])
-        / str(job["component"])
-        / filename
+    return leadtime_drift_dir(
+        str(job["source"]), "diagnostics", str(job["component"]), str(job["variable"]),
+        filename, root=root,
     )
 
 
 def reference_output_path(
     job: Mapping[str, object], *, root: str | Path = S2D_DIAG_ROOT
 ) -> Path:
-    """Return the path for references matched to one source's exact Y/L valid times."""
+    """Return the path for references matched to one source's exact Y/L valid times.
+
+    References live under ``<root>/<source>/leadtime_drift/references/<component>/<VAR>/``.
+    """
     filename = (
-        f"{job['source']}_{int(job['init_month']):02d}_{job['variable']}"
+        f"{source_init_prefix(job['source'], job['init_month'])}_{job['variable']}"
         "_monthly_references.nc"
     )
-    return Path(root) / "drift_diagnostics" / "references" / str(job["variable"]) / filename
+    return leadtime_drift_dir(
+        str(job["source"]), "references", str(job["component"]), str(job["variable"]),
+        filename, root=root,
+    )
 
 
 def load_drift_references(
@@ -696,7 +700,7 @@ def load_drift_references(
     require_matching_masks: bool = True,
     require_attractor_spread: bool = False,
 ) -> xr.Dataset:
-    """Open and validate the prepared output of ``0_run_drift_input`` (or ``ensure_reference``).
+    """Open and validate a prepared reference product from ``drift_inputs.ensure_reference``.
 
     The loader inspects known schema aliases and exposes stable canonical names
     ``X_obs`` and ``X_att``.  Set ``require_attractor_spread`` when the consumer

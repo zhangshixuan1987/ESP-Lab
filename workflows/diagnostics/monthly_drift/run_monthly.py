@@ -29,8 +29,8 @@ Outputs
 -------
     {S2D_DIAG_ROOT}/multimodel/leadtime_drift/atm/monthly_spatial/*.csv
     {S2D_DIAG_ROOT}/multimodel/leadtime_drift/atm/monthly_spatial/diagnostics/
-    {S2D_DIAG_ROOT}/multimodel/leadtime_drift/atm/monthly_spatial/summary_tables/
-    {FIGURE_OUTDIR}/leadtime_drift/atm/monthly_spatial/*.png
+    {S2D_DIAG_ROOT}/multimodel/leadtime_drift/atm/monthly_spatial/tables/
+    {DRIFT_FIGURE_ROOT}/fig_drift_monthly_*.png
 """
 
 from __future__ import annotations
@@ -55,6 +55,7 @@ from . import preprocess as _preprocess
 from esp_lab.diagnostics.store import (
     config_fingerprint,
     diagnostic_store_is_valid,
+    diagnostic_store_files,
     diagnostic_store_path,
     dataframe_fingerprint,
     file_fingerprint,
@@ -202,7 +203,7 @@ def run(
                 configuration_hash=config_fingerprint(
                     config, variable=var, context=store_context
                 ),
-                field_paths=sorted(store_path.glob("init_month_*.nc")),
+                field_paths=diagnostic_store_files(store_path),
                 metadata={
                     "baseline_lead": config.baseline_lead,
                     "lead_numbering": "lead 1 is the initialization calendar month",
