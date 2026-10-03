@@ -161,7 +161,7 @@ def compute_initial_shock_index(
             data = data.drop_vars("verification_time")
         blocks = data.isel(L=slice(start_lead, start_lead + length)).coarsen(
             L=months, boundary="exact"
-        ).mean()
+        ).mean(skipna=False)
         coverage = weights.where(blocks.notnull(), 0).sum(("lat", "lon")) / weights.sum()
         index = blocks.weighted(weights).mean(("lat", "lon"), skipna=True)
         index = index.where((coverage > 0) & (coverage >= min_area_fraction))
