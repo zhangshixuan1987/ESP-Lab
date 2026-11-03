@@ -325,10 +325,10 @@ def test_drift_figure_and_table_names_follow_s2d_skill_convention():
     )
 
 
-def test_drift_figure_root_defaults_to_s2s_site_and_is_overridable(monkeypatch, tmp_path):
+def test_drift_figure_root_defaults_to_s2d_dev_site_and_is_overridable(monkeypatch, tmp_path):
     monkeypatch.delenv("ESP_LAB_DRIFT_FIGURE_ROOT", raising=False)
     assert env_paths.drift_figure_root() == Path(
-        "/global/cfs/cdirs/e3sm/www/zhan391/e3sm-s2s_diag"
+        "/global/cfs/cdirs/e3sm/www/zhan391/e3sm-s2d_dev"
     )
     monkeypatch.setenv("ESP_LAB_DRIFT_FIGURE_ROOT", str(tmp_path))
     assert env_paths.drift_figure_root() == tmp_path

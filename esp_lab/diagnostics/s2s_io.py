@@ -8,7 +8,13 @@ Handles directory discovery, hindcast loading, and daily-to-weekly aggregation:
 - Ingests daily land surface data (ts/daily/2yr/)
 - Aggregates daily/6-hourly series into non-overlapping 7-day weekly blocks (Weeks 1 to 8)
 - Aligns daily observational references (ERA5_Daily, IMERG_Daily, NOAA-OLR_Daily, etc.)
-- Caches analysis-ready weekly anomaly bundles
+- Caches analysis-ready weekly hindcasts and anomaly bundles
+
+Layout follows the s2d_skill conventions (see ``s2d_diag/README.md``): roots
+come from :mod:`esp_lab.env_paths`, per-source products live under
+``<s2d_diag>/<source>/s2s_weekly/<stage>/<component>/<FIELD>/`` with
+``<source>_init<MM>_<FIELD>_…`` names, and figures are written flat to
+``env_paths.s2s_figure_root()`` as ``fig_s2s_<component>_<diagnostic>_…png``.
 """
 
 from __future__ import annotations
@@ -22,6 +28,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from esp_lab import env_paths
 from esp_lab.data_access_e3sm import drop_feb29
 from esp_lab.diagnostics.s2s_core import (
     S2S_WEEKLY_WINDOWS,
@@ -31,11 +38,14 @@ from esp_lab.diagnostics.s2s_core import (
     compute_weekly_climatology,
     get_weekly_window,
 )
-from esp_lab.paths import leadtime_acc_dir
+from esp_lab.paths import diagnostic_dir
+from esp_lab.utils.filename_utils import figure_filename, source_init_prefix, year_span_token
 
 
-DEFAULT_DATA_DIR = Path("/global/cfs/cdirs/e3sm/S2S2D/post_process")
-DEFAULT_OBS_DIR = Path("/global/cfs/cdirs/e3sm/e3sm_diags/obs_for_e3sm_diags/time-series")
+DEFAULT_DATA_DIR = env_paths.raw_model_root()
+DEFAULT_OBS_DIR = env_paths.obs_root()
+S2S_DIAGNOSTIC = "s2s_weekly"
+WEEKLY_CACHE_VERSION = "s2s_weekly_input_v1"
 
 
 def s2s_hindcast_dir(
@@ -274,25 +284,143 @@ def load_s2s_obs_weekly(
     return weekly_obs
 
 
-def cache_s2s_weekly_bundle(
-    anom_da: xr.DataArray,
-    case_label: str,
+def s2s_weekly_dir(
+    source: str, stage: str, component: str, field: str, *, root: str | Path | None = None
+) -> Path:
+    """Return ``<root>/<source>/s2s_weekly/<stage>/<component>/<FIELD>``."""
+    root = env_paths.s2d_diag_root() if root is None else root
+    return diagnostic_dir(source, S2S_DIAGNOSTIC, stage, component, field, root=root)
+
+
+def s2s_weekly_input_path(
+    source: str,
+    component: str,
     field: str,
     init_month: int,
-    out_dir: str | Path,
+    years: Sequence[int],
+    n_members: int,
+    n_weeks: int,
+    *,
+    root: str | Path | None = None,
 ) -> Path:
-    """Cache analysis-ready weekly anomalies to NetCDF."""
-    out_dir = Path(out_dir)
+    """Return the weekly hindcast cache path, mirroring the s2d_skill input names.
+
+    ``<source>_init<MM>_<FIELD>_y<a>-<b>_ny<n>_N<members>_W<weeks>_week.nc``, e.g.
+    ``JRA55_FOSIRL_init05_TREFHT_y1980-1986_ny7_N10_W08_week.nc``.
+    """
+    years = [int(year) for year in years]
+    name = (
+        f"{source_init_prefix(source, init_month)}_{field}_"
+        f"{year_span_token((min(years), max(years)))}_ny{len(years)}_"
+        f"N{int(n_members):02d}_W{int(n_weeks):02d}_week.nc"
+    )
+    return s2s_weekly_dir(source, "inputs", component, field, root=root) / name
+
+
+def _weekly_cache_attrs(case_prefix, years, init_month, members, field, component, grid, weeks):
+    return {
+        "s2s_weekly_cache_version": WEEKLY_CACHE_VERSION,
+        "case_prefix": str(case_prefix),
+        "initialization_years": ",".join(str(int(y)) for y in years),
+        "initialization_month": int(init_month),
+        "requested_members": ",".join(str(m) for m in members),
+        "field": str(field),
+        "component": str(component),
+        "grid": str(grid),
+        "lead_weeks": ",".join(str(int(w)) for w in weeks),
+    }
+
+
+def ensure_s2s_campaign_weekly(
+    source: str,
+    case_prefix: str,
+    years: Sequence[int],
+    init_month: int,
+    members: Sequence[str],
+    field: str,
+    component: str = "atm",
+    grid: str = "180x360_aave",
+    weeks: Sequence[int] = range(1, 9),
+    *,
+    mode: str = "auto",
+    root: str | Path | None = None,
+    data_root: str | Path | None = None,
+    verbose: bool = True,
+) -> xr.DataArray:
+    """Reuse or build the cached ``(Y, M, L, lat, lon)`` weekly hindcast for one source.
+
+    ``mode`` follows the s2d_skill ``derivation_mode`` contract: ``"auto"``
+    reuses a compatible cache and builds a missing or stale one in place,
+    ``"require"`` fails instead of building, and ``"rebuild"`` always rebuilds.
+    Compatibility is judged from file attributes, never from the file name.
+    """
+    if mode not in {"auto", "require", "rebuild"}:
+        raise ValueError("mode must be 'auto', 'require', or 'rebuild'")
+    years, weeks, members = list(years), list(weeks), list(members)
+    path = s2s_weekly_input_path(
+        source, component, field, init_month, years, len(members), len(weeks), root=root
+    )
+    expected = _weekly_cache_attrs(case_prefix, years, init_month, members, field, component, grid, weeks)
+    reason = "forced rebuild"
+    if mode != "rebuild":
+        if path.is_file():
+            with xr.open_dataarray(path) as cached:
+                stale = {k: v for k, v in expected.items() if cached.attrs.get(k) != v}
+                if not stale:
+                    if verbose:
+                        print(f"  [reuse] {path}")
+                    return cached.load()
+            reason = f"stale attributes {sorted(stale)}"
+        else:
+            reason = "missing cache"
+        if mode == "require":
+            raise FileNotFoundError(f"S2S weekly cache unavailable ({reason}): {path}")
+
+    if verbose:
+        print(f"  [build] {source} init{int(init_month):02d} {field}: {reason}")
+    weekly = load_s2s_campaign_weekly(
+        data_root=DEFAULT_DATA_DIR if data_root is None else data_root,
+        case_prefix=case_prefix, years=years, init_month=init_month, members=members,
+        field=field, component=component, grid=grid, weeks=weeks, verbose=verbose,
+    ).load()
+    weekly.attrs.update(expected, source=str(source))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".nc.tmp")
+    weekly.to_netcdf(temporary)
+    temporary.replace(path)
+    return weekly
+
+
+def cache_s2s_weekly_bundle(
+    anom_da: xr.DataArray,
+    source: str,
+    field: str,
+    init_month: int,
+    component: str = "atm",
+    *,
+    root: str | Path | None = None,
+) -> Path:
+    """Cache analysis-ready weekly anomalies as ``<source>_init<MM>_<FIELD>_weekly_anom.nc``."""
+    out_dir = s2s_weekly_dir(source, "anomalies", component, field, root=root)
     out_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"{case_label}_{field}_init{init_month:02d}_weekly_anom.nc"
-    out_path = out_dir / filename
+    out_path = out_dir / f"{source_init_prefix(source, init_month)}_{field}_weekly_anom.nc"
     anom_da.to_netcdf(out_path)
     return out_path
+
+
+def s2s_figure_filename(component: str, diagnostic: str, field: str, *parts, ext: str = "png") -> str:
+    """Return ``fig_s2s_<component>_<diagnostic>_<field>_<parts>.png`` (s2d_skill style)."""
+    return figure_filename("s2s", component, diagnostic, field, *parts, ext=ext)
 
 
 __all__ = [
     "DEFAULT_DATA_DIR",
     "DEFAULT_OBS_DIR",
+    "S2S_DIAGNOSTIC",
+    "s2s_weekly_dir",
+    "s2s_weekly_input_path",
+    "ensure_s2s_campaign_weekly",
+    "s2s_figure_filename",
     "s2s_hindcast_dir",
     "discover_s2s_files",
     "load_s2s_member_weekly",

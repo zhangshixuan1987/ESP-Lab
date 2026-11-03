@@ -26,6 +26,23 @@ DRIFT_REGION_LABELS = (
     ("north_atlantic", "North-Atlantic"),
     ("global_land", "Global-Land"),
 )
+# S2S weekly-skill figures (jupyter/s2s_skill): fig_s2s_<component>_<diagnostic>_<field>_...
+S2S_DIAGNOSTIC_LABELS = {
+    "acc": "Weekly ACC",
+    "rmse": "Weekly RMSE",
+    "rmse_diff": "ΔRMSE",
+    "telecon": "Teleconnection",
+    "coupling": "Land Coupling",
+}
+S2S_FIELDS = (
+    "SOILWATER_10CM", "FSNO_EFF", "OMEGA500", "H2OSNO", "H2OSOI", "TREFHT", "PRECT",
+    "FLUT", "Z500", "PSL", "TWS", "TSA", "TS",
+)
+S2S_SOURCE_LABELS = (
+    ("4denvarocn", "4DEnVarOcn"),
+    ("jra55_fosirl", "JRA55_FOSIRL"),
+    ("reanalysis", "Reanalysis"),
+)
 IC_FIGURE_LABELS = (
     ("campaign_summary", "Campaign Summary"),
     ("fingerprint", "Fingerprint"),
@@ -251,6 +268,8 @@ def _infer_workflow_group(filename: str, metric: str, mode: str) -> str:
         return "IC_AUDIT"
     if stem.startswith("fig_drift_"):
         return "DRIFT"
+    if stem.startswith("fig_s2s_"):
+        return "S2S"
     if (
         stem.startswith(("fig_shock_", "fig_6a_", "fig_6b_"))
         or "initial_shock" in path_str
@@ -522,6 +541,30 @@ def _infer_shortname_and_type(
         for raw, label in DRIFT_REGION_LABELS:
             detail = detail.replace(raw, label)
         detail = detail.replace("_", " ").strip()
+        btn_type = f"{family} · {detail}" if detail else family
+
+    elif group == "S2S":
+        rest = stem_lower[len("fig_s2s_"):]
+        component, _, rest = rest.partition("_")
+        diagnostic = next(
+            (key for key in sorted(S2S_DIAGNOSTIC_LABELS, key=len, reverse=True)
+             if rest.startswith(f"{key}_")),
+            "",
+        )
+        rest = rest[len(diagnostic) + 1:] if diagnostic else rest
+        field = next(
+            (f.lower() for f in S2S_FIELDS if rest == f.lower() or rest.startswith(f"{f.lower()}_")),
+            rest.partition("_")[0],
+        )
+        rest = rest[len(field) + 1:]
+        shortname = f"{component.upper()} · {field.upper()}"
+        detail = rest.replace("_w1_w8", "").replace("_", " ")
+        for raw, label in S2S_SOURCE_LABELS:
+            detail = detail.replace(raw.replace("_", " "), label)
+        for f in S2S_FIELDS:
+            detail = re.sub(rf"\b{f.lower().replace('_', ' ')}\b", f, detail)
+        detail = re.sub(r"init(\d{2})", lambda m: MONTH_ABBR[int(m.group(1)) - 1], detail).strip()
+        family = S2S_DIAGNOSTIC_LABELS.get(diagnostic, "S2S")
         btn_type = f"{family} · {detail}" if detail else family
 
     elif group == "IC_AUDIT":
@@ -2500,6 +2543,7 @@ def _build_html_template(manifest: dict) -> str:
             "INITIAL_SHOCK": "Initial Shock",
             "TELECONNECTIONS": "Teleconnections",
             "TC": "Tropical Cyclones",
+            "S2S": "S2S Weekly Skill",
             "DRIFT": "Lead-time Drift",
             "IC_AUDIT": "Initial-condition Audit",
             "OTHER": "Other"
@@ -2516,6 +2560,7 @@ def _build_html_template(manifest: dict) -> str:
             "INITIAL_SHOCK": "Quantification of initialization shock, step changes between seasonal start dates, scatter distributions, and error heatmaps.",
             "TELECONNECTIONS": "Global climate mode teleconnection pattern correlation maps, comprehensive summaries, and Taylor diagrams.",
             "TC": "Tropical cyclone statistics and track density diagnostics.",
+            "S2S": "Subseasonal (weeks 1–8) ACC, RMSE, ΔRMSE, teleconnection, and land-coupling diagnostics (jupyter/s2s_skill).",
             "DRIFT": "Two-reference drift maps, regional drift and skill, drift regimes, drift–skill attribution, and drift summaries (jupyter/s2d_drift).",
             "IC_AUDIT": "Initial-condition differences between initialization strategies: fingerprints, distributions, profiles, and campaign summaries.",
             "OTHER": "Additional workflow diagnostics."
@@ -2654,6 +2699,11 @@ def _build_html_template(manifest: dict) -> str:
                 if (file.includes("evolution")) return "EVOLUTION";
                 if (file.includes("anomaly")) return "ANOMALY";
                 return "CHANGE_MAP";
+            }
+            if (fig.group === "S2S") {
+                if (file.includes("_rmse_diff_")) return "DIFFERENCE";
+                if (file.includes("_growth_curves") || file.includes("_telecon_")) return "TIME_SERIES";
+                return "SKILL_MAP";
             }
             if (fig.group === "DRIFT") {
                 if (file.includes("fig_drift_map_") || file.includes("fig_drift_monthly_") || file.includes("fig_drift_daily_")) return "CHANGE_MAP";
@@ -2922,7 +2972,7 @@ def _build_html_template(manifest: dict) -> str:
             });
 
             const workflowOrder = [
-                "LEAD_ACC", "LEAD_RMSE", "REGIONAL_SKILL", "SST_INDEX", "MOV", "ELI", "INITIAL_SHOCK", "TELECONNECTIONS", "TC", "DRIFT", "IC_AUDIT", "OTHER"
+                "LEAD_ACC", "LEAD_RMSE", "REGIONAL_SKILL", "SST_INDEX", "MOV", "ELI", "INITIAL_SHOCK", "TELECONNECTIONS", "TC", "S2S", "DRIFT", "IC_AUDIT", "OTHER"
             ];
             const groups = Object.keys(counts)
                 .filter(g => g !== "ALL")
@@ -3082,7 +3132,7 @@ def _build_html_template(manifest: dict) -> str:
             }
 
             const workflowOrder = [
-                "LEAD_ACC", "LEAD_RMSE", "REGIONAL_SKILL", "SST_INDEX", "MOV", "ELI", "INITIAL_SHOCK", "TELECONNECTIONS", "TC", "DRIFT", "IC_AUDIT", "OTHER"
+                "LEAD_ACC", "LEAD_RMSE", "REGIONAL_SKILL", "SST_INDEX", "MOV", "ELI", "INITIAL_SHOCK", "TELECONNECTIONS", "TC", "S2S", "DRIFT", "IC_AUDIT", "OTHER"
             ];
             const byGroup = {};
             list.forEach(fig => {

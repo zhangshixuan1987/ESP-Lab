@@ -52,7 +52,7 @@ Fields without a CESM-SMYLE benchmark (ocean `SSS` and `OHC700`, and all land fi
 
 Drift products follow the same source-first `s2d_diag` layout as the skill suite
 (`<source>/leadtime_drift/…`, `multimodel/<diagnostic>/tables`). Figures are published flat
-under `ESP_LAB_DRIFT_FIGURE_ROOT` (default `…/www/zhan391/e3sm-s2s_diag`) as `fig_drift_*` and `fig_ic_*`.
+under `ESP_LAB_DRIFT_FIGURE_ROOT` (default `…/www/zhan391/e3sm-s2d_dev`) as `fig_drift_*` and `fig_ic_*`.
 
 ## S2S Weekly Skill Suite (`jupyter/s2s_skill/`)
 
@@ -64,6 +64,11 @@ under `ESP_LAB_DRIFT_FIGURE_ROOT` (default `…/www/zhan391/e3sm-s2s_diag`) as `
 | `2b_leadtime_rmse_compare.ipynb` | Model Comparison | Multi-experiment weekly skill and RMSE comparison |
 | `3a_s2s_telecon_modes.ipynb` | Teleconnections | Subseasonal NAO, PNA, and AO prediction |
 | `4a_soil_moisture_memory.ipynb` | Land Memory | Soil-moisture memory and land–atmosphere coupling |
+| `5_run_viewer_webpage.ipynb` | Gallery Webpage | S2S figure gallery (S2S Weekly Skill group) |
+
+Weekly hindcasts are cached source-first under `<s2d_diag>/<source>/s2s_weekly/inputs/…`, and each notebook's
+`derivation_mode` controls reuse. Figures are published flat under `ESP_LAB_S2S_FIGURE_ROOT`
+(default `…/www/zhan391/e3sm-s2s_diag`) as `fig_s2s_*`.
 
 ## Interactive Web Portal
 

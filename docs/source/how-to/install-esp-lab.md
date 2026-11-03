@@ -39,6 +39,8 @@ Data and output roots default to the NERSC E3SM paths. Override them per account
 `ESP_LAB_OBS_ROOT`, and `ESP_LAB_DATA_ROOT`. The drift suite (`jupyter/s2d_drift/`)
 also reads `ESP_LAB_E3SMLE_ROOT` (E3SM Large Ensemble attractor statistics) and
 publishes its figures under `ESP_LAB_DRIFT_FIGURE_ROOT`
+(default `/global/cfs/cdirs/e3sm/www/zhan391/e3sm-s2d_dev`, shared with the skill suite). The S2S suite
+(`jupyter/s2s_skill/`) publishes to `ESP_LAB_S2S_FIGURE_ROOT`
 (default `/global/cfs/cdirs/e3sm/www/zhan391/e3sm-s2s_diag`).
 
 ## PyPI Package

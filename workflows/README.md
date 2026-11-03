@@ -19,6 +19,8 @@ Each workflow package maintains configuration, discovery, preprocessing, diagnos
 | `diagnostics/daily_drift`, `diagnostics/monthly_drift` | Daily- and monthly-frequency two-reference drift: discovery, preprocessing, diagnostics, plotting, and CLI runners |
 | `diagnostics/physical_consistency` | Flux partitioning, land–atmosphere coupling, precipitation–soil-moisture response, ocean coupling, and energy/water budgets (`s2d_drift/2a`) |
 | `diagnostics/unified` | Unified S2D orchestrator: field drift, physical consistency, model attractor, and IC-to-drift attribution (`s2d_drift/2b`) |
+| `tropical_cyclones` | TC track density, lead-time diagnostics, and method comparisons (`s2d_skill/7a`, `7b`) |
+| `esp_lab/diagnostics/s2s_io`, `esp_lab/diagnostics/s2s_core` | S2S weekly (weeks 1–8) loading, caching, anomalies, ACC/RMSE (`s2s_skill/1a`–`4a`) |
 
 The drift modules follow the `s2d_skill` I/O conventions. Roots come from `esp_lab.env_paths`.
 Per-source products live under `<s2d_diag>/<source>/leadtime_drift/{references,diagnostics,regional,spatial_maps}/`
@@ -29,4 +31,9 @@ Figures are written flat to `env_paths.drift_figure_root()` through `figure_file
 stores live in the fixed folder `diagnostics/<workflow>/<VAR>/` as `<VAR>_init<MM>_<workflow>.nc`.
 Their configuration fingerprint is kept in `manifest.json`, and a stale store is rebuilt in place.
 `s2d_drift/3_run_viewer_webpage.ipynb` builds the gallery, which groups figures as Lead-time Drift and Initial-condition Audit.
-| `tropical_cyclones` | TC track density, lead-time diagnostics, and method comparisons (`s2d_skill/7a`, `7b`) |
+
+The S2S suite follows the same conventions. `ensure_s2s_campaign_weekly` caches weekly hindcasts under
+`<s2d_diag>/<source>/s2s_weekly/inputs/<comp>/<FIELD>/<source>_init<MM>_<FIELD>_y<a>-<b>_ny<n>_N<members>_W<weeks>_week.nc`,
+using the notebooks' `derivation_mode` (`auto`/`require`/`rebuild`). Figures go flat to `env_paths.s2s_figure_root()` as
+`fig_s2s_<comp>_<diagnostic>_<field>_<source>_init<MM>_w1_w8.png`, and `s2s_skill/5_run_viewer_webpage.ipynb` builds their gallery.
+

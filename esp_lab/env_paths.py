@@ -8,9 +8,10 @@ workflow but let any of them be overridden with an ``ESP_LAB_*``
 environment variable, so notebooks stay runnable out of the box while
 remaining portable.
 
-This is the ``esp-dev`` development line: its figure root defaults to
-``e3sm-s2d_dev`` so development runs never touch the ``e3sm-s2d_diag``
-gallery published from the stable (``main``) checkout.
+This is the ``esp-dev`` development line: the S2D skill and drift figure
+roots default to ``e3sm-s2d_dev`` so development runs never touch the
+``e3sm-s2d_diag`` gallery published from the stable (``main``) checkout.
+The S2S suite publishes separately to ``e3sm-s2s_diag``.
 """
 
 from __future__ import annotations
@@ -25,7 +26,8 @@ _DEFAULTS = {
     "OBS_ROOT": "/global/cfs/cdirs/e3sm/e3sm_diags/obs_for_e3sm_diags/time-series",
     "DATA_ROOT": "/global/cfs/cdirs/e3sm/zhan391/data",
     "E3SMLE_ROOT": "/global/cfs/cdirs/e3sm/S2S2D/E3SMLE",
-    "DRIFT_FIGURE_ROOT": "/global/cfs/cdirs/e3sm/www/zhan391/e3sm-s2s_diag",
+    "DRIFT_FIGURE_ROOT": "/global/cfs/cdirs/e3sm/www/zhan391/e3sm-s2d_dev",
+    "S2S_FIGURE_ROOT": "/global/cfs/cdirs/e3sm/www/zhan391/e3sm-s2s_diag",
 }
 
 
@@ -68,6 +70,11 @@ def drift_figure_root() -> Path:
     return _resolve("DRIFT_FIGURE_ROOT")
 
 
+def s2s_figure_root() -> Path:
+    """Root for published S2S weekly-skill figures (jupyter/s2s_skill)."""
+    return _resolve("S2S_FIGURE_ROOT")
+
+
 __all__ = [
     "s2d_diag_root",
     "raw_model_root",
@@ -76,4 +83,5 @@ __all__ = [
     "data_root",
     "e3smle_root",
     "drift_figure_root",
+    "s2s_figure_root",
 ]
