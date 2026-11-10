@@ -496,6 +496,34 @@ def _infer_shortname_and_type(
     return shortname, btn_type
 
 
+def annotate_figure_entry(entry: dict) -> dict:
+    """Fill a manifest entry's viewer fields (group, shortname, button type).
+
+    ``entry["file"]`` is the figure path relative to the gallery directory.
+    Without ``group`` the viewer falls back to filename guesses and scatters
+    one workflow's figures across per-field sections, so every entry written
+    to a manifest should pass through here.
+    """
+    rel_file = entry["file"]
+    name = Path(rel_file).name
+    entry.setdefault("mode", _infer_mode(name))
+    entry.setdefault("metric", _infer_metric(name))
+    entry.setdefault("title", _humanize_figure_name(Path(name).stem))
+    entry.setdefault("caption", "Workflow-generated diagnostic figure.")
+    entry["group"] = _infer_workflow_group(rel_file, entry["metric"], entry["mode"])
+    shortname, btn_type = _infer_shortname_and_type(
+        rel_file, entry["group"], entry["metric"], entry["mode"]
+    )
+    entry["shortname"] = shortname
+    entry["btn_type"] = btn_type
+    button = _lead_rmse_button(Path(name).stem) if entry["group"] == "LEAD_RMSE" else None
+    if button:
+        entry["btn_rank"] = button[1]
+    else:
+        entry.pop("btn_rank", None)
+    return entry
+
+
 def discover_workflow_figures(
     diag_dir: Union[str, Path],
     *,
@@ -574,24 +602,7 @@ def discover_workflow_figures(
         root_entry = metadata_by_file.get(rel_file, metadata_by_file.get(path.name, {}))
         entry = dict(local_entry) if local_entry else dict(root_entry)
         entry.update({"file": rel_file})
-        entry.setdefault("mode", _infer_mode(path.name))
-        entry.setdefault("metric", _infer_metric(path.name))
-        entry.setdefault("title", _humanize_figure_name(path.stem))
-        entry.setdefault("caption", "Workflow-generated diagnostic figure.")
-        entry["group"] = _infer_workflow_group(
-            rel_file, entry["metric"], entry["mode"]
-        )
-        shortname, btn_type = _infer_shortname_and_type(
-            rel_file, entry["group"], entry["metric"], entry["mode"]
-        )
-        entry["shortname"] = shortname
-        entry["btn_type"] = btn_type
-        button = _lead_rmse_button(path.stem) if entry["group"] == "LEAD_RMSE" else None
-        if button:
-            entry["btn_rank"] = button[1]
-        else:
-            entry.pop("btn_rank", None)
-        figures.append(entry)
+        figures.append(annotate_figure_entry(entry))
 
     manifest = {
         key: value

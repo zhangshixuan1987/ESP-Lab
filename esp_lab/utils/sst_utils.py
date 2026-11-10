@@ -162,7 +162,13 @@ def load_or_create_land_mask(
     lock_path = path.with_suffix(path.suffix + ".lock")
 
     with lock_path.open("w") as lock_file:
-        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+        except OSError:
+            # CFS on Perlmutter compute nodes rejects flock (errno 524). The
+            # lock only avoids duplicate work; the temp-file + os.replace
+            # write below keeps the mask intact without it.
+            pass
         if path.exists() and not force:
             try:
                 with xr.open_dataset(path) as cached:

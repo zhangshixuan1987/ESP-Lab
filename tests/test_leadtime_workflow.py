@@ -61,15 +61,15 @@ def _cell(key):
     return "".join(line for line in cell["source"] if not line.startswith("%"))
 
 
-def _seasonal_data(members, *, missing=False):
+def _seasonal_data(members, *, missing=False, init_month=11, years=range(2000, 2008)):
     rng = np.random.default_rng(12)
-    years = np.arange(2000, 2008)
-    values = rng.normal(size=(8, 4, members, 2, 3))
+    years = np.asarray(years)
+    values = rng.normal(size=(years.size, 4, members, 2, 3))
     if missing:
         values[..., 0] = np.nan
     model = xr.DataArray(
         values, dims=("Y", "L", "M", "lat", "lon"),
-        coords={"Y": [f"{y}110100" for y in years], "L": [3, 6, 9, 12],
+        coords={"Y": [f"{y}{init_month:02d}0100" for y in years], "L": [3, 6, 9, 12],
                 "M": np.arange(members), "lat": [-30., 30.], "lon": [0., 120., 240.]},
     )
     time = xr.DataArray(
@@ -246,7 +246,8 @@ def notebook_run(tmp_path):
         source_paths[name].write_bytes(name.encode())
     trackers = []
 
-    def run(field="TS", mode="inventory", cases=("case-a", "case-b"), cached=False, has_smyle=True):
+    def run(field="TS", mode="inventory", cases=("case-a", "case-b"), cached=False,
+            has_smyle=True, init_months=(11,), coverage=None):
         ns = {}
         for module in (leadtime_prepared_cache, leadtime_skill_cache, workflow, unit_conversion):
             ns.update({k: v for k, v in vars(module).items() if not k.startswith("_")})
@@ -272,10 +273,15 @@ def notebook_run(tmp_path):
             name: {"case_prefix": name, "cache_tag": name, "source_revision": "v1"}
             for name in cases
         }
+        for name, init_years_by_month in (coverage or {}).items():
+            ns["E3SM_CASES"][name]["init_years_by_month"] = init_years_by_month
         ns["E3SM_REFERENCE_CASE"] = "case-a"
         settings = ns["WORKFLOW_SETTINGS"]
         settings["paths"].update(s2d_diag_root=str(tmp_path / field), figure_outdir=str(tmp_path / "figures"))
-        settings["run"].update(years=(2000, 2007), init_months=[11], climatology_years=(2000, 2007))
+        settings["run"].update(
+            initialization_years=(2000, 2007), year_end=None, years=(2000, 2007),
+            init_months=list(init_months), climatology_years=(2000, 2007),
+        )
         settings["e3sm"].update(data_dir=str(tmp_path), nens=2, nlead=12)
         settings["smyle"].update(benchmark_dir=str(tmp_path), nens=3, nlead=12)
         settings["obs"].update(data_dir=str(tmp_path), chunks={})
@@ -291,7 +297,7 @@ def notebook_run(tmp_path):
         settings["finite_ensemble_compare"].update(
             force_recompute=False, iteration_batch_size=2, model_chunks={}, obs_chunks={}
         )
-        settings["finite_ensemble_compare"]["modes"]["final"] = dict(init_months=[11], iterations=3, lead_start=2, lead_end=3)
+        settings["finite_ensemble_compare"]["modes"]["final"] = dict(init_months=list(init_months), iterations=3, lead_start=2, lead_end=3)
         settings["diagnostics"]["run_drift_check"] = True
         ns["data_access"] = SimpleNamespace(
             build_init_tags=lambda years, month: [f"{y}{month:02d}0100" for y in years],
@@ -306,7 +312,9 @@ def notebook_run(tmp_path):
             # field actually has a CESM-SMYLE benchmark; only load_benchmark()
             # (the real data access) is gated by has_smyle_benchmark.
             benchmark_path=_forbid if cached else lambda *a, **kw: source_paths["smyle"],
-            load_benchmark=_forbid if (cached or not has_smyle) else lambda **kw: xr.Dataset({ns["smyle_field"]: smyle, "time": smyle_time}),
+            load_benchmark=_forbid if (cached or not has_smyle) else lambda **kw: xr.Dataset(dict(zip(
+                (ns["smyle_field"], "time"), _seasonal_data(3, init_month=kw["init_month"])
+            ))),
         )
         ns["obs_access"] = SimpleNamespace(
             # Listing the configured obs_path_pattern is allowed on restart (it
@@ -332,9 +340,12 @@ def notebook_run(tmp_path):
         # Inject already aggregated archive arrays at the regrid-stage boundary.
         ns["e3sm_seas_by_case_month"] = {}
         for case, months in ns["e3sm_months_to_prepare"].items():
-            if months:
-                model, time = _seasonal_data(2)
-                ns["e3sm_seas_by_case_month"][case] = {11: xr.Dataset({field: model, "time": time})}
+            ns["e3sm_seas_by_case_month"][case] = {}
+            for month in months:
+                model, time = _seasonal_data(
+                    2, init_month=month, years=ns["INIT_YEARS_BY_CASE_MONTH"][case][month]
+                )
+                ns["e3sm_seas_by_case_month"][case][month] = xr.Dataset({field: model, "time": time})
         for marker in PIPELINE_CELLS:
             exec(compile(_cell(marker), f"1a_cell[{marker[:30]}]", "exec"), ns)
         return ns
@@ -410,6 +421,28 @@ def test_interrupted_resampling_reuses_completed_batch(notebook_run):
     resumed = run("PRECT", cases=("case-a",))
     assert kept_batch.stat().st_mtime_ns == stamp
     xr.testing.assert_identical(resumed["accpval_by_case_month"]["case-a"][11], expected)
+
+
+def test_case_init_month_coverage_skips_uncovered_months(notebook_run):
+    """Cases cover only their configured months; sparse starts set the SMYLE overlap."""
+    run, _ = notebook_run
+    sparse_years = range(2000, 2008, 2)
+    ns = run(
+        "PRECT", init_months=(5, 11),
+        coverage={"case-a": {11: None}, "case-b": {5: sparse_years, 11: None}},
+    )
+
+    assert ns["CASE_INIT_MONTHS"] == {"case-a": [11], "case-b": [5, 11]}
+    assert set(ns["skill_by_case_month"]["case-a"]) == {11}
+    assert set(ns["skill_by_case_month"]["case-b"]) == {5, 11}
+    assert ns["anom_by_case_month"]["case-b"][5].sizes["Y"] == len(sparse_years)
+    assert ns["anom_by_case_month"]["case-b"][11].sizes["Y"] == 8
+    assert ns["common_e3sm_years"](5).size == len(sparse_years)
+    assert ns["smyle_overlap_skill_by_month"][5].attrs["verification_years"] == "2000,2002,2004,2006"
+    assert ns["compare_years_by_case_month"]["case-b"][5].size == len(sparse_years)
+    assert 5 not in ns["accpval_by_case_month"]["case-a"]
+    assert ns["compare_case"] == "case-a" and ns["compare_init_month"] == 11
+    assert set(ns["skill_delta_by_case_month"]["case-b"]) == {5, 11}
 
 
 def test_all_notebook_cells_compile():

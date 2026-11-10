@@ -132,6 +132,27 @@ def test_subset_hindcast_initialization_years_rejects_incomplete_cohort():
         index_reference_skill.subset_hindcast_initialization_years(data, valid_time, 2000, 2002)
 
 
+def test_subset_hindcast_initialization_years_accepts_listed_sparse_years():
+    years = [1995, 2000, 2005, 2010]
+    valid_time = xr.DataArray(
+        [cftime.DatetimeNoLeap(year, 2, 15) for year in years],
+        dims="Y",
+        coords={"Y": years},
+    )
+    data = xr.DataArray([1.0, 2.0, 3.0, 4.0], dims="Y", coords={"Y": years})
+
+    selected, _ = index_reference_skill.subset_hindcast_initialization_years(
+        data, valid_time, 1998, 2012, years=range(1980, 2016, 5)
+    )
+    assert selected.Y.values.tolist() == [2000, 2005, 2010]
+
+    with pytest.raises(ValueError, match="Expected every initialization year"):
+        index_reference_skill.subset_hindcast_initialization_years(
+            data.isel(Y=slice(0, 2)), valid_time.isel(Y=slice(0, 2)), 1998, 2012,
+            years=range(1980, 2016, 5),
+        )
+
+
 def test_observation_agreement_removes_local_monthly_climatology():
     time = [
         cftime.DatetimeNoLeap(year, month, 15)
