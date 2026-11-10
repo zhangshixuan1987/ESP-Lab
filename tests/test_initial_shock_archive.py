@@ -90,6 +90,32 @@ def test_cache_identity_fingerprints_functions_not_whole_files(archive_inputs, m
     assert set(provenance['code']) == {'archive_compute'}
 
 
+def test_partial_case_coverage_uses_own_years_and_pads_comparison(archive_inputs, monkeypatch):
+    settings, cases, variable = archive_inputs
+    model_path = archive.e3sm_access.nested_file_list_by_init()[0][0][0]
+    monkeypatch.setattr(archive.e3sm_access, 'nested_file_list_by_init',
+                        lambda **kw: ([[model_path]], kw['init_tags']))
+    monkeypatch.setattr(archive.e3sm_access, 'get_monthly_data',
+                        lambda **kw: xr.open_dataset(model_path).sel(Y=kw['init_tags']))
+    cases = {**cases,
+             'partial': {'case_prefix': 'example', 'cache_tag': 'partial',
+                         'init_years_by_month': {5: range(1981, 1990)}},
+             'november_only': {'case_prefix': 'example', 'cache_tag': 'nov',
+                               'init_years_by_month': {11: None}}}
+
+    plan = archive.plan_archive_run(settings, cases, variable)
+
+    assert [(t['case'], t['years']) for t in plan] == [('test', [1980, 1981]), ('partial', [1981])]
+    assert Path(plan[1]['path']).name == 'partial_init05_1981_1981.nc'
+    combined = archive.compute_archive_plan(plan, settings, variable)[5]
+    np.testing.assert_array_equal(combined.Y, [1980, 1981])
+    assert combined.std_ratio.sel(case='partial', Y=1980).isnull().all()
+    np.testing.assert_allclose(combined.std_ratio.sel(case='partial', Y=1981), 2)
+    errors = error_archive.compute_archive_plan(
+        error_archive.plan_archive_run(settings, cases, variable), settings, variable)[5]
+    assert list(errors.case.values) == ['test', 'partial']
+
+
 def test_incomplete_archive_stops_before_compute(archive_inputs,monkeypatch):
     settings,cases,variable=archive_inputs
     monkeypatch.setattr(archive.e3sm_access,'nested_file_list_by_init',lambda **kw: ([],[]))

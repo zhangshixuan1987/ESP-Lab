@@ -109,7 +109,8 @@ def compute_archive_plan(plan, settings, variable):
             else:
                 if settings["cache"]["mode"] == "require":
                     raise FileNotFoundError(path)
-                source = comparison.sel(case=case, drop=True)
+                # Drop NaN-padded years of partially covered cases.
+                source = comparison.sel(case=case, drop=True).sel(Y=task["years"])
                 result = compute_initial_shock_error_index(
                     source,
                     min_samples=settings["metric"].get("monthly_error_min_samples"),
@@ -127,5 +128,5 @@ def compute_archive_plan(plan, settings, variable):
                 atomic_to_netcdf(result, path)
                 print(f"Wrote {path}")
             items.append(result.expand_dims(case=[case_name]))
-        output[month] = xr.concat(items, dim="case", join="exact", combine_attrs="drop_conflicts")
+        output[month] = xr.concat(items, dim="case", join="outer", combine_attrs="drop_conflicts")
     return output

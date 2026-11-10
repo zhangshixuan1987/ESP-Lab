@@ -227,3 +227,20 @@ def test_e3sm_explicit_sst_does_not_silently_fall_back(tmp_path, monkeypatch):
     monkeypatch.setattr(MODULE.data_access, "file_dict", available)
     with np.testing.assert_raises(FileNotFoundError):
         MODULE.resolve_e3sm_field(_e3sm_field_args(tmp_path, field="SST"))
+
+
+def test_e3sm_field_resolution_checks_only_listed_init_years(tmp_path, monkeypatch):
+    listed = {"1980020100", "1985020100", "1980050100", "1981050100"}
+
+    def available(**kwargs):
+        return {tag: f"/{kwargs['field']}_{tag}.nc" for tag in listed}
+
+    monkeypatch.setattr(MODULE.data_access, "file_dict", available)
+    args = _e3sm_field_args(tmp_path)
+    args.init_months = [2, 5]
+    args.year_end = 1985
+    args.e3sm_init_years = {2: [1980, 1985], 5: [1980, 1981]}
+    assert MODULE._e3sm_init_years(args) == {2: [1980, 1985], 5: [1980, 1981]}
+    assert MODULE.resolve_e3sm_field(args) == "SST"
+    del args.e3sm_init_years
+    assert MODULE._e3sm_init_years(args)[5] == list(range(1980, 1986))

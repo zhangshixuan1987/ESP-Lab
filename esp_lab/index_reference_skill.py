@@ -206,13 +206,16 @@ def subset_hindcast_initialization_years(
     valid_time: xr.DataArray,
     year0: int,
     year1: int,
+    *,
+    years=None,
 ) -> tuple[xr.DataArray, xr.DataArray]:
     """Select a complete, inclusive initialization-year cohort.
 
     The cohort is derived from verification time minus the one-based monthly
     lead offset (including seasonal centers such as L=3). Selection is
     applied through the shared ``Y`` coordinate so later-lead verification
-    dates remain unchanged.
+    dates remain unchanged. ``years`` restricts the expected cohort to the
+    listed initialization years inside ``year0``-``year1`` (sparse coverage).
     """
     if year1 < year0:
         raise ValueError(f"year1 ({year1}) must be greater than or equal to year0 ({year0})")
@@ -230,11 +233,18 @@ def subset_hindcast_initialization_years(
     ) // 12
     mask = np.asarray((init_year >= year0) & (init_year <= year1), dtype=bool)
     selected_y = np.asarray(valid_time["Y"].values)[mask]
-    expected_years = np.arange(year0, year1 + 1)
+    expected_years = (
+        np.arange(year0, year1 + 1) if years is None
+        else np.array(sorted(int(y) for y in years if year0 <= int(y) <= year1))
+    )
     selected_years = np.asarray(init_year.values)[mask].astype(int)
     if not np.array_equal(selected_years, expected_years):
+        expected = (
+            f"from {year0} through {year1}" if years is None
+            else f"in {expected_years.tolist()}"
+        )
         raise ValueError(
-            f"Expected every initialization year from {year0} through {year1}; "
+            f"Expected every initialization year {expected}; "
             f"found {selected_years.tolist()}."
         )
     return data.sel(Y=selected_y), valid_time.sel(Y=selected_y)

@@ -70,6 +70,21 @@ def _cache_valid(path, digest):
         return False
 
 
+def _case_years(info, month, years):
+    """Initialization years a case covers for ``month`` within ``years``.
+
+    Optional ``init_years_by_month`` maps covered months to their start years
+    (None = every requested year); months absent from it are not covered.
+    """
+    coverage = info.get('init_years_by_month')
+    if coverage is None:
+        return list(years)
+    if month not in coverage:
+        return []
+    covered = coverage[month]
+    return list(years) if covered is None else [y for y in years if y in set(covered)]
+
+
 def plan_archive_run(settings, cases, variable):
     """Inventory every requested case/month before any expensive preparation.
 
@@ -128,16 +143,22 @@ def plan_archive_run(settings, cases, variable):
     for month in months:
         tags = e3sm_access.build_init_tags(years, month)
         for case, info in cases.items():
+            case_years = _case_years(info, month, years)
+            if not case_years:
+                print(f'Skipping {case} init {month:02d}: no initializations in {years[0]}-{years[-1]}')
+                continue
+            case_tags = e3sm_access.build_init_tags(case_years, month)
             loader = dict(data_dir=settings['e3sm']['data_dir'], case_prefix=info['case_prefix'],
-                          members=members, init_tags=tags, field=variable['model_variable'],
+                          members=members, init_tags=case_tags, field=variable['model_variable'],
                           realm='atm', grid=settings['e3sm']['grid'], freq='monthly',
                           ts_split=settings['e3sm']['ts_split'], require_all_members=True,
                           verify_field_name=True, verify_coverage=True, nlead=nlead)
             files, valid = e3sm_access.nested_file_list_by_init(**loader)
-            if valid != tags:
-                raise FileNotFoundError(f'{case} init {month:02d}: incomplete initializations {sorted(set(tags)-set(valid))}')
+            if valid != case_tags:
+                raise FileNotFoundError(f'{case} init {month:02d}: incomplete initializations {sorted(set(case_tags)-set(valid))}')
             tasks.append(dict(case=case, source=info['cache_tag'], month=month, kind='e3sm',
-                              loader=loader, model_paths=[p for row in files for p in row]))
+                              years=case_years, loader=loader,
+                              model_paths=[p for row in files for p in row]))
         if settings['smyle']['include']:
             loader = dict(field=variable['smyle_variable'], init_month=month,
                           benchmark_dir=settings['smyle']['benchmark_dir'],
@@ -148,10 +169,11 @@ def plan_archive_run(settings, cases, variable):
                 if missing or ds.sizes.get('M') != loader['nens'] or ds.sizes.get('L') != nlead:
                     raise ValueError(f'CESM-SMYLE {month:02d}: incomplete years/members/leads; missing={missing}')
             tasks.append(dict(case='CESM-SMYLE', source='CESM-SMYLE', month=month,
-                              kind='smyle', loader=loader, model_paths=[str(path)]))
+                              kind='smyle', years=years, loader=loader, model_paths=[str(path)]))
+    if not tasks:
+        raise ValueError(f'No configured case covers init_months {months} in {years[0]}-{years[-1]}')
     code_identity = archive_code_identity()
     for task in tasks:
-        task['years'] = years
         task['obs_path'] = obs_path
         task['inventory'] = _inventory(task['model_paths'] + [obs_path])
         payload = dict(task=task.copy(), settings=settings, variable=variable,
@@ -162,7 +184,7 @@ def plan_archive_run(settings, cases, variable):
         task['digest'] = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         task['path'] = str(diagnostic_dir(task['source'], 'initial_shock', 'metrics', 'atm',
                                         variable['field'], root=settings['paths']['s2d_diag_root']) /
-                           f"{task['source']}_init{task['month']:02d}_{years[0]}_{years[-1]}.nc")
+                           f"{task['source']}_init{task['month']:02d}_{task['years'][0]}_{task['years'][-1]}.nc")
         task['cached'] = _cache_valid(Path(task['path']), task['digest'])
         task['rebuild'] = force_compute or mode == 'rebuild' or not task['cached']
     if mode == 'require' and any(t['rebuild'] for t in tasks):
@@ -251,5 +273,6 @@ def compute_archive_plan(plan, settings, variable):
                 atomic_to_netcdf(result, path)
                 print(f'Wrote {path}')
         by_month.setdefault(task['month'], []).append(result.expand_dims(case=[task['case']]))
-    return {month: xr.concat(items, dim='case', join='exact', combine_attrs='drop_conflicts')
+    # Cases with partial coverage are NaN-padded on the union of initialization years.
+    return {month: xr.concat(items, dim='case', join='outer', combine_attrs='drop_conflicts')
             for month, items in by_month.items()}
