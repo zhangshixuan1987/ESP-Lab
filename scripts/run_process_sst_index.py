@@ -288,6 +288,15 @@ def get_required_base_regions(regions_list):
     return required_base_regions(regions_list, REGIONS)
 
 
+def _e3sm_init_years(args: argparse.Namespace) -> dict[int, list[int]]:
+    """Initialization years per month; ``e3sm_init_years`` overrides the span."""
+    override = getattr(args, "e3sm_init_years", None) or {}
+    return {
+        m: list(override.get(m, range(args.year_start, args.year_end + 1)))
+        for m in args.init_months
+    }
+
+
 def resolve_e3sm_field(args: argparse.Namespace) -> str:
     """Select SST when it completely covers the request, otherwise select TS."""
     requested = getattr(args, "e3sm_field", "auto")
@@ -295,10 +304,8 @@ def resolve_e3sm_field(args: argparse.Namespace) -> str:
     members = [f"EN{i:02d}" for i in range(args.e3sm_nens)]
     expected_tags = {
         tag
-        for month in args.init_months
-        for tag in data_access.build_init_tags(
-            range(args.year_start, args.year_end + 1), month
-        )
+        for month, years in _e3sm_init_years(args).items()
+        for tag in data_access.build_init_tags(years, month)
     }
     coverage = {}
 
@@ -346,10 +353,7 @@ def process_e3sm(args: argparse.Namespace) -> None:
     landmask_file = fixed_dir / "sftlf.E3SM.nc"
 
     members = [f"EN{i:02d}" for i in range(args.e3sm_nens)]
-    init_years = {
-        m: list(range(args.year_start, args.year_end + 1))
-        for m in args.init_months
-    }
+    init_years = _e3sm_init_years(args)
 
     cfg = S2DConfig(
         field=source_field,
@@ -455,7 +459,7 @@ def process_e3sm(args: argparse.Namespace) -> None:
             if r == "ELI":
                 if getattr(args, "eli_grid", "regridded") not in {"regridded", "both"}:
                     continue
-                outfile_mon = outdir / sst_index_filename(file_prefix, m, (args.year_start, args.year_end), args.e3sm_nens, args.nlead)
+                outfile_mon = outdir / sst_index_filename(file_prefix, m, (init_years[m][0], init_years[m][-1]), args.e3sm_nens, args.nlead)
                 if args.force or not _output_is_current(outfile_mon, args):
                     ds_out_mon = all_mon[r].to_dataset()
                     ds_out_mon["time"] = time_mon
@@ -469,7 +473,7 @@ def process_e3sm(args: argparse.Namespace) -> None:
                     _safe_to_netcdf(ds_out_mon, outfile_mon, encoding={"eli": {"zlib": True, "complevel": 1, "dtype": "float32"}}, sst_land_mask=args.sst_land_mask)
                     LOG.info(f"Saved E3SM monthly ELI: {outfile_mon}")
 
-                outfile_seas = outdir / sst_index_filename(file_prefix, m, (args.year_start, args.year_end), args.e3sm_nens, args.nlead, seasonal=True)
+                outfile_seas = outdir / sst_index_filename(file_prefix, m, (init_years[m][0], init_years[m][-1]), args.e3sm_nens, args.nlead, seasonal=True)
                 if args.force or not _output_is_current(outfile_seas, args):
                     ds_out_seas = all_seas[r].to_dataset()
                     ds_out_seas["time"] = time_seas
@@ -484,7 +488,7 @@ def process_e3sm(args: argparse.Namespace) -> None:
                     LOG.info(f"Saved E3SM seasonal ELI: {outfile_seas}")
                 continue
 
-            outfile_mon = outdir / sst_index_filename(file_prefix, m, (args.year_start, args.year_end), args.e3sm_nens, args.nlead, index=r, field=source_field)
+            outfile_mon = outdir / sst_index_filename(file_prefix, m, (init_years[m][0], init_years[m][-1]), args.e3sm_nens, args.nlead, index=r, field=source_field)
             if args.force or not _output_is_current(outfile_mon, args):
                 ds_out_mon = all_mon[r].rename("sst").to_dataset()
                 ds_out_mon["time"] = time_mon
@@ -505,7 +509,7 @@ def process_e3sm(args: argparse.Namespace) -> None:
                 _safe_to_netcdf(ds_out_mon, outfile_mon, encoding=index_encoding, sst_land_mask=args.sst_land_mask)
                 LOG.info(f"Saved E3SM monthly index for {r}: {outfile_mon}")
 
-            outfile_seas = outdir / sst_index_filename(file_prefix, m, (args.year_start, args.year_end), args.e3sm_nens, args.nlead, index=r, field=source_field, seasonal=True)
+            outfile_seas = outdir / sst_index_filename(file_prefix, m, (init_years[m][0], init_years[m][-1]), args.e3sm_nens, args.nlead, index=r, field=source_field, seasonal=True)
             if args.force or not _output_is_current(outfile_seas, args):
                 ds_out_seas = all_seas[r].rename("sst").to_dataset()
                 ds_out_seas["time"] = time_seas

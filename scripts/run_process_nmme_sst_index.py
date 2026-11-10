@@ -575,8 +575,13 @@ def timeseries_is_current(path, *, region, clim_start, clim_end, models, apply_l
             for key, value in expected.items():
                 if str(ds.attrs.get(key)) != str(value):
                     return False, f"{key} does not match this run"
-            if list(map(str, ds.model.values)) != list(models):
-                return False, "loaded model cohort does not match requested models"
+            loaded = list(map(str, ds.model.values))
+            if loaded != list(models):
+                missing = [m for m in models if m not in loaded]
+                return False, (
+                    "loaded model cohort does not match requested models "
+                    f"(not loaded: {', '.join(missing) or 'none; order differs'})"
+                )
             if not bool(np.isfinite(ds.sst).any()):
                 return False, "no finite SST values"
     except Exception as exc:

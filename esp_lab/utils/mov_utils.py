@@ -535,13 +535,19 @@ def save_figure(fig, figpath, *, mode, metric, title="", caption="", dpi=150, **
         Resolution for the saved PNG (default 150).
     **extra
         Any additional key-value pairs to store in the manifest entry.
+
+    Set ``ESP_LAB_FIGURE_GALLERY=0`` (e.g. for test runs) to write only the
+    figure, without touching figures.json or index.html.
     """
     import json
     import datetime
+    import os
     from pathlib import Path
 
     figpath = Path(figpath)
     fig.savefig(figpath, dpi=dpi, bbox_inches="tight")
+    if os.environ.get("ESP_LAB_FIGURE_GALLERY", "1") == "0":
+        return
 
     manifest_path = figpath.parent / "figures.json"
 
@@ -562,6 +568,10 @@ def save_figure(fig, figpath, *, mode, metric, title="", caption="", dpi=150, **
         "caption": caption,
         **extra,
     }
+    # Tag the entry with its viewer section (group/shortname) so the gallery
+    # does not fall back to per-field guesses from the filename.
+    from esp_lab.diagnostics.web import annotate_figure_entry
+    annotate_figure_entry(entry)
     figures = manifest.get("figures", [])
     idx = next((i for i, e in enumerate(figures) if e.get("file") == filename), None)
     if idx is not None:

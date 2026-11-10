@@ -116,3 +116,38 @@ def test_smyle_cache_rejects_missing_consumed_metrics(tmp_path, missing):
               psl_sst_index_reference_available=False)
     exec(compile(ast.Module(body=[node], type_ignores=[]), 'smyle_cache_cell', 'exec'), ns)
     assert ns['smyle_skill_cache_exists'] == (missing is None)
+
+
+def test_case_init_month_coverage(capsys):
+    """Cases keep only covered months/years; cases covering nothing are dropped."""
+    settings = next(
+        source(i) for i, cell in enumerate(json.loads(NOTEBOOK.read_text())['cells'])
+        if cell['cell_type'] == 'code' and '# Per-case initialization coverage' in ''.join(cell['source'])
+    )
+    block = settings.split('# Per-case initialization coverage', 1)[1].split('\n# =====', 1)[0]
+    init_months = [2, 5, 8, 11]
+    ns = dict(
+        years=1980, yeare=2018, init_months=init_months, E3SM_REFERENCE_CASE='full',
+        init_years={m: list(range(1980, 2019)) for m in init_months},
+        E3SM_CASES={
+            'full': {'init_years_by_month': {5: None, 11: None}},
+            'sparse': {'init_years_by_month': {2: range(1980, 2016, 5), 5: None,
+                                               8: range(1980, 2016, 5), 11: None}},
+            'short': {'init_years_by_month': {5: range(1980, 1996)}},
+            'too-short': {'init_years_by_month': {5: range(1980, 1982)}},
+            'all': {},
+        },
+    )
+    exec('#' + block, ns)
+
+    cases = ns['E3SM_CASES']
+    assert list(cases) == ['full', 'sparse', 'short', 'all']
+    assert list(cases['full']['init_years']) == [5, 11]
+    assert cases['sparse']['init_years'][2] == list(range(1980, 2016, 5))
+    assert cases['short']['init_years'] == {5: list(range(1980, 1996))}
+    assert list(cases['all']['init_years']) == init_months
+    assert 'Skipping too-short, month 05' in capsys.readouterr().out
+
+    ns['E3SM_CASES'] = {'full': {'init_years_by_month': {5: None}}}
+    with pytest.raises(ValueError, match=r'No E3SM case covers init_months \[2, 8, 11\]'):
+        exec('#' + block, ns)
