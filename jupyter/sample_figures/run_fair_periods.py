@@ -13,8 +13,8 @@ fair-comparison notebooks in this folder and executes them:
 Each copy sets the period (start years and climatology) and drops experiments
 that do not cover every start year of the period (4DEnVarLnd ends in 1989, so
 it is left out of 1980-1995, including its own scorecard). All figures of a
-period go to <figure root>/sample_figures/y<start>-<end>/; scorecard figures
-carry the focus tag in their names. Executed notebooks and logs go to
+period go to <figure root>/sample_figures/y<start>-<end>/ with names ending in
+_y<start>-<end>.png; scorecard figures also carry the focus tag. Executed notebooks and logs go to
 <test diag root>/logs/fair_periods/y<start>-<end>/. The notebooks in this
 folder are not modified.
 
@@ -24,7 +24,8 @@ Run on a compute node, e.g. an interactive allocation:
         srun -n 1 -c 256 python run_fair_periods.py
 
 Options: --periods 1980-1984 1980-1989 1980-1995 (default), --fields ...,
---max-parallel N (notebooks executed at once, default 8), --prepare-only.
+--max-parallel N (notebooks executed at once, default 8), --prepare-only,
+--stamp-only (rename existing figures of the periods without running anything).
 """
 
 from __future__ import annotations
@@ -227,6 +228,24 @@ def run_chain(chain: list[Path]) -> list[tuple[Path, int, float]]:
     return results
 
 
+def stamp_period(start: int, end: int) -> int:
+    """Rename the period's figures to end in _y<start>-<end>.png; return how many were renamed.
+
+    The notebooks write fixed names; a year token they already carry (e.g. the
+    shock figures' _1980_1989_) is moved into the same suffix. Rerunning a
+    period rewrites the unstamped names, which are stamped again here.
+    """
+    suffix = f"_y{start}-{end}"
+    renamed = 0
+    for path in sorted((FIGURE_BASE / f"y{start}-{end}").glob("*.png")):
+        if path.stem.endswith(suffix):
+            continue
+        stem = path.stem.replace(f"_{start}_{end}_", "_").replace(f"_{start}_{end}", "")
+        path.replace(path.with_name(f"{stem}{suffix}.png"))
+        renamed += 1
+    return renamed
+
+
 def notebook_errors(notebook: Path) -> list[str]:
     nb = json.loads(notebook.read_text())
     return [f"{out.get('ename')}: {out.get('evalue', '')[:200]}"
@@ -240,7 +259,14 @@ def main() -> int:
     parser.add_argument("--fields", nargs="+", default=FIELDS, choices=FIELDS)
     parser.add_argument("--max-parallel", type=int, default=8)
     parser.add_argument("--prepare-only", action="store_true", help="write the notebooks without executing them")
+    parser.add_argument("--stamp-only", action="store_true",
+                        help="only rename existing figures of the periods to end in _y<start>-<end>")
     args = parser.parse_args()
+
+    if args.stamp_only:
+        for period in args.periods:
+            print(f"y{period}: {stamp_period(*map(int, period.split('-')))} figures renamed")
+        return 0
 
     jobs = [build_period(*map(int, period.split("-")), args.fields) for period in args.periods]
     if args.prepare_only:
@@ -260,8 +286,9 @@ def main() -> int:
     for nb, rc in failed:
         print(f"  FAILED {nb} (exit {rc}): {notebook_errors(nb)[:1]}")
     for period in args.periods:
+        stamp_period(*map(int, period.split("-")))
         figure_dir = FIGURE_BASE / f"y{period}"
-        print(f"  {figure_dir}: {len(list(figure_dir.glob('*.png')))} figures")
+        print(f"  {figure_dir}: {len(list(figure_dir.glob('*.png')))} figures (named *_y{period}.png)")
     return 1 if failed or len(results) != expected else 0
 
 
