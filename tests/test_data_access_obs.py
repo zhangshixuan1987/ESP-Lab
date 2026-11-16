@@ -79,3 +79,37 @@ def test_obs_region_mask_treats_zero_to_360_as_full_longitude():
     assert mask.sel(lat=0.0).all()
     assert not mask.sel(lat=-30.0).any()
     assert not mask.sel(lat=30.0).any()
+
+
+def test_hadisst2_sst_reads_project_tos_file(tmp_path):
+    # The shared archive stores HadISST2 "sst" (degC) in tos_*.nc next to a
+    # Kelvin ts_*.nc; the lookup must take tos and never fall back to ts.
+    product_dir = tmp_path / "HadISST2"
+    product_dir.mkdir()
+    _write_monthly_obs(product_dir / "tos_200001_200012.nc", var_name="sst")
+    _write_monthly_obs(product_dir / "ts_200001_200012.nc", var_name="ts")
+
+    for field in ("TS", "SST"):  # SST-index script and modes-of-variability callers
+        ds = obs_access.get_monthly_data(
+            obs_dir=str(tmp_path), product="HadISST2", field=field,
+            field_map={field: "sst"},
+        )
+        assert "sst" in ds
+        assert "ts" not in ds
+
+    assert obs_access.obs_file_pattern(tmp_path, "HadISST2", "sst") == f"{tmp_path}/HadISST2/tos_*.nc"
+    assert obs_access.obs_file_pattern(tmp_path, "ERA5", "tas") == f"{tmp_path}/ERA5/tas_*.nc"
+
+
+def test_hadisst2_sst_without_tos_file_does_not_use_ts(tmp_path):
+    product_dir = tmp_path / "HadISST2"
+    product_dir.mkdir()
+    _write_monthly_obs(product_dir / "ts_200001_200012.nc", var_name="ts")
+
+    try:
+        obs_access.get_monthly_data(
+            obs_dir=str(tmp_path), product="HadISST2", field="TS", field_map={"TS": "sst"},
+        )
+    except FileNotFoundError:
+        return
+    raise AssertionError("HadISST2 sst must not be read from the Kelvin ts file")

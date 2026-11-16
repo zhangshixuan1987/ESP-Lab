@@ -108,10 +108,21 @@ def _input_settings(config: Mapping[str, Any]) -> Mapping[str, Any]:
     return config.get("inputs", {})
 
 
-def _years(config: Mapping[str, Any]) -> list[int]:
+def _years(
+    config: Mapping[str, Any], system: str | None = None, init_month: int | None = None
+) -> list[int]:
+    """Configured initialization years, or one system's years for ``init_month``."""
     settings = _input_settings(config)
     start, end = settings.get("initialization_years", (1980, 2011))
-    return list(range(int(start), int(end) + 1))
+    years = list(range(int(start), int(end) + 1))
+    if system is None:
+        return years
+    from workflows.diagnostics.sst_teleconnections import system_init_years
+
+    system_years = system_init_years(config, system, int(init_month))
+    if system_years is None:
+        raise ValueError(f"{system} has no init_month={init_month} starts in {years[0]}-{years[-1]}")
+    return system_years
 
 
 def _regrid(config: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -146,8 +157,6 @@ def ensure_sst_indices(
         "--e3sm-data-dir", str(settings.get(
             "raw_model_root", "/global/cfs/cdirs/e3sm/S2S2D/post_process"
         )),
-        "--init-months", *map(str, selection["init_months"]),
-        "--year-start", str(years[0]), "--year-end", str(years[-1]),
         "--climy0", str(climy0), "--climy1", str(climy1),
         "--nlead", str(settings.get("monthly_nlead", 24)),
         "--e3sm-nens", str(settings.get("ensemble_member_count", 10)),
@@ -167,21 +176,44 @@ def ensure_sst_indices(
     if not settings.get("sst_land_mask", True):
         common.append("--no-sst-land-mask")
 
+    def span_args(months, span_years):
+        return [
+            "--init-months", *map(str, months),
+            "--year-start", str(span_years[0]), "--year-end", str(span_years[-1]),
+        ]
+
     if include_observation:
-        subprocess.run([*common, "--sources", "obs"], check=True, cwd=repo_root)
-    from workflows.diagnostics.sst_teleconnections import E3SM_CASES
+        subprocess.run(
+            [*common, *span_args(selection["init_months"], years), "--sources", "obs"],
+            check=True, cwd=repo_root,
+        )
+    from workflows.diagnostics.sst_teleconnections import E3SM_CASES, system_init_years
 
     for system in systems:
         case = E3SM_CASES[system]
-        subprocess.run(
-            [
-                *common, "--sources", "e3sm",
-                "--e3sm-case-prefix", case["case_prefix"],
-                "--e3sm-cache-tag", case["cache_tag"],
-                "--e3sm-display-name", case["display_name"],
-            ],
-            check=True, cwd=repo_root,
-        )
+        # One processor run per distinct year span (a system may cover months
+        # over different years); months the system lacks are left out.
+        months_by_span: dict[tuple[int, int], list[int]] = {}
+        for init_month in selection["init_months"]:
+            system_years = system_init_years(config, system, init_month)
+            if system_years is None:
+                continue
+            if system_years != list(range(system_years[0], system_years[-1] + 1)):
+                raise ValueError(
+                    f"{system} init_month={init_month}: SST-index inputs need contiguous years, "
+                    f"got {system_years}"
+                )
+            months_by_span.setdefault((system_years[0], system_years[-1]), []).append(int(init_month))
+        for span, months in months_by_span.items():
+            subprocess.run(
+                [
+                    *common, *span_args(months, span), "--sources", "e3sm",
+                    "--e3sm-case-prefix", case["case_prefix"],
+                    "--e3sm-cache-tag", case["cache_tag"],
+                    "--e3sm-display-name", case["display_name"],
+                ],
+                check=True, cwd=repo_root,
+            )
 
 
 def _atmospheric_expected(
@@ -192,7 +224,7 @@ def _atmospheric_expected(
     case = E3SM_CASES[system]
     selection = config["selection"]
     settings = _input_settings(config)
-    years = _years(config)
+    years = _years(config, system, init_month)
     clim = tuple(map(int, selection["climatology_years"]))
     spec = ATMOSPHERIC_VARIABLES[variable]
     source_identity = source_fingerprint(
@@ -242,7 +274,7 @@ def prepare_atmospheric_model(
     selection = config["selection"]
     settings = _input_settings(config)
     spec = ATMOSPHERIC_VARIABLES[variable]
-    years = _years(config)
+    years = _years(config, system, init_month)
     members = [f"EN{i:02d}" for i in range(int(settings.get("ensemble_member_count", 10)))]
     nlead = int(settings.get("monthly_nlead", 24))
     monthly = data_access_e3sm.get_monthly_data(
@@ -318,7 +350,9 @@ def prepare_atmospheric_observation(
         "observation_root", "/global/cfs/cdirs/e3sm/e3sm_diags/obs_for_e3sm_diags/time-series"
     ))
     obs_start, obs_end = spec["obs_years"]
-    obs_path_pattern = f"{obs_root}/{spec['obs_product']}/{spec['obs_field']}_*.nc"
+    obs_path_pattern = data_access_obs.obs_file_pattern(
+        obs_root, spec["obs_product"], spec["obs_field"]
+    )
     # Same identity as the 1a notebooks, so either workflow reuses the other's cache.
     identity = observation_source_identity(
         archive_root=obs_root, product=spec["obs_product"], variable=spec["obs_field"],
@@ -447,12 +481,16 @@ def prepare_land_inputs(
 
     for system, init_month in pairs:
         case = E3SM_CASES[system]
+        case_years = _years(config, system, init_month)
+        if case_years != list(range(case_years[0], case_years[-1] + 1)):
+            raise ValueError(f"{system} init_month={init_month}: land inputs need contiguous years, got {case_years}")
+        case_common = {**common, "initialization_years": (case_years[0], case_years[-1])}
         raw_model_root = Path(settings.get(
             "raw_model_root", "/global/cfs/cdirs/e3sm/S2S2D/post_process"
         ))
         model_files = land_input_cache.resolve_model_files(
             data_dir=raw_model_root, case_prefix=case["case_prefix"],
-            members=members, years=years, init_month=int(init_month),
+            members=members, years=case_years, init_month=int(init_month),
             field=variable, nlead=nlead,
         )
         model_identity = land_input_cache.raw_source_identity(
@@ -460,7 +498,7 @@ def prepare_land_inputs(
             logical_identity={
                 "case": system, "case_prefix": case["case_prefix"],
                 "field": variable, "init_month": int(init_month),
-                "years": years, "members": members, "monthly_nlead": nlead,
+                "years": case_years, "members": members, "monthly_nlead": nlead,
             },
             source_revision=str(case.get("source_revision", "post_process_v1")),
             mode="inventory", inventory_root=raw_model_root,
@@ -469,7 +507,7 @@ def prepare_land_inputs(
         expected = land_input_cache.expected_attrs(
             field=variable, source_kind="model", source_name=system,
             source_data_identity=model_identity, case_prefix=case["case_prefix"],
-            init_month=int(init_month), **common,
+            init_month=int(init_month), **case_common,
         )
         path = land_skill.staged_land_input_path(
             root, case["cache_tag"], variable, grid_tag,
@@ -479,7 +517,7 @@ def prepare_land_inputs(
         if force or not model_ok:
             land_input_cache.prepare_model_cache(
                 data_dir=str(raw_model_root),
-                case_prefix=case["case_prefix"], members=members, years=years,
+                case_prefix=case["case_prefix"], members=members, years=case_years,
                 init_month=int(init_month), field=variable, monthly_nlead=nlead,
                 monthly_chunks=dict(settings.get("raw_model_chunks", {})),
                 depth_range_m=depth, reference=reference,
