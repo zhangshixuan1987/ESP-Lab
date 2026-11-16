@@ -1,27 +1,30 @@
 #!/usr/bin/env python
-"""Fair-comparison diagnostics centered on E3SMv3-4DEnVarOcn for several start-year periods.
+"""Fair-comparison sample figures for several May start-year periods, one folder per period.
 
-For every period (May starts, inclusive years) this builds copies of the three
+For every period (inclusive years, e.g. 1980-1989) this builds copies of the
 fair-comparison notebooks in this folder and executes them:
 
 * fair_4DEnVarLnd_comparison.ipynb  -> 1a-style ACC maps, one run per field;
 * fair_4DEnVarLnd_sst_skill.ipynb   -> 3a-style Nino3.4 skill and time series;
 * fair_4DEnVarLnd_scorecard.ipynb   -> area-mean/SST-index skill and the scorecard,
-                                       with E3SMv3-4DEnVarOcn as the focus experiment.
+                                       once per focus experiment (FOCUS_CASES);
+* fair_4DEnVarLnd_shock_ts.ipynb    -> 6a-style initial-shock diagnostics, one run per field.
 
-Each copy sets the period (start years and climatology), drops experiments that
-do not cover every start year of the period (4DEnVarLnd ends in 1989), and
-writes its figures to <figure root>/fair_4DEnVarOcn_y<start>-<end>/. Executed
-notebooks and logs go to <test diag root>/logs/fair_4DEnVarOcn/y<start>-<end>/.
-The notebooks in this folder are not modified.
+Each copy sets the period (start years and climatology) and drops experiments
+that do not cover every start year of the period (4DEnVarLnd ends in 1989, so
+it is left out of 1980-1995, including its own scorecard). All figures of a
+period go to <figure root>/sample_figures/y<start>-<end>/; scorecard figures
+carry the focus tag in their names. Executed notebooks and logs go to
+<test diag root>/logs/fair_periods/y<start>-<end>/. The notebooks in this
+folder are not modified.
 
 Run on a compute node, e.g. an interactive allocation:
 
     salloc -A gen0010 -q interactive -C cpu -N 1 -t 04:00:00 \\
-        srun -n 1 -c 256 python run_fair_4DEnVarOcn.py
+        srun -n 1 -c 256 python run_fair_periods.py
 
 Options: --periods 1980-1984 1980-1989 1980-1995 (default), --fields ...,
---max-parallel N (notebooks executed at once, default 6), --prepare-only.
+--max-parallel N (notebooks executed at once, default 8), --prepare-only.
 """
 
 from __future__ import annotations
@@ -37,11 +40,11 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[1]
 PYTHON_BIN = Path(sys.executable).parent
-FIGURE_BASE = Path("/global/cfs/cdirs/e3sm/www/zhan391/e3sm-s2d_test")
+FIGURE_BASE = Path("/global/cfs/cdirs/e3sm/www/zhan391/e3sm-s2d_test/sample_figures")
 DIAG_ROOT = Path("/global/cfs/cdirs/e3sm/S2S2D/s2d_diag/tmp/e3sm-s2d_test")
-RUN_BASE = DIAG_ROOT / "logs" / "fair_4DEnVarOcn"
+RUN_BASE = DIAG_ROOT / "logs" / "fair_periods"
 
-FOCUS_CASE = "E3SM-4DEnVarOcn"
+FOCUS_CASES = ["E3SM-4DEnVarOcn", "E3SM-4DEnVarLnd"]
 DEFAULT_PERIODS = ["1980-1984", "1980-1989", "1980-1995"]
 FIELDS = ["PRECT", "TS", "TREFHT", "PSL"]
 # Last May start year of the experiments that do not cover the full record.
@@ -75,6 +78,11 @@ LND_BLOCKS = {
         '    "E3SM-4DEnVarLnd": dict(case_prefix="WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_4DEnVarLnd",\n'
         '                            cache_tag="4DEnVarLnd", label="E3SMv3-4DEnVarLnd", color="tab:green", ls="-", marker="o"),\n'
     ),
+    "shock": (
+        "    'E3SM-4DEnVarLnd': dict(case_prefix='WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_4DEnVarLnd', cache_tag='4DEnVarLnd',\n"
+        "                            # May starts exist only for 1980-1989.\n"
+        "                            init_years_by_month={5: range(1980, 1990)}),\n"
+    ),
 }
 
 
@@ -98,44 +106,65 @@ def patch(nb: dict, replacements: list[tuple[str, str]], label: str) -> None:
         if hits != 1:
             raise RuntimeError(
                 f"{label}: expected one match, found {hits}, for {old[:80]!r}. "
-                "The source notebook changed; update run_fair_4DEnVarOcn.py."
+                "The source notebook changed; update run_fair_periods.py."
             )
+
+
+def save(nb: dict, path: Path) -> Path:
+    path.write_text(json.dumps(nb, indent=1))
+    return path
 
 
 def period_edits(start: int, end: int) -> list[tuple[str, str]]:
     return [
         ("YEAR_END = 1989   # common 4DEnVarLnd period (production: 2018)",
-         f"YEAR_END = {end}   # fair_4DEnVarOcn period {start}-{end} (production: 2018)"),
+         f"YEAR_END = {end}   # fair period {start}-{end} (production: 2018)"),
         ("climatology_years = (1980, 1989)   # production: (1981, 2010)",
          f"climatology_years = ({start}, {end})   # production: (1981, 2010)"),
     ]
 
 
-def build_period(start: int, end: int, fields: list[str]) -> tuple[Path, list[Path], list[Path]]:
-    """Write the period's notebooks; return (run dir, parallel notebooks, sequential chain)."""
+def build_period(start: int, end: int, fields: list[str]) -> tuple[list[Path], list[Path]]:
+    """Write the period's notebooks; return (independent notebooks, sequential SST/scorecard chain)."""
     if start != 1980:
         raise ValueError("The source notebooks start in 1980; periods must start in 1980.")
     tag = f"y{start}-{end}"
     run_dir = RUN_BASE / tag
-    figure_dir = FIGURE_BASE / f"fair_4DEnVarOcn_{tag}"
+    figure_dir = FIGURE_BASE / tag
     run_dir.mkdir(parents=True, exist_ok=True)
     figure_dir.mkdir(parents=True, exist_ok=True)
     dropped = [key for key, last in LAST_START_YEAR.items() if last < end]
-    figure_root = (SOURCE_FIGURE_ROOT.split(" = ")[0] + f' = "{figure_dir}"')
+    figure_root = SOURCE_FIGURE_ROOT.split(" = ")[0] + f' = "{figure_dir}"'
+    repo_search = f'Path("{REPO_ROOT}"), '
 
     def drop(kind: str) -> list[tuple[str, str]]:
         return [(LND_BLOCKS[kind], "")] if "E3SM-4DEnVarLnd" in dropped else []
 
-    comparisons = []
+    independent = []
     for field in fields:
         nb = load("fair_4DEnVarLnd_comparison")
         edits = [(SOURCE_FIGURE_ROOT, figure_root), *period_edits(start, end), *drop("comparison")]
         if field != "PRECT":
             edits += [('field = "PRECT"\n', '#field = "PRECT"\n'), (f'#field = "{field}"\n', f'field = "{field}"\n')]
         patch(nb, edits, f"comparison {field} {tag}")
-        path = run_dir / f"fair_4DEnVarOcn_comparison_{field}.ipynb"
-        path.write_text(json.dumps(nb, indent=1))
-        comparisons.append(path)
+        independent.append(save(nb, run_dir / f"fair_comparison_{field}.ipynb"))
+
+        nb = load("fair_4DEnVarLnd_shock_ts")
+        edits = [
+            (SOURCE_FIGURE_ROOT, figure_root),
+            ("YEAR_END = 1989   # common 4DEnVarLnd period (production: None)\n",
+             f"YEAR_END = {end}   # fair period {start}-{end} (production: None)\n"),
+            ("clim1=1980   # production: 1981\nclim2=1989   # production: 2010\n",
+             f"clim1={start}   # production: 1981\nclim2={end}   # production: 2010\n"),
+            # Copies run outside this folder; point the repository search at the checkout.
+            ("(Path.cwd(), *Path.cwd().parents)", f"({repo_search}Path.cwd(), *Path.cwd().parents)"),
+            *drop("shock"),
+        ]
+        if field != "TS":
+            edits.append(("field = 'TS'  # Surface temperature (degC)\n",
+                          f"field = '{field}'\n#field = 'TS'  # Surface temperature (degC)\n"))
+        patch(nb, edits, f"shock {field} {tag}")
+        independent.append(save(nb, run_dir / f"fair_shock_ts_{field}.ipynb"))
 
     nb = load("fair_4DEnVarLnd_sst_skill")
     patch(nb, [
@@ -146,31 +175,31 @@ def build_period(start: int, end: int, fields: list[str]) -> tuple[Path, list[Pa
         ('"major_years": [1980, 1982, 1984, 1986, 1988, 1990, 1992],',
          f'"major_years": {list(range(start, end + 4, 2))},'),
         ('"minor_years": list(np.arange(1980, 1993, 1)),', f'"minor_years": list(np.arange({start}, {end + 4}, 1)),'),
-        # Copies run outside this folder; point the repository search at the checkout.
-        ("_repo_candidates = [Path.cwd().resolve(),", f'_repo_candidates = [Path("{REPO_ROOT}"), Path.cwd().resolve(),'),
+        ("_repo_candidates = [Path.cwd().resolve(),", f"_repo_candidates = [{repo_search}Path.cwd().resolve(),"),
     ], f"sst_skill {tag}")
-    sst = run_dir / "fair_4DEnVarOcn_sst_skill.ipynb"
-    sst.write_text(json.dumps(nb, indent=1))
+    chain = [save(nb, run_dir / "fair_sst_skill.ipynb")]
 
-    nb = load("fair_4DEnVarLnd_scorecard")
-    patch(nb, [
-        (SCORECARD_FIGURE_ROOT, figure_root),
-        ('FIGURE_DIR = env_paths.figure_root() / "sample_figures"', "FIGURE_DIR = env_paths.figure_root()"),
-        ("YEARS = (1980, 1989)                 # common initialization cohort (4DEnVarLnd coverage)",
-         f"YEARS = ({start}, {end})                 # common initialization cohort"),
-        ('FOCUS_CASE = "E3SM-4DEnVarLnd"', f'FOCUS_CASE = "{FOCUS_CASE}"'),
-        ('("ΔACC (4DEnVarLnd − other)", "−ΔnRMSE (other − 4DEnVarLnd)")',
-         '(f"ΔACC ({FOCUS_TAG} − other)", f"−ΔnRMSE (other − {FOCUS_TAG})")'),
-        ('label="lead-mean difference\\n(red = 4DEnVarLnd better)")',
-         'label=f"lead-mean difference\\n(red = {FOCUS_TAG} better)")'),
-        *drop("scorecard"),
-    ], f"scorecard {tag}")
-    card = run_dir / "fair_4DEnVarOcn_scorecard.ipynb"
-    card.write_text(json.dumps(nb, indent=1))
+    for focus in FOCUS_CASES:
+        if focus in dropped:
+            continue
+        nb = load("fair_4DEnVarLnd_scorecard")
+        patch(nb, [
+            (SCORECARD_FIGURE_ROOT, figure_root),
+            ('FIGURE_DIR = env_paths.figure_root() / "sample_figures"', "FIGURE_DIR = env_paths.figure_root()"),
+            ("YEARS = (1980, 1989)                 # common initialization cohort (4DEnVarLnd coverage)",
+             f"YEARS = ({start}, {end})                 # common initialization cohort"),
+            ('FOCUS_CASE = "E3SM-4DEnVarLnd"', f'FOCUS_CASE = "{focus}"'),
+            ('("ΔACC (4DEnVarLnd − other)", "−ΔnRMSE (other − 4DEnVarLnd)")',
+             '(f"ΔACC ({FOCUS_TAG} − other)", f"−ΔnRMSE (other − {FOCUS_TAG})")'),
+            ('label="lead-mean difference\\n(red = 4DEnVarLnd better)")',
+             'label=f"lead-mean difference\\n(red = {FOCUS_TAG} better)")'),
+            *drop("scorecard"),
+        ], f"scorecard {focus} {tag}")
+        chain.append(save(nb, run_dir / f"fair_scorecard_{focus.replace('E3SM-', '')}.ipynb"))
 
-    print(f"[{tag}] notebooks in {run_dir}; figures -> {figure_dir}; "
+    print(f"[{tag}] {len(independent) + len(chain)} notebooks in {run_dir}; figures -> {figure_dir}; "
           f"dropped (incomplete coverage): {dropped or 'none'}", flush=True)
-    return run_dir, comparisons, [sst, card]
+    return independent, chain
 
 
 def execute(notebook: Path) -> tuple[Path, int, float]:
@@ -189,7 +218,7 @@ def execute(notebook: Path) -> tuple[Path, int, float]:
 
 
 def run_chain(chain: list[Path]) -> list[tuple[Path, int, float]]:
-    """Run notebooks in order, stopping at the first failure (the scorecard reuses SST-index inputs)."""
+    """Run in order, stopping at the first failure (scorecards reuse the SST-index inputs)."""
     results = []
     for notebook in chain:
         results.append(execute(notebook))
@@ -209,32 +238,29 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--periods", nargs="+", default=DEFAULT_PERIODS, help="inclusive May start-year spans, e.g. 1980-1989")
     parser.add_argument("--fields", nargs="+", default=FIELDS, choices=FIELDS)
-    parser.add_argument("--max-parallel", type=int, default=6)
+    parser.add_argument("--max-parallel", type=int, default=8)
     parser.add_argument("--prepare-only", action="store_true", help="write the notebooks without executing them")
     args = parser.parse_args()
 
-    jobs = []
-    for period in args.periods:
-        start, end = map(int, period.split("-"))
-        jobs.append(build_period(start, end, args.fields))
+    jobs = [build_period(*map(int, period.split("-")), args.fields) for period in args.periods]
     if args.prepare_only:
         return 0
 
     with ThreadPoolExecutor(max_workers=args.max_parallel) as pool:
-        futures = [pool.submit(run_chain, chain) for _, _, chain in jobs]
-        futures += [pool.submit(execute, nb) for _, comparisons, _ in jobs for nb in comparisons]
+        futures = [pool.submit(run_chain, chain) for _, chain in jobs]
+        futures += [pool.submit(execute, nb) for independent, _ in jobs for nb in independent]
         results = []
         for future in futures:
             outcome = future.result()
             results.extend(outcome if isinstance(outcome, list) else [outcome])
 
     failed = [(nb, rc) for nb, rc, _ in results if rc != 0 or notebook_errors(nb)]
-    expected = sum(len(c) + len(chain) for _, c, chain in jobs)
+    expected = sum(len(independent) + len(chain) for independent, chain in jobs)
     print(f"\n{len(results) - len(failed)}/{expected} notebooks completed without errors.")
     for nb, rc in failed:
         print(f"  FAILED {nb} (exit {rc}): {notebook_errors(nb)[:1]}")
     for period in args.periods:
-        figure_dir = FIGURE_BASE / f"fair_4DEnVarOcn_y{period}"
+        figure_dir = FIGURE_BASE / f"y{period}"
         print(f"  {figure_dir}: {len(list(figure_dir.glob('*.png')))} figures")
     return 1 if failed or len(results) != expected else 0
 
