@@ -175,6 +175,7 @@ def test_land_direct_rmse_scores_raw_values_and_skips_anomaly_reference(tmp_path
         'DIRECT_RMSE_UNDEFINED': True, 'SKIP_MESSAGE': 'direct RMSE is not defined',
         'GRID_TAG': '5x5', 'E3SM_CASES': {'case': {'cache_tag': 'case', 'case_prefix': 'case'}},
         'RUN': {'init_months': [5], 'ensemble_members': [0, 1], 'force_compute': False},
+        'CASE_INIT_MONTHS': {'case': [5]}, 'SKILL_YEARS_MODE': 'own',
         'forecast_by_case_month': {'case': {5: model}},
         'valid_time_by_case_month': {'case': {5: model_time}},
         'model_data_identity_by_case_month': {'case': {5: 'model-v1'}},

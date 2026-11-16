@@ -593,3 +593,28 @@ def test_ensure_teleconnection_dataset_assembles_single_system_slices(tmp_path):
     assert set(metrics_ds.system.values) == {"E3SM-FOSIRL", "E3SM-Reanalysis"}
     assert metrics_ds["model_correlation"].shape == (1, 2, 1, 1, 10, 20)
 
+
+
+def test_system_init_years_follow_case_coverage_and_overrides():
+    from workflows.diagnostics import sst_teleconnections as telecon
+
+    config = {
+        "inputs": {"initialization_years": (1980, 1995)},
+        "selection": {"systems": ["E3SM-FOSIRL", "E3SM-4DEnVarLnd"], "init_months": [5, 11]},
+    }
+    assert telecon.system_init_years(config, "E3SM-FOSIRL", 5) == list(range(1980, 1996))
+    assert telecon.system_init_years(config, "E3SM-4DEnVarLnd", 5) == list(range(1980, 1990))
+    assert telecon.system_init_years(config, "E3SM-4DEnVarLnd", 11) is None
+    assert telecon.shared_init_years(config, 5) == list(range(1980, 1990))
+    assert telecon.shared_init_years(config, 11) == list(range(1980, 1996))
+
+    config["selection"]["init_years_by_system"] = {"E3SM-4DEnVarLnd": {5: range(1982, 1985)}}
+    assert telecon.system_init_years(config, "E3SM-4DEnVarLnd", 5) == [1982, 1983, 1984]
+
+    inventory = telecon.build_teleconnection_inventory({
+        **config, "paths": {"diag_root": "/nonexistent"}, "cache": {},
+        "selection": {**config["selection"], "upstream_index": "Nino3.4",
+                      "downstream_variable": "TS", "climatology_years": (1980, 1995)},
+    })
+    skipped = inventory.query("status == 'skipped'")
+    assert set(zip(skipped.system, skipped.init_month)) == {("E3SM-4DEnVarLnd", 11)}

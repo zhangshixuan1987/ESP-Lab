@@ -106,3 +106,29 @@ def test_common_valid_target_years_can_require_every_member():
 
     assert permissive[1] == [2000, 2001, 2002]
     assert strict[1] == [2000, 2002]
+
+
+def test_land_evaluation_cohort_own_versus_shared_years():
+    from esp_lab import land_skill
+
+    long_case, long_time = _hindcast([2000, 2001, 2002, 2003, 2004], leads=(1,))
+    short_case, short_time = _hindcast([2000, 2001, 2002], leads=(1,))
+    obs = xr.DataArray(
+        np.ones(6), dims="time",
+        coords={"time": [cftime.DatetimeNoLeap(year, 1, 15) for year in range(2000, 2006)]},
+    )
+    inputs = dict(
+        forecast_by_case_month={"long": {11: long_case}, "short": {11: short_case}},
+        valid_time_by_case_month={"long": {11: long_time}, "short": {11: short_time}},
+        expected_years_by_case_month={
+            "long": {11: {1: [2000, 2001, 2002, 2003, 2004]}},
+            "short": {11: {1: [2000, 2001, 2002]}},
+        },
+        reference=obs, climatology_years=(2000, 2002), reference_is_anomaly=False,
+    )
+
+    own = land_skill.land_evaluation_cohort(["long"], 11, [1], **inputs)
+    shared = land_skill.land_evaluation_cohort(["long", "short"], 11, [1], **inputs)
+
+    assert own[1] == [2000, 2001, 2002, 2003, 2004]
+    assert shared[1] == [2000, 2001, 2002]
