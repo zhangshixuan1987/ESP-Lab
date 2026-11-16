@@ -24,6 +24,8 @@ Run on a compute node, e.g. an interactive allocation:
         srun -n 1 -c 256 python run_fair_periods.py
 
 Options: --periods 1980-1984 1980-1989 1980-1995 (default), --fields ...,
+--notebooks comparison sst_skill scorecard shock (default: all), --exclude E3SM-4DEnVarLnd,
+--set-name NAME (figures to sample_figures/NAME/y<start>-<end>/),
 --max-parallel N (notebooks executed at once, default 8), --prepare-only,
 --stamp-only (rename existing figures of the periods without running anything).
 """
@@ -125,16 +127,34 @@ def period_edits(start: int, end: int) -> list[tuple[str, str]]:
     ]
 
 
-def build_period(start: int, end: int, fields: list[str]) -> tuple[list[Path], list[Path]]:
-    """Write the period's notebooks; return (independent notebooks, sequential SST/scorecard chain)."""
+NOTEBOOK_KINDS = ["comparison", "sst_skill", "scorecard", "shock"]
+
+
+def period_dirs(start: int, end: int, set_name: str | None) -> tuple[Path, Path]:
+    """(figure dir, run dir) of a period, under <set_name>/ for a named figure set."""
+    tag = f"y{start}-{end}"
+    parts = [set_name, tag] if set_name else [tag]
+    return FIGURE_BASE.joinpath(*parts), RUN_BASE.joinpath(*parts)
+
+
+def build_period(start: int, end: int, fields: list[str], notebooks: list[str] = NOTEBOOK_KINDS,
+                 exclude: list[str] = (), set_name: str | None = None) -> tuple[list[Path], list[Path]]:
+    """Write the period's notebooks; return (independent notebooks, sequential SST/scorecard chain).
+
+    ``notebooks`` selects which notebook kinds to run; ``exclude`` drops
+    experiments even where they cover the period (only E3SM-4DEnVarLnd is
+    supported); ``set_name`` writes to a separate figure set.
+    """
     if start != 1980:
         raise ValueError("The source notebooks start in 1980; periods must start in 1980.")
+    unsupported = set(exclude) - {"E3SM-4DEnVarLnd"}
+    if unsupported:
+        raise ValueError(f"--exclude supports only E3SM-4DEnVarLnd, got {sorted(unsupported)}")
     tag = f"y{start}-{end}"
-    run_dir = RUN_BASE / tag
-    figure_dir = FIGURE_BASE / tag
+    figure_dir, run_dir = period_dirs(start, end, set_name)
     run_dir.mkdir(parents=True, exist_ok=True)
     figure_dir.mkdir(parents=True, exist_ok=True)
-    dropped = [key for key, last in LAST_START_YEAR.items() if last < end]
+    dropped = sorted({key for key, last in LAST_START_YEAR.items() if last < end} | set(exclude))
     figure_root = SOURCE_FIGURE_ROOT.split(" = ")[0] + f' = "{figure_dir}"'
     repo_search = f'Path("{REPO_ROOT}"), '
 
@@ -148,7 +168,8 @@ def build_period(start: int, end: int, fields: list[str]) -> tuple[list[Path], l
         if field != "PRECT":
             edits += [('field = "PRECT"\n', '#field = "PRECT"\n'), (f'#field = "{field}"\n', f'field = "{field}"\n')]
         patch(nb, edits, f"comparison {field} {tag}")
-        independent.append(save(nb, run_dir / f"fair_comparison_{field}.ipynb"))
+        if "comparison" in notebooks:
+            independent.append(save(nb, run_dir / f"fair_comparison_{field}.ipynb"))
 
         nb = load("fair_4DEnVarLnd_shock_ts")
         edits = [
@@ -165,7 +186,8 @@ def build_period(start: int, end: int, fields: list[str]) -> tuple[list[Path], l
             edits.append(("field = 'TS'  # Surface temperature (degC)\n",
                           f"field = '{field}'\n#field = 'TS'  # Surface temperature (degC)\n"))
         patch(nb, edits, f"shock {field} {tag}")
-        independent.append(save(nb, run_dir / f"fair_shock_ts_{field}.ipynb"))
+        if "shock" in notebooks:
+            independent.append(save(nb, run_dir / f"fair_shock_ts_{field}.ipynb"))
 
     nb = load("fair_4DEnVarLnd_sst_skill")
     patch(nb, [
@@ -178,7 +200,7 @@ def build_period(start: int, end: int, fields: list[str]) -> tuple[list[Path], l
         ('"minor_years": list(np.arange(1980, 1993, 1)),', f'"minor_years": list(np.arange({start}, {end + 4}, 1)),'),
         ("_repo_candidates = [Path.cwd().resolve(),", f"_repo_candidates = [{repo_search}Path.cwd().resolve(),"),
     ], f"sst_skill {tag}")
-    chain = [save(nb, run_dir / "fair_sst_skill.ipynb")]
+    chain = [save(nb, run_dir / "fair_sst_skill.ipynb")] if "sst_skill" in notebooks else []
 
     for focus in FOCUS_CASES:
         if focus in dropped:
@@ -196,10 +218,11 @@ def build_period(start: int, end: int, fields: list[str]) -> tuple[list[Path], l
              'label=f"lead-mean difference\\n(red = {FOCUS_TAG} better)")'),
             *drop("scorecard"),
         ], f"scorecard {focus} {tag}")
-        chain.append(save(nb, run_dir / f"fair_scorecard_{focus.replace('E3SM-', '')}.ipynb"))
+        if "scorecard" in notebooks:
+            chain.append(save(nb, run_dir / f"fair_scorecard_{focus.replace('E3SM-', '')}.ipynb"))
 
     print(f"[{tag}] {len(independent) + len(chain)} notebooks in {run_dir}; figures -> {figure_dir}; "
-          f"dropped (incomplete coverage): {dropped or 'none'}", flush=True)
+          f"dropped experiments: {dropped or 'none'}", flush=True)
     return independent, chain
 
 
@@ -228,7 +251,7 @@ def run_chain(chain: list[Path]) -> list[tuple[Path, int, float]]:
     return results
 
 
-def stamp_period(start: int, end: int) -> int:
+def stamp_period(start: int, end: int, set_name: str | None = None) -> int:
     """Rename the period's figures to end in _y<start>-<end>.png; return how many were renamed.
 
     The notebooks write fixed names; a year token they already carry (e.g. the
@@ -237,7 +260,7 @@ def stamp_period(start: int, end: int) -> int:
     """
     suffix = f"_y{start}-{end}"
     renamed = 0
-    for path in sorted((FIGURE_BASE / f"y{start}-{end}").glob("*.png")):
+    for path in sorted(period_dirs(start, end, set_name)[0].glob("*.png")):
         if path.stem.endswith(suffix):
             continue
         stem = path.stem.replace(f"_{start}_{end}_", "_").replace(f"_{start}_{end}", "")
@@ -261,14 +284,21 @@ def main() -> int:
     parser.add_argument("--prepare-only", action="store_true", help="write the notebooks without executing them")
     parser.add_argument("--stamp-only", action="store_true",
                         help="only rename existing figures of the periods to end in _y<start>-<end>")
+    parser.add_argument("--notebooks", nargs="+", default=NOTEBOOK_KINDS, choices=NOTEBOOK_KINDS,
+                        help="notebook kinds to run (default: all)")
+    parser.add_argument("--exclude", nargs="+", default=[], help="experiments to leave out, e.g. E3SM-4DEnVarLnd")
+    parser.add_argument("--set-name", default=None,
+                        help="separate figure set: figures go to sample_figures/<set-name>/y<start>-<end>/")
     args = parser.parse_args()
+    spans = [tuple(map(int, period.split("-"))) for period in args.periods]
 
     if args.stamp_only:
-        for period in args.periods:
-            print(f"y{period}: {stamp_period(*map(int, period.split('-')))} figures renamed")
+        for start, end in spans:
+            print(f"y{start}-{end}: {stamp_period(start, end, args.set_name)} figures renamed")
         return 0
 
-    jobs = [build_period(*map(int, period.split("-")), args.fields) for period in args.periods]
+    jobs = [build_period(start, end, args.fields, args.notebooks, args.exclude, args.set_name)
+            for start, end in spans]
     if args.prepare_only:
         return 0
 
@@ -285,10 +315,10 @@ def main() -> int:
     print(f"\n{len(results) - len(failed)}/{expected} notebooks completed without errors.")
     for nb, rc in failed:
         print(f"  FAILED {nb} (exit {rc}): {notebook_errors(nb)[:1]}")
-    for period in args.periods:
-        stamp_period(*map(int, period.split("-")))
-        figure_dir = FIGURE_BASE / f"y{period}"
-        print(f"  {figure_dir}: {len(list(figure_dir.glob('*.png')))} figures (named *_y{period}.png)")
+    for start, end in spans:
+        stamp_period(start, end, args.set_name)
+        figure_dir = period_dirs(start, end, args.set_name)[0]
+        print(f"  {figure_dir}: {len(list(figure_dir.glob('*.png')))} figures (named *_y{start}-{end}.png)")
     return 1 if failed or len(results) != expected else 0
 
 
