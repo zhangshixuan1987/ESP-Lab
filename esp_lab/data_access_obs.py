@@ -12,6 +12,32 @@ import xarray as xr
 DEFAULT_OBS_DIR = "/global/cfs/cdirs/e3sm/e3sm_diags/obs_for_e3sm_diags/time-series/"
 
 
+# Products whose file-name prefix differs from the variable stored inside.
+# {product: {variable: file_prefix}}. The shared archive is read-only, so the
+# mapping lives here rather than in renamed files.
+#
+# HadISST2 (2026-11-13): the project archive provides ``tos_186901_202212.nc``
+# holding variable ``sst`` in degC (and ``ts_186901_202212.nc`` = sst + 273.15
+# in K). The lookup is strict: requesting HadISST2 ``sst`` must never fall
+# back to the Kelvin ``ts_*`` file.
+OBS_FILE_PREFIX_ALIASES: Dict[str, Dict[str, str]] = {
+    "HadISST2": {"sst": "tos"},
+}
+
+
+def obs_file_prefix(product: Optional[str], variable: Optional[str]) -> Optional[str]:
+    """Return the on-disk file prefix for ``variable`` of ``product``."""
+    if variable is None:
+        return None
+    return OBS_FILE_PREFIX_ALIASES.get(str(product), {}).get(variable, variable)
+
+
+def obs_file_pattern(obs_root: Union[str, Path], product: str, variable: str) -> str:
+    """Glob pattern ``<obs_root>/<product>/<prefix>_*.nc`` for a product variable."""
+    root = str(obs_root).rstrip("/")
+    return f"{root}/{product}/{obs_file_prefix(product, variable)}_*.nc"
+
+
 # Default mapping from common E3SM model variable names to CMIP6 CMOR names
 # used by the observational archive.
 #
@@ -764,10 +790,19 @@ def get_monthly_data(
         print(f"[OBS] Mapping field '{field}' -> '{field_resolved}'")
 
     field_candidates = _unique_fields(field_resolved, field)
+    # A product-specific prefix alias replaces the generic candidates so the
+    # lookup cannot silently match a different variable's file.
+    aliased_prefix = (
+        OBS_FILE_PREFIX_ALIASES.get(str(product), {}).get(field_resolved)
+        if filename is None else None
+    )
+    lookup_candidates = [aliased_prefix] if aliased_prefix else field_candidates
+    if verbose and aliased_prefix:
+        print(f"[OBS] {product} stores '{field_resolved}' in '{aliased_prefix}_*' files")
     lookup_errors = []
     filepath = None
     filepath_field = None
-    for candidate in field_candidates or [None]:
+    for candidate in lookup_candidates or [None]:
         try:
             filepath = find_obs_file(
                 obs_dir=obs_dir,

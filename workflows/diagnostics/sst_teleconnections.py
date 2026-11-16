@@ -27,6 +27,7 @@ DEFAULT_DOWNSTREAM_TARGET_GRIDS = {
 
 SYSTEM_DIR_MAP: dict[str, str] = {
     "E3SM-4DEnVarOcn": "4DEnVarOcn",
+    "E3SM-4DEnVarLnd": "4DEnVarLnd",
     "E3SM-FOSIRL": "JRA55_FOSIRL",
     "E3SM-Reanalysis": "Reanalysis",
     "BruteForce": "Reanalysis",
@@ -48,6 +49,11 @@ def observed_telec_path(diag_root: Path, filename: str) -> Path:
 
 MEMBER_DIMS = ("M", "member", "ensemble")
 
+# Optional "init_years_by_month" lists the initialization months a system
+# covers and their start years (None = every configured year); a system
+# without it covers every month and year. See system_init_years().
+_REANALYSIS_COVERAGE = {2: range(1980, 2016, 5), 5: None, 8: range(1980, 2016, 5), 11: None}
+
 E3SM_CASES: dict[str, dict[str, Any]] = {
     "E3SM-FOSIRL": {
         "case_prefix": "WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_JRA55_FOSIRL",
@@ -56,6 +62,7 @@ E3SM_CASES: dict[str, dict[str, Any]] = {
         "source_revision": "post_process_v1",
         "color": "black",
         "supports_land": True,
+        "init_years_by_month": {5: None, 11: None},
     },
     "E3SM-Reanalysis": {
         "case_prefix": "WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_BruteForce",
@@ -64,6 +71,7 @@ E3SM_CASES: dict[str, dict[str, Any]] = {
         "source_revision": "post_process_v1",
         "color": "tab:blue",
         "supports_land": True,
+        "init_years_by_month": _REANALYSIS_COVERAGE,
     },
     "E3SM-4DEnVarOcn": {
         "case_prefix": "WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_4DEnVarOcn",
@@ -72,6 +80,18 @@ E3SM_CASES: dict[str, dict[str, Any]] = {
         "source_revision": "post_process_v1",
         "color": "tab:purple",
         "supports_land": True,
+        # May starts exist only for 1980-1995.
+        "init_years_by_month": {5: range(1980, 1996)},
+    },
+    "E3SM-4DEnVarLnd": {
+        "case_prefix": "WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_4DEnVarLnd",
+        "cache_tag": "4DEnVarLnd",
+        "display_name": "E3SMv3-4DEnVarLnd",
+        "source_revision": "post_process_v1",
+        "color": "tab:green",
+        "supports_land": True,
+        # May starts exist only for 1980-1989.
+        "init_years_by_month": {5: range(1980, 1990)},
     },
     "E3SM-BruteForce": {
         "case_prefix": "WCYCL20TR_ne30pg2_r05_IcoswISC30E3r5_BruteForce",
@@ -80,8 +100,50 @@ E3SM_CASES: dict[str, dict[str, Any]] = {
         "source_revision": "post_process_v1",
         "color": "tab:blue",
         "supports_land": True,
+        "init_years_by_month": _REANALYSIS_COVERAGE,
     },
 }
+
+
+def configured_init_years(config: Mapping[str, Any]) -> list[int]:
+    """Every initialization year in ``inputs.initialization_years``."""
+    start, end = config.get("inputs", {}).get("initialization_years", (1980, 2011))
+    return list(range(int(start), int(end) + 1))
+
+
+def system_init_years(
+    config: Mapping[str, Any], system: str, init_month: int
+) -> list[int] | None:
+    """Initialization years ``system`` has for ``init_month`` within the configured years.
+
+    ``config["selection"]["init_years_by_system"]`` ({system: {month: years}})
+    overrides the coverage in ``E3SM_CASES``. Returns None when the system has
+    no starts for that month in the configured years.
+    """
+    years = configured_init_years(config)
+    selection = config.get("selection") or config.get("teleconnection") or {}
+    override = selection.get("init_years_by_system", {}).get(system)
+    coverage = override if override is not None else E3SM_CASES[system].get("init_years_by_month")
+    if coverage is None:
+        return years
+    if int(init_month) not in coverage:
+        return None
+    covered = coverage[int(init_month)]
+    if covered is None:
+        return years
+    covered = set(map(int, covered))
+    selected = [year for year in years if year in covered]
+    return selected or None
+
+
+def shared_init_years(config: Mapping[str, Any], init_month: int) -> list[int]:
+    """Initialization years shared by every selected system covering ``init_month``."""
+    selection = config.get("selection") or config.get("teleconnection") or {}
+    per_system = [
+        set(years) for system in selection.get("systems", [])
+        if (years := system_init_years(config, system, init_month)) is not None
+    ]
+    return sorted(set.intersection(*per_system)) if per_system else []
 
 SST_INDEX_REGIONS: dict[str, list[float]] = {
     "Nino12": [270.0, 280.0, -10.0, 0.0],
@@ -733,6 +795,18 @@ def build_teleconnection_inventory(config: Mapping[str, Any]) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for system in selection["systems"]:
         for init_month in selection["init_months"]:
+            case_years = system_init_years(config, system, init_month)
+            if case_years is None:
+                for variable in downstream_vars:
+                    rows.append({
+                        "system": system, "init_month": init_month,
+                        "index": index_name, "variable": variable,
+                        "index_forecast": None, "index_observed": None,
+                        "field_forecast": None, "field_observed": None,
+                        "status": "skipped",
+                        "detail": f"{system} has no init_month={init_month} starts",
+                    })
+                continue
             idx_fcst, idx_obs = upstream_sst_paths(
                 system,
                 init_month,
@@ -741,7 +815,7 @@ def build_teleconnection_inventory(config: Mapping[str, Any]) -> pd.DataFrame:
                 eli_grid=str(config.get("inputs", {}).get("eli_grid", "regridded")),
                 ensemble_member_count=int(config.get("inputs", {}).get("ensemble_member_count", 10)),
                 monthly_nlead=int(config.get("inputs", {}).get("monthly_nlead", 24)),
-                years=tuple(config.get("inputs", {}).get("initialization_years", (1980, 2011))),
+                years=(case_years[0], case_years[-1]),
             )
             for variable in downstream_vars:
                 spec = DOWNSTREAM_VARIABLES[variable]
@@ -862,6 +936,13 @@ def ensure_upstream_products(config: Mapping[str, Any]) -> pd.DataFrame:
     return build_teleconnection_inventory(config)
 
 
+def _system_year_span(config: Mapping[str, Any], system: str, init_month: int) -> tuple[int, int]:
+    case_years = system_init_years(config, system, init_month)
+    if case_years is None:
+        raise ValueError(f"{system} has no init_month={init_month} starts in the configured years")
+    return case_years[0], case_years[-1]
+
+
 def open_inputs(
     system: str,
     init_month: int,
@@ -886,7 +967,7 @@ def open_inputs(
         eli_grid=str(config.get("inputs", {}).get("eli_grid", "regridded")),
         ensemble_member_count=int(config.get("inputs", {}).get("ensemble_member_count", 10)),
         monthly_nlead=int(config.get("inputs", {}).get("monthly_nlead", 24)),
-        years=tuple(config.get("inputs", {}).get("initialization_years", (1980, 2011))),
+        years=_system_year_span(config, system, init_month),
     )
     fld_fcst_path, fld_obs_path = resolve_downstream_paths(
         system,
@@ -964,6 +1045,13 @@ def compute_system_teleconnection(
     fld_init_years = parse_init_years(fld_fcst[init_dim].values)
 
     common_years = sorted(list(set(idx_init_years) & set(fld_init_years) & set(range(y0, y1 + 1))))
+    # "own" (default): this system's own initialization years; "shared": only
+    # the years shared by every selected system covering this month.
+    skill_years_mode = str(selection.get("skill_years_mode", "own"))
+    if skill_years_mode not in {"own", "shared"}:
+        raise ValueError("selection.skill_years_mode must be 'own' or 'shared'")
+    if skill_years_mode == "shared":
+        common_years = sorted(set(common_years) & set(shared_init_years(config, init_month)))
     if len(common_years) < minimum_years:
         raise ValueError(
             f"Insufficient common verification years ({len(common_years)}) for {system}, {variable}, init={init_month}"
@@ -1169,7 +1257,7 @@ def ensure_teleconnection_dataset(
     # 1. Primary path: load single-system files from <Experiment>/leadtime_telec/
     # and assemble into multi-system dataset in memory.
     systems = (
-        [str(s) for s in inventory["system"].unique()]
+        [str(s) for s in inventory.query("status != 'skipped'")["system"].unique()]
         if inventory is not None and not inventory.empty and "system" in inventory.columns
         else [str(s) for s in config.get("selection", {}).get("systems", [])]
     )

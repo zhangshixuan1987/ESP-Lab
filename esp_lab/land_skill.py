@@ -1015,3 +1015,60 @@ __all__ = [
     "retain_valid_seasonal_leads",
     "validate_land_reference_compatibility",
 ]
+
+
+def land_evaluation_cohort(
+    case_names: Sequence[str],
+    init_month: int,
+    leads: Sequence[int],
+    *,
+    forecast_by_case_month: Mapping[str, Mapping[int, xr.DataArray]],
+    valid_time_by_case_month: Mapping[str, Mapping[int, xr.DataArray]],
+    expected_years_by_case_month: Mapping[str, Mapping[int, Mapping[int, Sequence[int]]]],
+    reference: xr.DataArray,
+    climatology_years: tuple[int, int],
+    reference_is_anomaly: bool,
+    require_complete_cohort: bool = True,
+    minimum_years: int = 3,
+) -> dict[int, list[int]]:
+    """Target years by lead valid for every case in ``case_names`` and the reference.
+
+    With one case this is that case's own evaluation cohort; with several it is
+    the cohort they share. The expected cohort is the per-lead intersection of
+    each case's configured target years.
+    """
+    case_names = list(case_names)
+    if not case_names:
+        raise ValueError(f"No E3SM case covers init_month={init_month}")
+    model_fields = {case: forecast_by_case_month[case][init_month] for case in case_names}
+    model_times = {case: valid_time_by_case_month[case][init_month] for case in case_names}
+    first = expected_years_by_case_month[case_names[0]][init_month]
+    expected = {
+        int(lead): [
+            year for year in first[int(lead)]
+            if all(year in expected_years_by_case_month[case][init_month][int(lead)]
+                   for case in case_names)
+        ]
+        for lead in leads
+    }
+    cohort = stats.common_valid_target_years_seasonal(
+        model_fields, model_times, reference, leads, require_all_members=True
+    )
+    if require_complete_cohort and cohort != expected:
+        raise ValueError(
+            f"Evaluation cohort is incomplete for {case_names}, init={init_month}: "
+            f"expected={expected}, common={cohort}"
+        )
+    undersampled = {
+        lead: years for lead, years in cohort.items() if len(years) < minimum_years
+    }
+    if undersampled:
+        raise ValueError(
+            f"Reference leaves fewer than {minimum_years} evaluation years "
+            f"for {case_names}, init={init_month}: {undersampled}"
+        )
+    validate_reference_time_coverage(
+        reference, cohort, model_times[case_names[0]], climatology_years,
+        reference_is_anomaly=reference_is_anomaly,
+    )
+    return cohort
