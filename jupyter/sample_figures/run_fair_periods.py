@@ -25,7 +25,7 @@ Run on a compute node, e.g. an interactive allocation:
 
 Options: --periods 1980-1984 1980-1989 1980-1995 (default), --fields ...,
 --notebooks comparison sst_skill scorecard shock (default: all), --exclude E3SM-4DEnVarLnd,
---set-name NAME (figures to sample_figures/NAME/y<start>-<end>/),
+--set-name NAME (figures to sample_figures/NAME/y<start>-<end>/), --init-months 5 11 (shock notebook),
 --max-parallel N (notebooks executed at once, default 8), --prepare-only,
 --stamp-only (rename existing figures of the periods without running anything).
 """
@@ -138,12 +138,15 @@ def period_dirs(start: int, end: int, set_name: str | None) -> tuple[Path, Path]
 
 
 def build_period(start: int, end: int, fields: list[str], notebooks: list[str] = NOTEBOOK_KINDS,
-                 exclude: list[str] = (), set_name: str | None = None) -> tuple[list[Path], list[Path]]:
+                 exclude: list[str] = (), set_name: str | None = None,
+                 shock_init_months: list[int] = (5,)) -> tuple[list[Path], list[Path]]:
     """Write the period's notebooks; return (independent notebooks, sequential SST/scorecard chain).
 
     ``notebooks`` selects which notebook kinds to run; ``exclude`` drops
     experiments even where they cover the period (only E3SM-4DEnVarLnd is
-    supported); ``set_name`` writes to a separate figure set.
+    supported); ``set_name`` writes to a separate figure set; ``shock_init_months``
+    sets the initialization months of the shock notebook (cases without a
+    month are skipped for it).
     """
     if start != 1980:
         raise ValueError("The source notebooks start in 1980; periods must start in 1980.")
@@ -180,6 +183,8 @@ def build_period(start: int, end: int, fields: list[str], notebooks: list[str] =
              f"clim1={start}   # production: 1981\nclim2={end}   # production: 2010\n"),
             # Copies run outside this folder; point the repository search at the checkout.
             ("(Path.cwd(), *Path.cwd().parents)", f"({repo_search}Path.cwd(), *Path.cwd().parents)"),
+            ("init_months = [5]   # all four experiments have May starts only in common\n",
+             f"init_months = {sorted(set(shock_init_months))}   # set by run_fair_periods.py\n"),
             *drop("shock"),
         ]
         if field != "TS":
@@ -287,6 +292,8 @@ def main() -> int:
     parser.add_argument("--notebooks", nargs="+", default=NOTEBOOK_KINDS, choices=NOTEBOOK_KINDS,
                         help="notebook kinds to run (default: all)")
     parser.add_argument("--exclude", nargs="+", default=[], help="experiments to leave out, e.g. E3SM-4DEnVarLnd")
+    parser.add_argument("--init-months", nargs="+", type=int, default=[5],
+                        help="initialization months for the shock notebook, e.g. 5 11 (default: 5)")
     parser.add_argument("--set-name", default=None,
                         help="separate figure set: figures go to sample_figures/<set-name>/y<start>-<end>/")
     args = parser.parse_args()
@@ -297,7 +304,7 @@ def main() -> int:
             print(f"y{start}-{end}: {stamp_period(start, end, args.set_name)} figures renamed")
         return 0
 
-    jobs = [build_period(start, end, args.fields, args.notebooks, args.exclude, args.set_name)
+    jobs = [build_period(start, end, args.fields, args.notebooks, args.exclude, args.set_name, args.init_months)
             for start, end in spans]
     if args.prepare_only:
         return 0
