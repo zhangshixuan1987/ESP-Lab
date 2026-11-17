@@ -255,6 +255,8 @@ def fit_member_curve(members: Sequence[int], acc: Sequence[float]) -> tuple[floa
 
     ``ratio`` is the noise-to-signal variance ratio. The model is linear in 1/M
     for 1/ACC**2, so it is fit by least squares on the points with ACC > 0.
+    A correlation cannot exceed 1: when the free fit gives acc_inf > 1, acc_inf
+    is capped at 1 and ``ratio`` refit with the intercept fixed at 1.
     Returns (nan, nan) when the curve gives no usable fit.
     """
     m = np.asarray(members, dtype=float)
@@ -262,9 +264,12 @@ def fit_member_curve(members: Sequence[int], acc: Sequence[float]) -> tuple[floa
     keep = np.isfinite(r) & (r > 0)
     if keep.sum() < 2:
         return float("nan"), float("nan")
-    slope, intercept = np.polyfit(1.0 / m[keep], 1.0 / r[keep] ** 2, 1)
+    x, y = 1.0 / m[keep], 1.0 / r[keep] ** 2
+    slope, intercept = np.polyfit(x, y, 1)
     if intercept <= 0:
         return float("nan"), float("nan")
+    if intercept < 1:
+        return 1.0, float(max(np.sum(x * (y - 1.0)) / np.sum(x * x), 0.0))
     return float(1.0 / np.sqrt(intercept)), float(slope / intercept)
 
 

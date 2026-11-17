@@ -131,6 +131,12 @@ def test_acc_critical_value_and_member_extrapolation():
     assert acc_inf == pytest.approx(0.6) and ratio == pytest.approx(4.0)
     assert sss.member_curve(acc_inf, ratio, [np.inf])[0] == pytest.approx(0.6)
     assert np.isnan(sss.fit_member_curve([1, 2], [-0.1, -0.2])[0])
+    # A steep curve that the free fit would extrapolate past ACC = 1 is capped at 1.
+    steep = [0.3, 0.42, 0.6, 0.7]
+    assert np.polyfit(1 / np.array([1, 2, 5, 10]), 1 / np.array(steep) ** 2, 1)[1] < 1
+    acc_inf, ratio = sss.fit_member_curve([1, 2, 5, 10], steep)
+    assert acc_inf == 1.0 and ratio > 0
+    assert np.all(sss.member_curve(acc_inf, ratio, [1, 10, np.inf]) <= 1.0)
 
 
 def test_smallest_stable_size():
