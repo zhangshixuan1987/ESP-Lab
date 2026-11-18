@@ -114,6 +114,29 @@ def test_cross_validated_climatology_is_leave_one_out_at_n_minus_one():
     assert few.shape == (7, n, n) and (few.sum(2) == 3).all()
 
 
+def test_contiguous_subsets_are_blocks_around_the_target():
+    n = 12
+    rng = np.random.default_rng(7)
+    for size in (1, 3, 6, n - 2):
+        w = sss.contiguous_subsets(n, size, 40, rng)
+        assert w.shape == (40, n, n) and (w.sum(2) == size).all()
+        assert np.all(np.diagonal(w, axis1=1, axis2=2) == 0)
+        with_target = w.copy()
+        with_target[:, np.arange(n), np.arange(n)] = 1.0
+        picked = np.argwhere(with_target)                       # (draw, target, year)
+        for d, y in {(d, y) for d, y, _ in picked}:
+            years = np.flatnonzero(with_target[d, y])
+            assert years.max() - years.min() == size              # one consecutive block
+    loo = sss.contiguous_subsets(n, n - 1, 40, rng)
+    assert loo.shape == (1, n, n)
+    np.testing.assert_array_equal(loo[0], sss.cross_validated_subsets(n, n - 1, 1, rng)[0])
+    # Edge years can only use blocks after (first year) or before (last year) them.
+    w = sss.contiguous_subsets(n, 3, 20, rng)
+    assert (w[:, 0, 1:4] == 1).all() and (w[:, -1, -4:-1] == 1).all()
+    with pytest.raises(ValueError):
+        sss.contiguous_subsets(n, n, 5, rng)
+
+
 def test_random_subsets_enumerates_small_spaces():
     rng = np.random.default_rng(0)
     assert sss.random_subsets(5, 5, 100, rng).shape == (1, 5)
@@ -139,10 +162,43 @@ def test_acc_critical_value_and_member_extrapolation():
     assert np.all(sss.member_curve(acc_inf, ratio, [1, 10, np.inf]) <= 1.0)
 
 
+def test_member_nrmse_fit_recovers_parameters_and_theory():
+    members = [1, 2, 3, 5, 8, 10]
+    curve = sss.member_nrmse_curve(0.9, 1.5, members)
+    nrmse_inf, noise = sss.fit_member_nrmse_curve(members, curve)
+    assert nrmse_inf == pytest.approx(0.9) and noise == pytest.approx(1.5)
+    assert sss.member_nrmse_curve(nrmse_inf, noise, [np.inf])[0] == pytest.approx(0.9)
+    assert np.isnan(sss.fit_member_nrmse_curve([1], [1.2])[0])
+    # A negative free intercept is set to 0.
+    assert sss.fit_member_nrmse_curve([1, 2, 4], [1.0, 0.5, 0.1])[0] == 0.0
+    # The model is exact for scores computed from member subsets: nRMSE**2 is
+    # linear in 1/M when the scores average over all subsets of each size.
+    rng = np.random.default_rng(3)
+    years, n_members = 30, 6
+    signal = rng.standard_normal(years)
+    obs = xr.DataArray(signal + 0.5 * rng.standard_normal(years), dims="Y",
+                       coords={"Y": np.arange(1980, 1980 + years)})
+    members = xr.DataArray(signal[:, None] + rng.standard_normal((years, n_members)), dims=("Y", "M"),
+                           coords={"Y": obs.Y})
+    from itertools import combinations
+    mse = []
+    for m in range(1, n_members + 1):
+        weights = np.array([[1.0 if i in c else 0.0 for i in range(n_members)]
+                            for c in combinations(range(n_members), m)])
+        s = sss.member_subset_scores(members, obs, weights, detrend=False)
+        mse.append(float((s.nrmse ** 2).mean()))
+    x = 1.0 / np.arange(1, n_members + 1)
+    assert np.allclose(np.polyval(np.polyfit(x, mse, 1), x), mse, rtol=1e-6)
+
+
 def test_smallest_stable_size():
     sizes = [3, 5, 8, 12]
     assert sss.smallest_stable_size(sizes, [1.3, 1.08, 1.03, 1.0], [1.6, 1.15, 1.08, 1.0], 1.0, 0.05) == 8
     assert sss.smallest_stable_size(sizes, [1.3, 1.3, 1.3, 1.3], [2, 2, 2, 2], 1.0, 0.05) is None
+    # Two-sided: a curve that dips below the reference is only stable once it is back within tolerance.
+    dip = [0.9, 0.93, 0.97, 1.0]
+    assert sss.smallest_stable_size(sizes, dip, dip, 1.0, 0.05) == 3
+    assert sss.smallest_stable_size(sizes, dip, dip, 1.0, 0.05, lower=dip) == 8
 
 
 def test_missing_values_are_excluded_pairwise():
