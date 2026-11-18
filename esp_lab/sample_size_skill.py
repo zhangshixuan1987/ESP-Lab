@@ -25,6 +25,7 @@ import xarray as xr
 from scipy import stats as sps
 
 Reducer = Optional[Callable[[xr.DataArray], xr.DataArray]]
+_VAR_RTOL = 1e-10   # variance below this fraction of the second moment counts as constant
 
 
 def init_years(values: Sequence) -> np.ndarray:
@@ -114,10 +115,14 @@ def _scores(f, o, t, w, detrend):
             bias = mf - mo
         cff = np.maximum(cff, 0.0)
         coo = np.maximum(coo, 0.0)
-        acc = cfo / np.sqrt(cff * coo)
         mse = np.maximum(cff + coo - 2.0 * cfo, 0.0) + bias ** 2
         rmse = np.sqrt(mse)
-        nrmse = rmse / np.sqrt(coo)
+        # A (near-)constant series, e.g. a snow-free cell where H2OSNO is always 0,
+        # has no anomalies: ACC and nRMSE are undefined there, not infinite.
+        varies_o = coo > _VAR_RTOL * mean(o0 * o0)
+        varies_f = cff > _VAR_RTOL * mean(f0 * f0)
+        acc = np.where(varies_o & varies_f, cfo / np.sqrt(cff * coo), np.nan)
+        nrmse = np.where(varies_o, rmse / np.sqrt(coo), np.nan)
     enough = n >= 3
     return {name: np.where(enough, value, np.nan)
             for name, value in (("acc", acc), ("nrmse", nrmse), ("rmse", rmse), ("bias", bias))} | {"n": n}
@@ -195,6 +200,31 @@ def cross_validated_subsets(n_years: int, size: int, n_draws: int,
     picks = np.argsort(noise, axis=2)[..., :size]
     weights = np.zeros((n_draws, n_years, n_years))
     np.put_along_axis(weights, picks, 1.0, axis=2)
+    return weights
+
+
+def contiguous_subsets(n_years: int, size: int, n_draws: int,
+                       rng: np.random.Generator) -> np.ndarray:
+    """0/1 weights (draw, target year, year): for every target year, a block of
+    ``size + 1`` consecutive years that contains it, minus the target itself.
+
+    This is how a climatology period is used in practice: consecutive years
+    around (or, at the record edges, before or after) the evaluated year, never
+    the year itself. The block position is drawn at random per draw and target;
+    ``size = n_years - 1`` is leave-one-out on the full record.
+    """
+    if not 1 <= size <= n_years - 1:
+        raise ValueError(f"contiguous climatology size {size} must lie in 1..{n_years - 1}")
+    if size == n_years - 1:
+        n_draws = 1   # the only block is the whole record
+    target = np.arange(n_years)
+    lo = np.maximum(0, target - size)                 # earliest block start containing the target
+    hi = np.minimum(target, n_years - size - 1)       # latest block start inside the record
+    start = lo[None] + np.floor(rng.random((n_draws, n_years)) * (hi - lo + 1)[None]).astype(int)
+    year = np.arange(n_years)
+    inside = (year[None, None] >= start[..., None]) & (year[None, None] <= start[..., None] + size)
+    weights = inside.astype("float64")
+    weights[:, target, target] = 0.0
     return weights
 
 
@@ -279,6 +309,34 @@ def member_curve(acc_inf: float, ratio: float, members) -> np.ndarray:
     return acc_inf / np.sqrt(1.0 + ratio / m)
 
 
+def fit_member_nrmse_curve(members: Sequence[int], nrmse: Sequence[float]) -> tuple[float, float]:
+    """Fit nRMSE(M)**2 = nrmse_inf**2 + noise / M to an nRMSE-vs-ensemble-size curve.
+
+    For an M-member mean the forecast variance is signal + noise / M while its
+    covariance with the observations does not depend on M, so the squared nRMSE
+    is linear in 1/M; ``noise`` is the member-noise variance over the observed
+    variance. Least squares on the finite points; a negative intercept is set
+    to 0 and ``noise`` refit through the origin. Returns (nan, nan) without a
+    usable curve.
+    """
+    m = np.asarray(members, dtype=float)
+    e = np.asarray(nrmse, dtype=float)
+    keep = np.isfinite(e)
+    if keep.sum() < 2:
+        return float("nan"), float("nan")
+    x, y = 1.0 / m[keep], e[keep] ** 2
+    slope, intercept = np.polyfit(x, y, 1)
+    if intercept < 0:
+        return 0.0, float(np.sum(x * y) / np.sum(x * x))
+    return float(np.sqrt(intercept)), float(slope)
+
+
+def member_nrmse_curve(nrmse_inf: float, noise: float, members) -> np.ndarray:
+    """nRMSE for ensemble sizes ``members`` (np.inf allowed) from :func:`fit_member_nrmse_curve`."""
+    m = np.asarray(members, dtype=float)
+    return np.sqrt(np.maximum(nrmse_inf ** 2 + noise / m, 0.0))
+
+
 def acc_critical_value(n_years, alpha: float = 0.1, *, detrend: bool = True,
                        two_sided: bool = True) -> np.ndarray:
     """Smallest ACC significant at ``alpha`` for ``n_years`` independent samples.
@@ -292,16 +350,22 @@ def acc_critical_value(n_years, alpha: float = 0.1, *, detrend: bool = True,
 
 
 def smallest_stable_size(sizes: Sequence[int], center, upper, reference: float,
-                         tolerance: float) -> Optional[int]:
+                         tolerance: float, lower=None) -> Optional[int]:
     """Smallest size from which ``center`` and ``upper`` stay within tolerance of reference.
 
     ``center``/``upper`` are per-size values (e.g. median and 95th percentile
     nRMSE); a size qualifies when it and every larger size satisfy
     center <= reference * (1 + tolerance) and upper <= reference * (1 + 2 * tolerance).
+    With ``lower`` (e.g. the 5th percentile) the test is two-sided: also
+    center >= reference * (1 - tolerance) and lower >= reference * (1 - 2 * tolerance),
+    so a score that moves *below* the reference (a changed target, not a better
+    estimate) does not count as stable.
     """
+    lower = [None] * len(sizes) if lower is None else list(lower)
     ok = [
         (c <= reference * (1 + tolerance)) and (u <= reference * (1 + 2 * tolerance))
-        for c, u in zip(center, upper)
+        and (lo is None or (c >= reference * (1 - tolerance) and lo >= reference * (1 - 2 * tolerance)))
+        for c, u, lo in zip(center, upper, lower)
     ]
     for i, size in enumerate(sizes):
         if all(ok[i:]):
