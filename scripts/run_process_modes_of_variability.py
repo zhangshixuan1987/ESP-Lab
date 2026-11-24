@@ -128,10 +128,14 @@ def configuration_signature(
                 benchmark_inputs=smyle_benchmark_fingerprints(settings, args),
             )
         elif source == "nmme":
+            resolved_archive_field = (
+                "prmsl" if str(settings["field"]) == "PSL" else "sst"
+            )
             signature.update(
                 nmme_root=str(Path(args.nmme_root).resolve()),
                 nmme_models=list(args.nmme_models),
                 nmme_field=str(args.nmme_field),
+                nmme_archive_field=resolved_archive_field,
             )
             if str(settings["field"]) == "SST":
                 signature["nmme_sst_mask_version"] = (

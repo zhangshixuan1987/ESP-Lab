@@ -115,6 +115,30 @@ def test_nmme_sst_mask_version_invalidates_only_temperature_fields():
     assert temperature["nmme_fixed_dir"] == "/data/fixed"
 
 
+def test_nmme_signature_records_resolved_archive_field():
+    pressure = json.loads(
+        configuration_signature("nmme", _settings(), _args(), include_mode=False)
+    )
+    temperature_settings = {
+        **_settings(),
+        "mode": "PDO",
+        "domain_mode": "PDO",
+        "field": "SST",
+        "frequency": "monthly",
+        "obs_product": "HadISST2",
+        "obs_var": "sst",
+    }
+    temperature = json.loads(
+        configuration_signature(
+            "nmme", temperature_settings, _args(), include_mode=False
+        )
+    )
+
+    assert pressure["nmme_field"] == "auto"
+    assert pressure["nmme_archive_field"] == "prmsl"
+    assert temperature["nmme_archive_field"] == "sst"
+
+
 def test_temperature_index_signature_tracks_projection_mask_algorithm():
     temperature_settings = {
         **_settings(),
