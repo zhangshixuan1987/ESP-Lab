@@ -428,3 +428,188 @@ def test_ensemble_spread_common_skill_uses_exact_common_cohort():
     assert list(cache.L.values) == [1, 2, 3]
     assert int(cache.spread_unit_count.sel(source="NMME").isel(L=0)) == 2
     assert np.all(cache.sample_count.sel(source="NMME").values == 4)
+
+
+# ---------------------------------------------------------------------------
+# Regional SST indices (build_regional_sst_index_product / _observation)
+# ---------------------------------------------------------------------------
+from esp_lab.diagnostics.sst_index import BASIC_REGIONS  # noqa: E402
+from workflows.modes_of_variability.cross_source import (  # noqa: E402
+    DERIVED_SST_INDICES,
+    build_regional_sst_index_observation,
+    build_regional_sst_index_product,
+    write_ensemble_spread_native_skill_cache,
+)
+
+_SST_LAT = np.arange(-28.75, 30.0, 2.5)
+_SST_LON = np.arange(1.25, 360.0, 2.5)
+_SST_YEARS = [1991, 1992, 1993, 1994, 1995]
+_SST_LEADS = np.arange(1, 6)
+_SST_REFERENCE = {
+    "eof_strategy": "fixed_obs_projection",
+    "common_basis_reference": "obs",
+    "eof_reference_period": "1950-2020",
+}
+
+
+def _sst_field(members, seed=0):
+    rng = np.random.default_rng(seed)
+    shape = (len(_SST_YEARS), _SST_LEADS.size, len(members), _SST_LAT.size, _SST_LON.size)
+    return xr.DataArray(
+        rng.normal(size=shape), dims=("Y", "L", "M", "lat", "lon"),
+        coords={"Y": _SST_YEARS, "L": _SST_LEADS, "M": list(members), "lat": _SST_LAT, "lon": _SST_LON},
+        attrs={"units": "degC"},
+    )
+
+
+def _sst_valid_time():
+    return xr.DataArray(
+        [[DatetimeNoLeap(y + (10 + lead) // 12, (10 + lead) % 12 + 1, 15) for lead in _SST_LEADS] for y in _SST_YEARS],
+        dims=("Y", "L"), coords={"Y": _SST_YEARS, "L": _SST_LEADS},
+    )
+
+
+def _sst_forecast_cache():
+    return xr.Dataset(
+        {"SST_anom": _sst_field(["1", "2", "3"]), "valid_time": _sst_valid_time()}, attrs=dict(_SST_REFERENCE)
+    )
+
+
+def _sst_nmme_cache():
+    raw = _sst_field(["A:1", "A:2", "B:1", "B:2"], seed=1) + 20.0
+    return xr.Dataset(
+        {"SST_anom": raw - raw.mean(("Y", "M")), "SST": raw, "valid_time": _sst_valid_time()},
+        attrs={**_SST_REFERENCE, "source": "NMME"},
+    )
+
+
+def _sst_observation_cache(lat=_SST_LAT):
+    rng = np.random.default_rng(2)
+    time = [DatetimeNoLeap(1990 + i // 12, i % 12 + 1, 15) for i in range(60)]
+    data = xr.DataArray(
+        rng.normal(size=(60, _SST_LAT.size, _SST_LON.size)), dims=("time", "lat", "lon"),
+        coords={"time": time, "lat": _SST_LAT, "lon": _SST_LON}, attrs={"units": "degC"},
+    )
+    return xr.Dataset({"SST_anom": data.sel(lat=lat)})
+
+
+def _manual_region_mean(field, index):
+    lon_min, lon_max, lat_min, lat_max = BASIC_REGIONS[index]["lonlat"]
+    lon_mask = (
+        (field.lon >= lon_min) & (field.lon <= lon_max)
+        if lon_min <= lon_max else (field.lon >= lon_min) | (field.lon <= lon_max)
+    )
+    region = field.where((field.lat >= lat_min) & (field.lat <= lat_max) & lon_mask)
+    return region.weighted(np.cos(np.deg2rad(field.lat))).mean(("lat", "lon"))
+
+
+@pytest.mark.parametrize("index", ["Nino3.4", "TSA", "AtlNino"])
+def test_regional_sst_index_matches_cosine_weighted_region_mean(index):
+    cache = _sst_forecast_cache()
+    product = build_regional_sst_index_product(cache, index=index)
+    expected = _manual_region_mean(cache["SST_anom"], index).transpose("Y", "L", "M")
+    np.testing.assert_allclose(product["mode_index"].values, expected.values, rtol=1e-12)
+    assert product["mode_index"].dims == ("Y", "L", "M")
+    assert product.attrs["index"] == index
+    assert product.attrs["regional_anomaly_method"] == "source SST_anom field"
+    assert product.attrs["eof_reference_period"] == "1950-2020"
+
+
+def test_regional_sst_index_accepts_north_to_south_latitudes():
+    ascending = build_regional_sst_index_observation(_sst_observation_cache(), index="Nino3.4")
+    descending = build_regional_sst_index_observation(
+        _sst_observation_cache(lat=_SST_LAT[::-1]), index="Nino3.4"
+    )
+    np.testing.assert_allclose(descending.values, ascending.values, rtol=1e-12)
+
+
+def test_iod_is_west_minus_east_and_oni_smooths_nino34_along_lead():
+    cache = _sst_forecast_cache()
+    iod = build_regional_sst_index_product(cache, index="IOD")["mode_index"]
+    assert iod.attrs["index"] == "IOD"
+    nino34 = build_regional_sst_index_product(cache, index="Nino3.4")["mode_index"]
+    oni = build_regional_sst_index_product(cache, index="ONI")["mode_index"]
+    expected = nino34.rolling(L=3, center=True, min_periods=1).mean()
+    np.testing.assert_allclose(oni.values, expected.transpose("Y", "L", "M").values, rtol=1e-12)
+    assert oni.attrs["index"] == "ONI"
+
+
+def test_oni_observation_smooths_along_time():
+    cache = _sst_observation_cache()
+    nino34 = build_regional_sst_index_observation(cache, index="Nino3.4")
+    oni = build_regional_sst_index_observation(cache, index="ONI")
+    np.testing.assert_allclose(oni.values, nino34.rolling(time=3, center=True, min_periods=1).mean().values)
+
+
+def test_nmme_index_removes_each_models_member_and_year_mean_at_each_lead():
+    product = build_regional_sst_index_product(_sst_nmme_cache(), index="Nino3.4")
+    index = product["mode_index"]
+    for model in ("A", "B"):
+        members = [m for m in index.M.values if str(m).startswith(model + ":")]
+        np.testing.assert_allclose(index.sel(M=members).mean(("Y", "M")).values, 0.0, atol=1e-12)
+    assert product.attrs["regional_anomaly_method"].startswith("per-model")
+
+
+def test_nmme_index_requires_model_member_labels():
+    cache = _sst_nmme_cache().assign_coords(M=["1", "2", "3", "4"])
+    with pytest.raises(ValueError, match="MODEL:MEMBER"):
+        build_regional_sst_index_product(cache, index="Nino3.4")
+
+
+@pytest.mark.parametrize("index", DERIVED_SST_INDICES)
+@pytest.mark.parametrize("cache_factory", [_sst_forecast_cache, _sst_nmme_cache])
+def test_derived_indices_build_for_products_and_observations(index, cache_factory):
+    cache = cache_factory()
+    product = build_regional_sst_index_product(cache, index=index)
+    assert product["mode_index"].dims == ("Y", "L", "M")
+    assert np.isfinite(product["mode_index"].values).all()
+    assert product.attrs["index"] == index
+    expected_method = "per-model" if cache.attrs.get("source") == "NMME" else "source SST_anom field"
+    assert product.attrs["regional_anomaly_method"].startswith(expected_method)
+    observation = build_regional_sst_index_observation(_sst_observation_cache(), index=index)
+    assert observation.dims == ("time",) and observation.attrs["index"] == index
+
+
+def test_tni_is_standardized_difference_smoothed_over_five_months():
+    cache = _sst_observation_cache()
+    nino12 = build_regional_sst_index_observation(cache, index="Nino12")
+    nino4 = build_regional_sst_index_observation(cache, index="Nino4")
+    expected = (nino12 / nino12.std("time") - nino4 / nino4.std("time")).rolling(
+        time=5, center=True, min_periods=1
+    ).mean()
+    tni = build_regional_sst_index_observation(cache, index="TNI")
+    np.testing.assert_allclose(tni.values, expected.values, rtol=1e-12)
+
+
+def test_regional_sst_index_rejects_unknown_index_and_missing_anomaly():
+    with pytest.raises(ValueError, match="not a supported regional SST definition"):
+        build_regional_sst_index_product(_sst_forecast_cache(), index="NotARegion")
+    with pytest.raises(ValueError, match="SST_anom and valid_time"):
+        build_regional_sst_index_product(_sst_forecast_cache().drop_vars("SST_anom"), index="Nino3.4")
+    with pytest.raises(ValueError, match="lacks SST_anom"):
+        build_regional_sst_index_observation(xr.Dataset(), index="TNI")
+
+
+def test_ensemble_spread_cache_write_is_atomic_and_leaves_no_temporary(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    import workflows.modes_of_variability.cross_source as cross_source
+
+    cache = xr.Dataset({"acc": ("L", [0.5, 0.4])}, coords={"L": [1, 2]})
+    monkeypatch.setattr(cross_source, "build_ensemble_spread_native_skill_cache", lambda *a, **k: cache)
+    path = tmp_path / "nested" / "spread.nc"
+    assert write_ensemble_spread_native_skill_cache({}, None, path) == path
+    xr.testing.assert_identical(xr.open_dataset(path).load(), cache)
+    assert sorted(p.name for p in path.parent.iterdir()) == ["spread.nc"]
+
+    def partial_write(self, target, *args, **kwargs):
+        Path(target).write_bytes(b"partial")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(xr.Dataset, "to_netcdf", partial_write)
+    with pytest.raises(OSError, match="disk full"):
+        write_ensemble_spread_native_skill_cache({}, None, path)
+    # the failed write leaves neither a temporary file nor a damaged destination
+    assert sorted(p.name for p in path.parent.iterdir()) == ["spread.nc"]
+    monkeypatch.undo()
+    xr.testing.assert_identical(xr.open_dataset(path).load(), cache)
