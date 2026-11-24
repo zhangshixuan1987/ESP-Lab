@@ -91,7 +91,7 @@ LAND_REFERENCES: dict[str, dict[str, Any]] = {
         "restrict_model_to_reference_months": True,
     },
     "H2OSOI": {
-        "path": "/global/cfs/cdirs/e3sm/zhan391/data/CPC_SOM/monthly/soilw_*.nc",
+        "path": "/global/cfs/cdirs/e3sm/zhan391/data/CPC_SOM/1x1/monthly/soilw_*.nc",
         "variable": "soilw", "product": "CPC_Soil_Moisture_V2",
         "documentation": "https://www.cpc.ncep.noaa.gov/soilmst/descrip.htm",
         "source_revision": "cpc_soil_moisture_v2_archive_2026-08-26",
