@@ -24,6 +24,19 @@ REFERENCE_ATTRIBUTES = (
 )
 
 
+def _atomic_to_netcdf(dataset: xr.Dataset, path: str | Path) -> Path:
+    """Write ``dataset`` to a unique temporary file, then rename it over ``path``."""
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.tmp.{uuid.uuid4().hex}")
+    try:
+        dataset.to_netcdf(temporary)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return destination
+
+
 def _shared_coordinate(products: Mapping[str, xr.Dataset], name: str) -> np.ndarray:
     shared: set[object] | None = None
     for source, product in products.items():
@@ -257,15 +270,7 @@ def write_common_skill_cache(
     products: Mapping[str, xr.Dataset], observation: xr.DataArray, path: str | Path
 ) -> Path:
     """Build and atomically save a shared-cohort comparison cache."""
-    destination = Path(path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.tmp.{uuid.uuid4().hex}")
-    try:
-        build_common_skill_cache(products, observation).to_netcdf(temporary)
-        os.replace(temporary, destination)
-    finally:
-        temporary.unlink(missing_ok=True)
-    return destination
+    return _atomic_to_netcdf(build_common_skill_cache(products, observation), path)
 
 
 def _build_native_source_skill(
@@ -365,15 +370,7 @@ def write_native_skill_cache(
     products: Mapping[str, xr.Dataset], observation: xr.DataArray, path: str | Path
 ) -> Path:
     """Build and atomically save a full-period source-native skill cache."""
-    destination = Path(path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.tmp.{uuid.uuid4().hex}")
-    try:
-        build_native_skill_cache(products, observation).to_netcdf(temporary)
-        os.replace(temporary, destination)
-    finally:
-        temporary.unlink(missing_ok=True)
-    return destination
+    return _atomic_to_netcdf(build_native_skill_cache(products, observation), path)
 
 
 def plot_native_skill_figure(cache: xr.Dataset, path: str | Path, *, mode: str) -> Path:
@@ -541,15 +538,10 @@ def write_ensemble_spread_native_skill_cache(
     model_ensemble_sources: Sequence[str] = ("NMME",),
 ) -> Path:
     """Build and atomically save a native ensemble-spread skill cache."""
-    destination = Path(path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
     cache = build_ensemble_spread_native_skill_cache(
         products, observation, model_ensemble_sources=model_ensemble_sources
     )
-    temporary = destination.with_suffix(destination.suffix + ".tmp")
-    cache.to_netcdf(temporary)
-    temporary.replace(destination)
-    return destination
+    return _atomic_to_netcdf(cache, path)
 
 
 def plot_ensemble_spread_native_skill_figure(
@@ -1162,219 +1154,8 @@ def write_model_mean_common_skill_cache(
     products: Mapping[str, xr.Dataset], observation: xr.DataArray, path: str | Path, *, source: str = "nmme"
 ) -> Path:
     """Atomically write an optional grouped-model common-skill cache."""
-    destination = Path(path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.tmp.{uuid.uuid4().hex}")
-    try:
-        build_model_mean_common_skill_cache(products, observation, source=source).to_netcdf(temporary)
-        os.replace(temporary, destination)
-    finally:
-        temporary.unlink(missing_ok=True)
-    return destination
-
-
-def _regional_sst_anomaly_mean(anomaly: xr.DataArray, *, index: str) -> xr.DataArray:
-    """Return a cosine-weighted SST-anomaly mean for one standard region."""
-    if index not in BASIC_REGIONS:
-        raise ValueError(f"{index!r} is not a supported basic regional SST index.")
-    if not {"lat", "lon"}.issubset(anomaly.coords):
-        raise ValueError("SST anomaly requires lat/lon coordinates.")
-    lon_min, lon_max, lat_min, lat_max = BASIC_REGIONS[index]["lonlat"]
-    normalized = anomaly.assign_coords(lon=(anomaly.lon % 360.0)).sortby("lon")
-    if lon_min <= lon_max:
-        lon_mask = (normalized.lon >= lon_min) & (normalized.lon <= lon_max)
-    else:
-        lon_mask = (normalized.lon >= lon_min) | (normalized.lon <= lon_max)
-    lat_mask = (normalized.lat >= lat_min) & (normalized.lat <= lat_max)
-    if not bool((lat_mask * lon_mask).any()):
-        raise ValueError(f"{index} bounds select no SST grid cells.")
-    weights = xr.DataArray(
-        np.cos(np.deg2rad(normalized.lat.values)),
-        dims=("lat",), coords={"lat": normalized.lat},
-    ).where(lat_mask, 0.0)
-    result = normalized.where(lat_mask * lon_mask).weighted(weights).mean(
-        ("lat", "lon"), skipna=True
-    )
-    return result.rename("mode_index").assign_attrs(
-        long_name=str(BASIC_REGIONS[index]["long_name"]) + " anomaly",
-        units=str(anomaly.attrs.get("units", "degC")),
-        index=index,
-        index_definition=(
-            f"cosine-weighted SST anomaly mean over "
-            f"{lon_min:g}-{lon_max:g}E, {lat_min:g}-{lat_max:g}N"
-        ),
-    )
-
-
-def build_regional_sst_index_product(field_cache: xr.Dataset, *, index: str) -> xr.Dataset:
-    """Adapt source-native gridded SST anomalies to a forecast index product."""
-    if not {"SST_anom", "valid_time"}.issubset(field_cache.data_vars):
-        raise ValueError("SST field cache requires SST_anom and valid_time.")
-    anomaly = field_cache["SST_anom"]
-    if not {"Y", "L", "M"}.issubset(anomaly.dims):
-        raise ValueError("Forecast SST anomaly requires Y, L, and M dimensions.")
-    mode_index = _regional_sst_anomaly_mean(anomaly, index=index).transpose("Y", "L", "M")
-    valid_time = field_cache["valid_time"].transpose("Y", "L")
-    result = xr.Dataset(
-        {
-            "mode_index": mode_index,
-            "valid_time": valid_time,
-            "target_month": valid_time.isel(Y=0).dt.month.rename("target_month"),
-        }
-    )
-    result.attrs.update({key: str(field_cache.attrs[key]) for key in REFERENCE_ATTRIBUTES})
-    result.attrs.update(
-        index=index,
-        index_definition=str(mode_index.attrs["index_definition"]),
-        source_native_sst_anomaly="true",
-    )
-    return result
-
-
-def build_regional_sst_index_observation(field_cache: xr.Dataset, *, index: str) -> xr.DataArray:
-    """Adapt gridded observed SST anomalies to the matching regional index."""
-    if "SST_anom" not in field_cache:
-        raise ValueError("Observed SST field cache lacks SST_anom.")
-    anomaly = field_cache["SST_anom"]
-    if anomaly.dims != ("time", "lat", "lon"):
-        raise ValueError("Observed SST anomaly must have time, lat, lon dimensions.")
-    return _regional_sst_anomaly_mean(anomaly, index=index)
-
-
-def _nmme_regional_sst_anomaly(field_cache: xr.Dataset, *, index: str) -> xr.DataArray:
-    """Compute NMME regional anomalies with a per-model, lead-dependent climatology."""
-    raw = field_cache["SST"]
-    regional = _regional_sst_anomaly_mean(raw, index=index)
-    labels = regional.M.values.astype(str)
-    if any(":" not in label for label in labels):
-        raise ValueError("NMME regional SST requires MODEL:MEMBER labels.")
-    pieces = []
-    for model in sorted({label.split(":", 1)[0] for label in labels}):
-        members = [label for label in labels if label.startswith(model + ":")]
-        selected = regional.sel(M=members)
-        pieces.append(selected - selected.mean(("Y", "M"), skipna=True))
-    return xr.concat(pieces, dim="M").sel(M=regional.M).assign_attrs(
-        regional_anomaly_method="per-model member-and-initialization-year mean removed at each lead",
-        regional_anomaly_period="source-native full valid record",
-    )
-
-
-def build_regional_sst_index_product(field_cache: xr.Dataset, *, index: str) -> xr.Dataset:
-    """Adapt source-native gridded SST fields to a regional-index product."""
-    if not {"SST_anom", "valid_time"}.issubset(field_cache.data_vars):
-        raise ValueError("SST field cache requires SST_anom and valid_time.")
-    anomaly = (
-        _nmme_regional_sst_anomaly(field_cache, index=index)
-        if str(field_cache.attrs.get("source", "")).upper() == "NMME"
-        else _regional_sst_anomaly_mean(field_cache["SST_anom"], index=index)
-    )
-    if not {"Y", "L", "M"}.issubset(anomaly.dims):
-        raise ValueError("Forecast SST anomaly requires Y, L, and M dimensions.")
-    mode_index = anomaly.transpose("Y", "L", "M")
-    valid_time = field_cache["valid_time"].transpose("Y", "L")
-    result = xr.Dataset(
-        {"mode_index": mode_index, "valid_time": valid_time,
-         "target_month": valid_time.isel(Y=0).dt.month.rename("target_month")}
-    )
-    result.attrs.update({key: str(field_cache.attrs[key]) for key in REFERENCE_ATTRIBUTES})
-    result.attrs.update(index=index, index_definition=str(mode_index.attrs["index_definition"]),
-                        source_native_sst_anomaly="true",
-                        regional_anomaly_method=str(mode_index.attrs.get("regional_anomaly_method", "source SST_anom field")))
-    return result
-
-
-def _regional_sst_anomaly_mean(anomaly: xr.DataArray, *, index: str) -> xr.DataArray:
-    """Return an efficient cosine-weighted mean for a standard SST region."""
-    if index not in BASIC_REGIONS:
-        raise ValueError(f"{index!r} is not a supported basic regional SST index.")
-    lon_min, lon_max, lat_min, lat_max = BASIC_REGIONS[index]["lonlat"]
-    normalized = anomaly.assign_coords(lon=(anomaly.lon % 360.0)).sortby("lon")
-    regional = normalized.sel(lat=slice(lat_min, lat_max))
-    if lon_min <= lon_max:
-        regional = regional.sel(lon=slice(lon_min, lon_max))
-    else:
-        regional = xr.concat([regional.sel(lon=slice(lon_min, 360.0)), regional.sel(lon=slice(0.0, lon_max))], dim="lon")
-    if not regional.sizes.get("lat") or not regional.sizes.get("lon"):
-        raise ValueError(f"{index} bounds select no SST grid cells.")
-    weights = xr.DataArray(np.cos(np.deg2rad(regional.lat.values)), dims=("lat",), coords={"lat": regional.lat})
-    return regional.weighted(weights).mean(("lat", "lon"), skipna=True).rename("mode_index").assign_attrs(
-        long_name=str(BASIC_REGIONS[index]["long_name"]) + " anomaly",
-        units=str(anomaly.attrs.get("units", "degC")), index=index,
-        index_definition=f"cosine-weighted SST anomaly mean over {lon_min:g}-{lon_max:g}E, {lat_min:g}-{lat_max:g}N",
-    )
-
-
-def _sst_index_from_field(field: xr.DataArray, *, index: str) -> xr.DataArray:
-    """Return a basic regional mean or the established IOD West-minus-East index."""
-    if index == "IOD":
-        west = _regional_sst_anomaly_mean(field, index="IOD_West")
-        east = _regional_sst_anomaly_mean(field, index="IOD_East")
-        return (west - east).rename("mode_index").assign_attrs(
-            long_name="Dipole Mode Index SST anomaly", units=str(field.attrs.get("units", "degC")),
-            index="IOD", index_definition="IOD West minus IOD East regional SST anomaly",
-        )
-    return _regional_sst_anomaly_mean(field, index=index)
-
-
-def _nmme_sst_index_anomaly(field_cache: xr.Dataset, *, index: str) -> xr.DataArray:
-    raw_index = _sst_index_from_field(field_cache["SST"], index=index)
-    labels = raw_index.M.values.astype(str)
-    if any(":" not in label for label in labels):
-        raise ValueError("NMME regional SST requires MODEL:MEMBER labels.")
-    pieces = []
-    for model in sorted({label.split(":", 1)[0] for label in labels}):
-        members = [label for label in labels if label.startswith(model + ":")]
-        selected = raw_index.sel(M=members)
-        pieces.append(selected - selected.mean(("Y", "M"), skipna=True))
-    return xr.concat(pieces, dim="M").sel(M=raw_index.M).assign_attrs(
-        **raw_index.attrs,
-        regional_anomaly_method="per-model member-and-initialization-year mean removed at each lead",
-        regional_anomaly_period="source-native full valid record",
-    )
-
-
-def build_regional_sst_index_product(field_cache: xr.Dataset, *, index: str) -> xr.Dataset:
-    """Adapt source-native gridded SST fields to a basic or IOD index product."""
-    if not {"SST_anom", "valid_time"}.issubset(field_cache.data_vars):
-        raise ValueError("SST field cache requires SST_anom and valid_time.")
-    anomaly = (_nmme_sst_index_anomaly(field_cache, index=index)
-               if str(field_cache.attrs.get("source", "")).upper() == "NMME"
-               else _sst_index_from_field(field_cache["SST_anom"], index=index))
-    mode_index = anomaly.transpose("Y", "L", "M")
-    valid_time = field_cache["valid_time"].transpose("Y", "L")
-    result = xr.Dataset({"mode_index": mode_index, "valid_time": valid_time,
-                         "target_month": valid_time.isel(Y=0).dt.month.rename("target_month")})
-    result.attrs.update({key: str(field_cache.attrs[key]) for key in REFERENCE_ATTRIBUTES})
-    result.attrs.update(index=index, index_definition=str(mode_index.attrs["index_definition"]), source_native_sst_anomaly="true",
-                        regional_anomaly_method=str(mode_index.attrs.get("regional_anomaly_method", "source SST_anom field")))
-    return result
-
-
-def build_regional_sst_index_observation(field_cache: xr.Dataset, *, index: str) -> xr.DataArray:
-    """Adapt observed SST anomalies to the matching basic or IOD index."""
-    if "SST_anom" not in field_cache:
-        raise ValueError("Observed SST field cache lacks SST_anom.")
-    return _sst_index_from_field(field_cache["SST_anom"], index=index)
-
-
-def _regional_sst_anomaly_mean(anomaly: xr.DataArray, *, index: str) -> xr.DataArray:
-    """Return an efficient cosine-weighted mean for a standard SST region."""
-    definitions = {**BASIC_REGIONS, **HELPER_REGIONS}
-    if index not in definitions:
-        raise ValueError(f"{index!r} is not a supported regional SST definition.")
-    lon_min, lon_max, lat_min, lat_max = definitions[index]["lonlat"]
-    normalized = anomaly.assign_coords(lon=(anomaly.lon % 360.0)).sortby("lon")
-    regional = normalized.sel(lat=slice(lat_min, lat_max))
-    if lon_min <= lon_max:
-        regional = regional.sel(lon=slice(lon_min, lon_max))
-    else:
-        regional = xr.concat([regional.sel(lon=slice(lon_min, 360.0)), regional.sel(lon=slice(0.0, lon_max))], dim="lon")
-    if not regional.sizes.get("lat") or not regional.sizes.get("lon"):
-        raise ValueError(f"{index} bounds select no SST grid cells.")
-    weights = xr.DataArray(np.cos(np.deg2rad(regional.lat.values)), dims=("lat",), coords={"lat": regional.lat})
-    return regional.weighted(weights).mean(("lat", "lon"), skipna=True).rename("mode_index").assign_attrs(
-        long_name=str(definitions[index]["long_name"]) + " anomaly", units=str(anomaly.attrs.get("units", "degC")), index=index,
-        index_definition=f"cosine-weighted SST anomaly mean over {lon_min:g}-{lon_max:g}E, {lat_min:g}-{lat_max:g}N",
+    return _atomic_to_netcdf(
+        build_model_mean_common_skill_cache(products, observation, source=source), path
     )
 
 
@@ -1394,20 +1175,97 @@ def build_ensemble_spread_common_skill_cache(
     )
     return result
 
+# ---------------------------------------------------------------------------
+# Regional SST indices from source-native SST fields
+# ---------------------------------------------------------------------------
+# Supported indices: every BASIC_REGIONS region, IOD (West minus East), ONI
+# (centered three-month mean of Nino3.4), and the derived TNI and RONI.
+# Forecast products apply running means along lead ``L``; observations along
+# ``time``. NMME anomalies remove each model's own member-and-start-year mean
+# at every lead; other sources use their ``SST_anom`` field as provided.
+
+DERIVED_SST_INDICES = ("TNI", "RONI")
+_DERIVED_SST_COMPONENTS = {"TNI": ("Nino12", "Nino4"), "RONI": ("Nino3.4", "TropicalMean")}
+_SOURCE_SST_ANOMALY_METHOD = "source SST_anom field"
+
+
+def _is_nmme(field_cache: xr.Dataset) -> bool:
+    return str(field_cache.attrs.get("source", "")).upper() == "NMME"
+
+
+def _base_sst_index(index: str) -> str:
+    """ONI is the smoothed Nino3.4 anomaly; every other index is its own base."""
+    return "Nino3.4" if index == "ONI" else index
+
+
+def _regional_sst_anomaly_mean(anomaly: xr.DataArray, *, index: str) -> xr.DataArray:
+    """Return the cosine-weighted mean SST anomaly over one standard region."""
+    definitions = {**BASIC_REGIONS, **HELPER_REGIONS}
+    if index not in definitions:
+        raise ValueError(f"{index!r} is not a supported regional SST definition.")
+    if not {"lat", "lon"}.issubset(anomaly.coords):
+        raise ValueError("SST anomaly requires lat/lon coordinates.")
+    lon_min, lon_max, lat_min, lat_max = definitions[index]["lonlat"]
+    # 0-360 longitudes and ascending latitudes, so the slices below select the
+    # region whatever the orientation of the source grid. (Latitudes are only
+    # re-sorted when descending, which leaves ascending grids bit-for-bit unchanged.)
+    normalized = anomaly.assign_coords(lon=(anomaly.lon % 360.0)).sortby("lon")
+    if normalized.lat.size > 1 and bool(normalized.lat[0] > normalized.lat[-1]):
+        normalized = normalized.sortby("lat")
+    regional = normalized.sel(lat=slice(lat_min, lat_max))
+    if lon_min <= lon_max:
+        regional = regional.sel(lon=slice(lon_min, lon_max))
+    else:
+        regional = xr.concat(
+            [regional.sel(lon=slice(lon_min, 360.0)), regional.sel(lon=slice(0.0, lon_max))],
+            dim="lon",
+        )
+    if not regional.sizes.get("lat") or not regional.sizes.get("lon"):
+        raise ValueError(f"{index} bounds select no SST grid cells.")
+    weights = xr.DataArray(
+        np.cos(np.deg2rad(regional.lat.values)), dims=("lat",), coords={"lat": regional.lat}
+    )
+    return regional.weighted(weights).mean(("lat", "lon"), skipna=True).rename("mode_index").assign_attrs(
+        long_name=str(definitions[index]["long_name"]) + " anomaly",
+        units=str(anomaly.attrs.get("units", "degC")),
+        index=index,
+        index_definition=(
+            f"cosine-weighted SST anomaly mean over "
+            f"{lon_min:g}-{lon_max:g}E, {lat_min:g}-{lat_max:g}N"
+        ),
+    )
+
+
+def _sst_index_from_field(field: xr.DataArray, *, index: str) -> xr.DataArray:
+    """Return a regional mean, or the IOD as West minus East."""
+    if index == "IOD":
+        west = _regional_sst_anomaly_mean(field, index="IOD_West")
+        east = _regional_sst_anomaly_mean(field, index="IOD_East")
+        return (west - east).rename("mode_index").assign_attrs(
+            long_name="Dipole Mode Index SST anomaly",
+            units=str(field.attrs.get("units", "degC")),
+            index="IOD",
+            index_definition="IOD West minus IOD East regional SST anomaly",
+        )
+    return _regional_sst_anomaly_mean(field, index=index)
+
 
 def _apply_sst_index_transform(anomaly: xr.DataArray, *, index: str, rolling_dim: str) -> xr.DataArray:
-    """Apply documented post-anomaly SST-index transforms supported here."""
+    """Apply the post-anomaly transform of ``index`` (ONI smoothing; others unchanged)."""
     if index == "ONI":
-        return anomaly.rolling({rolling_dim: 3}, center=True, min_periods=1).mean().rename("mode_index").assign_attrs(
-            long_name="Oceanic Nino Index", units=str(anomaly.attrs.get("units", "degC")), index="ONI",
+        return anomaly.rolling({rolling_dim: 3}, center=True, min_periods=1).mean().rename(
+            "mode_index"
+        ).assign_attrs(
+            long_name="Oceanic Nino Index",
+            units=str(anomaly.attrs.get("units", "degC")),
+            index="ONI",
             index_definition="centered three-month running mean of Nino3.4 SST anomalies",
         )
     return anomaly
 
 
-def _nmme_sst_index_anomaly(field_cache: xr.Dataset, *, index: str) -> xr.DataArray:
-    base_index = "Nino3.4" if index == "ONI" else index
-    raw_index = _sst_index_from_field(field_cache["SST"], index=base_index)
+def _nmme_member_anomaly(raw_index: xr.DataArray) -> xr.DataArray:
+    """Remove each NMME model's member-and-start-year mean at every lead."""
     labels = raw_index.M.values.astype(str)
     if any(":" not in label for label in labels):
         raise ValueError("NMME regional SST requires MODEL:MEMBER labels.")
@@ -1416,72 +1274,101 @@ def _nmme_sst_index_anomaly(field_cache: xr.Dataset, *, index: str) -> xr.DataAr
         members = [label for label in labels if label.startswith(model + ":")]
         selected = raw_index.sel(M=members)
         pieces.append(selected - selected.mean(("Y", "M"), skipna=True))
-    anomaly = xr.concat(pieces, dim="M").sel(M=raw_index.M).assign_attrs(
-        **raw_index.attrs, regional_anomaly_method="per-model member-and-initialization-year mean removed at each lead",
+    return xr.concat(pieces, dim="M").sel(M=raw_index.M).assign_attrs(
+        **raw_index.attrs,
+        regional_anomaly_method="per-model member-and-initialization-year mean removed at each lead",
         regional_anomaly_period="source-native full valid record",
     )
+
+
+def _forecast_sst_index(field_cache: xr.Dataset, *, index: str) -> xr.DataArray:
+    """Non-derived index (regional, IOD, ONI) for one forecast source."""
+    if _is_nmme(field_cache):
+        raw = _sst_index_from_field(field_cache["SST"], index=_base_sst_index(index))
+        anomaly = _nmme_member_anomaly(raw)
+    else:
+        anomaly = _sst_index_from_field(field_cache["SST_anom"], index=_base_sst_index(index))
     return _apply_sst_index_transform(anomaly, index=index, rolling_dim="L")
 
 
+def _derived_components(field_cache: xr.Dataset, index: str, *, forecast: bool) -> dict[str, xr.DataArray]:
+    """Regional anomalies that TNI or RONI are built from."""
+    names = _DERIVED_SST_COMPONENTS[index]
+    if forecast:
+        return {name: _forecast_sst_index(field_cache, index=name) for name in names}
+    return {name: _sst_index_from_field(field_cache["SST_anom"], index=name) for name in names}
+
+
+def _derived_value(
+    parts: Mapping[str, xr.DataArray], index: str, rolling_dim: str, sample_dims: Sequence[str]
+) -> xr.DataArray:
+    """TNI (standardized Nino12 minus Nino4, 5-month mean) or RONI (scaled relative Nino3.4)."""
+    if index == "TNI":
+        def standardized(data: xr.DataArray) -> xr.DataArray:
+            return data / data.std(sample_dims, skipna=True).where(lambda value: value > 0, 1.0)
+
+        value = (standardized(parts["Nino12"]) - standardized(parts["Nino4"])).rolling(
+            {rolling_dim: 5}, center=True, min_periods=1
+        ).mean()
+        return value.where(parts["Nino12"].notnull() & parts["Nino4"].notnull()).rename(
+            "mode_index"
+        ).assign_attrs(
+            index="TNI",
+            units="1",
+            long_name="Trans-Niño Index",
+            index_definition="centered five-month mean of standardized Nino12 minus Nino4 anomalies",
+        )
+    difference = (parts["Nino3.4"] - parts["TropicalMean"]).rolling(
+        {rolling_dim: 3}, center=True, min_periods=1
+    ).mean()
+    nino34 = parts["Nino3.4"].rolling({rolling_dim: 3}, center=True, min_periods=1).mean()
+    denominator = difference.std(sample_dims, skipna=True)
+    scale = (nino34.std(sample_dims, skipna=True) / denominator).fillna(1.0).where(denominator > 0, 1.0)
+    return (difference * scale).where(
+        parts["Nino3.4"].notnull() & parts["TropicalMean"].notnull()
+    ).rename("mode_index").assign_attrs(
+        index="RONI",
+        units=str(nino34.attrs.get("units", "degC")),
+        long_name="Relative Oceanic Niño Index",
+        index_definition="variance-scaled centered three-month Nino3.4 minus tropical-mean anomaly",
+    )
+
+
 def build_regional_sst_index_product(field_cache: xr.Dataset, *, index: str) -> xr.Dataset:
-    """Adapt source-native SST fields to a basic, IOD, or ONI index product."""
+    """Adapt source-native forecast SST fields to a regional, IOD, ONI, TNI, or RONI product."""
     if not {"SST_anom", "valid_time"}.issubset(field_cache.data_vars):
         raise ValueError("SST field cache requires SST_anom and valid_time.")
-    if str(field_cache.attrs.get("source", "")).upper() == "NMME":
-        anomaly = _nmme_sst_index_anomaly(field_cache, index=index)
+    if index in DERIVED_SST_INDICES:
+        parts = _derived_components(field_cache, index, forecast=True)
+        anomaly = _derived_value(parts, index, "L", ("Y", "M"))
+        method = next(iter(parts.values())).attrs.get("regional_anomaly_method", _SOURCE_SST_ANOMALY_METHOD)
     else:
-        base_index = "Nino3.4" if index == "ONI" else index
-        anomaly = _apply_sst_index_transform(_sst_index_from_field(field_cache["SST_anom"], index=base_index), index=index, rolling_dim="L")
+        anomaly = _forecast_sst_index(field_cache, index=index)
+        method = anomaly.attrs.get("regional_anomaly_method", _SOURCE_SST_ANOMALY_METHOD)
     mode_index = anomaly.transpose("Y", "L", "M")
     valid_time = field_cache["valid_time"].transpose("Y", "L")
-    result = xr.Dataset({"mode_index": mode_index, "valid_time": valid_time, "target_month": valid_time.isel(Y=0).dt.month.rename("target_month")})
+    result = xr.Dataset(
+        {
+            "mode_index": mode_index,
+            "valid_time": valid_time,
+            "target_month": valid_time.isel(Y=0).dt.month.rename("target_month"),
+        }
+    )
     result.attrs.update({key: str(field_cache.attrs[key]) for key in REFERENCE_ATTRIBUTES})
-    result.attrs.update(index=index, index_definition=str(mode_index.attrs["index_definition"]), source_native_sst_anomaly="true", regional_anomaly_method=str(mode_index.attrs.get("regional_anomaly_method", "source SST_anom field")))
+    result.attrs.update(
+        index=index,
+        index_definition=str(mode_index.attrs["index_definition"]),
+        source_native_sst_anomaly="true",
+        regional_anomaly_method=str(method),
+    )
     return result
 
 
 def build_regional_sst_index_observation(field_cache: xr.Dataset, *, index: str) -> xr.DataArray:
-    """Adapt observed SST anomalies to the matching basic, IOD, or ONI index."""
+    """Adapt observed SST anomalies to the matching regional, IOD, ONI, TNI, or RONI index."""
     if "SST_anom" not in field_cache:
         raise ValueError("Observed SST field cache lacks SST_anom.")
-    base_index = "Nino3.4" if index == "ONI" else index
-    return _apply_sst_index_transform(_sst_index_from_field(field_cache["SST_anom"], index=base_index), index=index, rolling_dim="time")
-
-
-# P7.4 derived SST indices.  These override the basic/IOD/ONI adapter above
-# while preserving its source-native anomaly and NMME per-model climatology contract.
-_build_regional_sst_index_product_base = build_regional_sst_index_product
-_build_regional_sst_index_observation_base = build_regional_sst_index_observation
-
-def _derived_components(field_cache, index):
-    names = ("Nino12", "Nino4") if index == "TNI" else ("Nino3.4", "TropicalMean")
-    if str(field_cache.attrs.get("source", "")).upper() == "NMME":
-        return {name: _nmme_sst_index_anomaly(field_cache, index=name) for name in names}
-    return {name: _sst_index_from_field(field_cache["SST_anom"], index=name) for name in names}
-
-def _derived_value(parts, index, rolling_dim, sample_dims):
-    if index == "TNI":
-        def standardized(data):
-            return data / data.std(sample_dims, skipna=True).where(lambda value: value > 0, 1.0)
-        value = (standardized(parts["Nino12"]) - standardized(parts["Nino4"])).rolling({rolling_dim: 5}, center=True, min_periods=1).mean()
-        return value.where(parts["Nino12"].notnull() & parts["Nino4"].notnull()).rename("mode_index").assign_attrs(index="TNI", units="1", long_name="Trans-Niño Index", index_definition="centered five-month mean of standardized Nino12 minus Nino4 anomalies")
-    difference = (parts["Nino3.4"] - parts["TropicalMean"]).rolling({rolling_dim: 3}, center=True, min_periods=1).mean()
-    nino34 = parts["Nino3.4"].rolling({rolling_dim: 3}, center=True, min_periods=1).mean()
-    denominator = difference.std(sample_dims, skipna=True)
-    scale = (nino34.std(sample_dims, skipna=True) / denominator).fillna(1.0).where(denominator > 0, 1.0)
-    return (difference * scale).where(parts["Nino3.4"].notnull() & parts["TropicalMean"].notnull()).rename("mode_index").assign_attrs(index="RONI", units=str(nino34.attrs.get("units", "degC")), long_name="Relative Oceanic Niño Index", index_definition="variance-scaled centered three-month Nino3.4 minus tropical-mean anomaly")
-
-def build_regional_sst_index_product(field_cache, *, index):
-    if index not in {"TNI", "RONI"}:
-        return _build_regional_sst_index_product_base(field_cache, index=index)
-    value = _derived_value(_derived_components(field_cache, index), index, "L", ("Y", "M")).transpose("Y", "L", "M")
-    valid_time = field_cache["valid_time"].transpose("Y", "L")
-    result = xr.Dataset({"mode_index": value, "valid_time": valid_time, "target_month": valid_time.isel(Y=0).dt.month.rename("target_month")})
-    result.attrs.update({key: str(field_cache.attrs[key]) for key in REFERENCE_ATTRIBUTES})
-    result.attrs.update(index=index, index_definition=str(value.attrs["index_definition"]), source_native_sst_anomaly="true")
-    return result
-
-def build_regional_sst_index_observation(field_cache, *, index):
-    if index not in {"TNI", "RONI"}:
-        return _build_regional_sst_index_observation_base(field_cache, index=index)
-    return _derived_value(_derived_components(field_cache, index), index, "time", ("time",))
+    if index in DERIVED_SST_INDICES:
+        return _derived_value(_derived_components(field_cache, index, forecast=False), index, "time", ("time",))
+    anomaly = _sst_index_from_field(field_cache["SST_anom"], index=_base_sst_index(index))
+    return _apply_sst_index_transform(anomaly, index=index, rolling_dim="time")
