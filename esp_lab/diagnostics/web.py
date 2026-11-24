@@ -8,7 +8,11 @@ from typing import Union
 
 FIGURE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".webp"}
 # Lead-time ACC/RMSE fields, matched as whole underscore-separated tokens.
-LEAD_FIELDS = ("PRECT", "PSL", "TREFHT", "TS", "SST", "SSS", "OHC700", "H2OSNO", "H2OSOI", "TWS")
+LEAD_FIELDS = (
+    "PRECT", "PSL", "TREFHT", "TS", "SST", "SSS", "OHC700", "H2OSNO", "H2OSOI", "TWS",
+    # Sea-ice concentration maps are drawn per hemisphere (1a_ice).
+    "SIC_NH", "SIC_SH",
+)
 # Lead-time RMSE buttons. 1b figures (``fig_{realm}_rmse_*``) are skill maps of
 # the detrended anomaly RMSE (nRMSE for land) and nRMSE differences; 1c figures
 # (``fig_rmse_compare_*``) show direct model-minus-observation RMSE, bias
@@ -258,7 +262,7 @@ def _infer_workflow_group(filename: str, metric: str, mode: str) -> str:
     if "regional_acc" in stem or metric_lower.startswith("regional_acc"):
         return "REGIONAL_SKILL"
     if (
-        stem.startswith(("fig_atm_acc_", "fig_ocn_acc_", "fig_lnd_acc_", "fig_lead_acc_", "fig_1a_"))
+        stem.startswith(("fig_atm_acc_", "fig_ocn_acc_", "fig_lnd_acc_", "fig_ice_acc_", "fig_lead_acc_", "fig_1a_"))
         or (stem.startswith("fig_1b_") and "acc" in stem)
         or "leadtime_acc" in stem
         or metric_lower.startswith("leadtime_acc")

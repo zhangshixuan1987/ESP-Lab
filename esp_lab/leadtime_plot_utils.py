@@ -15,6 +15,15 @@ def seasonal_label(init_month, lead, *, season_names=SEASON_NAMES):
     return season_names[(center_month % 12) // 3]
 
 
+def _lonlat_transform(ax):
+    """Keyword arguments that place lon/lat points correctly on a cartopy axis."""
+    if not hasattr(ax, "projection"):
+        return {}
+    import cartopy.crs as ccrs
+
+    return {"transform": ccrs.PlateCarree()}
+
+
 def style_global_map_axis(ax, *, row, column, nrows, label_size, style):
     """Apply consistent ticks, labels, and gridlines to a global map panel."""
     import cartopy.crs as ccrs
@@ -85,13 +94,25 @@ def add_missing_map_panel(
     title,
     message,
     font_size,
+    hemisphere=None,
+    boundary_lat=None,
 ):
-    """Create a map-shaped placeholder for an unavailable seasonal panel."""
+    """Create a map-shaped placeholder for an unavailable seasonal panel.
+
+    With ``hemisphere`` ("NH" or "SH") the placeholder is a polar cap down to
+    ``boundary_lat``, matching :func:`style_polar_map_axis` panels.
+    """
     import cartopy.crs as ccrs
 
-    ax = figure.add_subplot(nrows, ncols, subplot, projection=ccrs.PlateCarree())
-    ax.set_aspect("auto")
-    ax.set_global()
+    if hemisphere is None:
+        ax = figure.add_subplot(nrows, ncols, subplot, projection=ccrs.PlateCarree())
+        ax.set_aspect("auto")
+        ax.set_global()
+    else:
+        ax = figure.add_subplot(
+            nrows, ncols, subplot, projection=polar_projection(hemisphere)
+        )
+        set_polar_extent(ax, hemisphere, boundary_lat)
     ax.coastlines(linewidth=0.6, color="0.45")
     ax.set_facecolor("0.94")
     ax.set_title(title, fontsize=font_size, fontweight="bold")
@@ -148,12 +169,14 @@ def add_acc_comparison_markers(
         display_lon[display_mask], display_lat[display_mask],
         facecolor="none", edgecolor=style["marker_color"],
         s=style["open_marker_size"], linewidth=style["marker_linewidth"], zorder=10,
+        **_lonlat_transform(ax),
     )
     display_mask = np.asarray(e3sm_better)[::stride, ::stride] & latitude_mask
     ax.scatter(
         display_lon[display_mask], display_lat[display_mask],
         facecolor=style["marker_color"], edgecolor=style["marker_color"],
         s=style["filled_marker_size"], linewidth=0, zorder=10,
+        **_lonlat_transform(ax),
     )
     ax.text(
         0.98, 0.05,
@@ -216,7 +239,7 @@ def add_pointwise_significance_markers(
         facecolor=style.get("marker_color", "black"),
         edgecolor=style.get("marker_color", "black"),
         s=style.get("marker_size", 5), linewidth=0,
-        zorder=10,
+        zorder=10, **_lonlat_transform(ax),
     )
     if style.get("annotate_percentage", True):
         label = "(n/a)" if not np.isfinite(significant_fraction) else (
@@ -232,14 +255,110 @@ def add_pointwise_significance_markers(
     return significant_fraction
 
 
+# ---------------------------------------------------------------------------
+# Polar-cap maps (sea ice)
+# ---------------------------------------------------------------------------
+HEMISPHERES = ("NH", "SH")
+
+
+def _hemisphere(hemisphere):
+    value = str(hemisphere).upper()
+    if value not in HEMISPHERES:
+        raise ValueError(f"hemisphere must be one of {HEMISPHERES}, got {hemisphere!r}")
+    return value
+
+
+def polar_projection(hemisphere):
+    """North or South polar stereographic projection for ``hemisphere``."""
+    import cartopy.crs as ccrs
+
+    return ccrs.NorthPolarStereo() if _hemisphere(hemisphere) == "NH" else ccrs.SouthPolarStereo()
+
+
+def set_polar_extent(ax, hemisphere, boundary_lat):
+    """Show the polar cap poleward of ``boundary_lat`` inside a circular frame."""
+    import cartopy.crs as ccrs
+    import matplotlib.path as mpath
+
+    edge = abs(float(boundary_lat))
+    if not 0.0 < edge < 90.0:
+        raise ValueError("boundary_lat must lie strictly between 0 and 90 degrees")
+    extent = [-180, 180, edge, 90] if _hemisphere(hemisphere) == "NH" else [-180, 180, -90, -edge]
+    ax.set_extent(extent, crs=ccrs.PlateCarree())
+    # Shared map helpers set aspect "auto", which would stretch the cap into an ellipse.
+    ax.set_aspect("equal")
+    theta = np.linspace(0.0, 2.0 * np.pi, 200)
+    circle = mpath.Path(np.column_stack([np.sin(theta), np.cos(theta)]) * 0.5 + 0.5)
+    ax.set_boundary(circle, transform=ax.transAxes)
+
+
+def style_polar_map_axis(ax, *, hemisphere, boundary_lat, style):
+    """Polar counterpart of :func:`style_global_map_axis`: cap extent and gridlines.
+
+    Cartopy cannot draw tick labels on polar stereographic axes, so the
+    parallels and meridians are drawn as unlabeled gridlines.
+    """
+    import cartopy.crs as ccrs
+
+    set_polar_extent(ax, hemisphere, boundary_lat)
+    edge = abs(float(boundary_lat))
+    parallels = np.arange(np.ceil(edge / 10.0) * 10.0, 90.0, 10.0)
+    if _hemisphere(hemisphere) == "SH":
+        parallels = -parallels
+    ax.gridlines(
+        crs=ccrs.PlateCarree(),
+        xlocs=np.arange(-180, 181, 60),
+        ylocs=parallels,
+        linewidth=style["grid_linewidth"],
+        color=style["grid_color"],
+        alpha=style["grid_alpha"],
+        linestyle="-",
+        draw_labels=False,
+    )
+
+
+def polar_cap(data, hemisphere, boundary_lat):
+    """Select the latitudes poleward of ``boundary_lat`` in ``hemisphere``."""
+    edge = abs(float(boundary_lat))
+    latitude = np.asarray(data["lat"].values)
+    keep = latitude >= edge if _hemisphere(hemisphere) == "NH" else latitude <= -edge
+    # isel keeps variables without a lat dimension (per-lead counts) unchanged.
+    return data.isel(lat=np.flatnonzero(keep))
+
+
+def mask_weak_observed_variability(skill, min_obs_std, *, std_variable="sig_obs"):
+    """Blank map fields where the observed standard deviation is below ``min_obs_std``.
+
+    Grid cells that are almost never ice covered (or always fully covered) have
+    near-zero observed variance, so their ACC is noise. Only variables with
+    ``lat``/``lon`` dimensions are masked; per-lead scalars are kept.
+    """
+    if min_obs_std is None:
+        return skill
+    if std_variable not in skill:
+        raise ValueError(f"skill dataset has no {std_variable!r} to mask with")
+    keep = skill[std_variable] >= float(min_obs_std)
+    masked = skill.copy()
+    for name, variable in skill.data_vars.items():
+        if {"lat", "lon"}.issubset(variable.dims):
+            masked[name] = variable.where(keep)
+    return masked
+
+
 __all__ = [
+    "HEMISPHERES",
     "SEASON_NAMES",
     "add_acc_comparison_markers",
     "add_pointwise_significance_markers",
     "add_lead_badge",
     "add_missing_map_panel",
+    "mask_weak_observed_variability",
+    "polar_cap",
+    "polar_projection",
     "seasonal_label",
+    "set_polar_extent",
     "style_global_map_axis",
+    "style_polar_map_axis",
 ]
 
 
