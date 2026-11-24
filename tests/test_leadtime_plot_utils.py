@@ -129,3 +129,100 @@ def test_plot_conus_rmse_panels_draws_available_seasons(tmp_path):
     # 2 seasons x 2 forecast years x 2 models, plus the colorbar.
     assert len(fig.axes) == 9
     fig.savefig(tmp_path / "conus.png", dpi=30)
+
+
+# --- polar-cap (sea-ice) helpers -------------------------------------------
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
+import pytest  # noqa: E402
+
+from esp_lab.leadtime_plot_utils import (  # noqa: E402
+    add_missing_map_panel,
+    mask_weak_observed_variability,
+    polar_cap,
+    polar_projection,
+    set_polar_extent,
+    style_polar_map_axis,
+)
+
+
+def _skill(lat):
+    coords = {"L": [3, 6], "lat": lat, "lon": [0.0, 180.0]}
+    shape = (2, len(lat), 2)
+    return xr.Dataset(
+        {
+            "corr": (("L", "lat", "lon"), np.full(shape, 0.5)),
+            "sig_obs": (("L", "lat", "lon"), np.full(shape, 5.0)),
+            "sample_count": (("L",), [39, 39]),
+        },
+        coords=coords,
+    )
+
+
+@pytest.mark.parametrize("lat", [[-75.0, -45.0, 45.0, 75.0], [75.0, 45.0, -45.0, -75.0]])
+def test_polar_cap_selects_each_hemisphere_for_either_latitude_order(lat):
+    skill = _skill(lat)
+    assert sorted(polar_cap(skill, "NH", 50).lat.values) == [75.0]
+    assert sorted(polar_cap(skill, "sh", -50).lat.values) == [-75.0]
+    assert polar_cap(skill, "NH", 50).sample_count.dims == ("L",)
+
+
+def test_polar_helpers_reject_bad_input():
+    with pytest.raises(ValueError, match="hemisphere"):
+        polar_projection("Arctic")
+    fig = plt.figure()
+    ax = fig.add_subplot(1, 1, 1, projection=polar_projection("NH"))
+    with pytest.raises(ValueError, match="boundary_lat"):
+        set_polar_extent(ax, "NH", 0)
+    plt.close(fig)
+
+
+def test_mask_weak_observed_variability_keeps_per_lead_scalars():
+    skill = _skill([45.0, 75.0])
+    skill["sig_obs"][:, 0, :] = 0.5
+    masked = mask_weak_observed_variability(skill, 2.0)
+    assert masked.corr.isel(lat=0).isnull().all()
+    assert masked.corr.isel(lat=1).notnull().all()
+    assert masked.sample_count.values.tolist() == [39, 39]
+    assert mask_weak_observed_variability(skill, None) is skill
+    with pytest.raises(ValueError, match="sig_obs"):
+        mask_weak_observed_variability(skill.drop_vars("sig_obs"), 1.0)
+
+
+@pytest.mark.parametrize("hemisphere", ["NH", "SH"])
+def test_polar_panels_and_markers_render(tmp_path, hemisphere):
+    style = {"grid_linewidth": 0.3, "grid_color": "0.4", "grid_alpha": 0.4}
+    fig = plt.figure(figsize=(4, 2))
+    ax = fig.add_subplot(1, 2, 1, projection=polar_projection(hemisphere))
+    ax.set_aspect("auto")  # as map_pcolor_global_subplot leaves it
+    style_polar_map_axis(ax, hemisphere=hemisphere, boundary_lat=50, style=style)
+    assert ax.get_aspect() == 1.0
+    sign = 1 if hemisphere == "NH" else -1
+    lat = np.array([sign * 60.0, sign * 80.0])
+    lon = np.array([0.0, 90.0])
+    skill = xr.Dataset(
+        {
+            "corr": (("L", "lat", "lon"), np.full((1, 2, 2), 0.8)),
+            "pval": (("L", "lat", "lon"), np.full((1, 2, 2), 0.01)),
+        },
+        coords={"L": [3], "lat": lat, "lon": lon},
+    )
+    lon2d, lat2d = np.meshgrid(lon, lat)
+    fraction = add_pointwise_significance_markers(
+        ax, skill, 0, longitude_2d=lon2d, latitude_2d=lat2d,
+        significance_level=0.1, style={"latlim": 90}, font_size=6,
+    )
+    assert fraction == pytest.approx(1.0)
+    # Markers are placed in lon/lat, so they land inside the polar cap.
+    offsets = ax.collections[-1].get_offsets()
+    assert len(offsets) == 4
+    missing = add_missing_map_panel(
+        fig, nrows=1, ncols=2, subplot=2, title="t", message="none",
+        font_size=6, hemisphere=hemisphere, boundary_lat=50,
+    )
+    assert type(missing.projection) is type(polar_projection(hemisphere))
+    fig.savefig(tmp_path / f"polar_{hemisphere}.png")
+    plt.close(fig)

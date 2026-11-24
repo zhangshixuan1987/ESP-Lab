@@ -169,6 +169,8 @@ def test_infer_shortname_and_type():
     assert _infer_shortname_and_type("fig_ocn_acc_sst_acc_sig.png", "LEAD_ACC")[1] == "ACC Skill Map (Significance)"
     assert _infer_shortname_and_type("fig_ocn_acc_sst_acc_case_difference.png", "LEAD_ACC")[1] == "Case Difference"
     assert _infer_shortname_and_type("fig_ocn_acc_sst_acc_difference.png", "LEAD_ACC")[1] == "Difference"
+    assert _infer_shortname_and_type("fig_ice_acc_sic_nh_acc.png", "LEAD_ACC") == ("SIC_NH", "ACC Skill Map")
+    assert _infer_shortname_and_type("fig_ice_acc_sic_sh_acc_case_difference.png", "LEAD_ACC") == ("SIC_SH", "Case Difference")
     assert _infer_shortname_and_type("fig_rmse_compare_sss_rmse_difference_global.png", "LEAD_RMSE")[0] == "SSS"
 
     # LEAD_RMSE
@@ -377,3 +379,10 @@ def test_lead_rmse_rules_reach_the_page_script(tmp_path):
     assert "(?P<" not in html
     assert '"Case Difference"' in html
     assert "btn_rank" in html
+
+
+def test_sea_ice_acc_figures_are_grouped_with_lead_acc():
+    from esp_lab.diagnostics.web import _infer_workflow_group
+
+    for name in ("fig_ice_acc_sic_nh_acc.png", "fig_ice_acc_sic_sh_acc_case_difference.png"):
+        assert _infer_workflow_group(name, "", "") == "LEAD_ACC"
