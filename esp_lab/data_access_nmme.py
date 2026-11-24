@@ -20,7 +20,6 @@ Notes
   climatology is applied: 1982–1998 and 1999–2016.
 """
 
-import fcntl
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -29,6 +28,7 @@ from uuid import uuid4
 
 import numpy as np
 import xarray as xr
+from esp_lab.utils.file_lock import exclusive_lock
 
 
 _SPLIT_CLIMO_MODELS = {"COLA-RSMAS-CCSM4", "NCEP-CFSv2"}
@@ -122,8 +122,7 @@ def load_or_create_nmme_land_mask(
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
 
-    with lock_path.open("w") as lock_file:
-        fcntl.flock(lock_file, fcntl.LOCK_EX)
+    with exclusive_lock(lock_path):
         if path.exists():
             try:
                 with xr.open_dataset(path) as cached:

@@ -9,7 +9,6 @@ mode-specific conventional EOF and common-basis products are written below
 from __future__ import annotations
 
 import argparse
-import fcntl
 import json
 import logging
 import os
@@ -28,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from workflows.modes_of_variability import analysis as modes_analysis
 from esp_lab.utils.filename_utils import source_init_prefix
+from esp_lab.utils.file_lock import exclusive_lock
 
 
 LOG = logging.getLogger(__name__)
@@ -626,8 +626,7 @@ def write_manifest(
             common_basis_reference=mode_configs["NAO"]["obs_product"],
         )
     lock_path = path.with_suffix(path.suffix + ".lock")
-    with lock_path.open("w") as lock_file:
-        fcntl.flock(lock_file, fcntl.LOCK_EX)
+    with exclusive_lock(lock_path):
         source_manifest_path = path
         if not source_manifest_path.exists():
             legacy_path = Path(args.outdir) / "_manifests" / "modes_manifest.json"
