@@ -39,6 +39,12 @@ This fork extends ESP-Lab to fully support analysis and verification of **E3SM (
 - **Streamlined Diagnostics Package**: Modular diagnostic workflows under `esp_lab.diagnostics` covering SST indices, ENSO teleconnections, modes of variability (PDO, AMO, NAO), native equatorial Pacific longitudinal index (ELI), and initialization shock.
 - **Robust Dask Automation**: Resilient Dask distributed cluster lifecycle, file locking safeguards on network filesystems (GPFS/CFS), and worker memory management.
 
+### NMME source-adapter and cross-source workflows
+
+The modes-of-variability runner accepts NMME archives through `--nmme-root`, `--nmme-models`, and `--nmme-fixed-dir`. It resolves pressure modes to the archive `prmsl` field and temperature modes to `sst`, records that resolution in the cache signature, preserves only archive-populated native leads, and records versioned SST land-mask provenance. The cross-source utilities provide three-line E3SM/CESM-SMYLE/NMME projected-index and regional-SST skill products. They support either a selected NMME model (member-skill spread) or an equal-weight all-model NMME product (spread across model-mean skill), and do not create pairwise-difference panels.
+
+Portable Slurm templates for independent NMME SST mode processing and P6 common-cohort rendering are in [`scripts/slurm/`](scripts/slurm/). Supply site-specific archive, environment, and output paths through the variables documented there; generated diagnostics are intentionally not versioned.
+
 ## Analysis & Diagnostic Suite (`jupyter/`)
 The primary evaluation workflows are organized sequentially under the [`jupyter/`](jupyter/) directory:
 
