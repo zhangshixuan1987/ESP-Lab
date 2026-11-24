@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import fcntl
 import os
 from pathlib import Path
 from uuid import uuid4
 
 import numpy as np
 import xarray as xr
+from esp_lab.utils.file_lock import exclusive_lock
 
 
 SST_PREPROCESSING_VERSION = 1
@@ -161,14 +161,7 @@ def load_or_create_land_mask(
     lon_name, lat_name = _coordinate_names(data)
     lock_path = path.with_suffix(path.suffix + ".lock")
 
-    with lock_path.open("w") as lock_file:
-        try:
-            fcntl.flock(lock_file, fcntl.LOCK_EX)
-        except OSError:
-            # CFS on Perlmutter compute nodes rejects flock (errno 524). The
-            # lock only avoids duplicate work; the temp-file + os.replace
-            # write below keeps the mask intact without it.
-            pass
+    with exclusive_lock(lock_path):
         if path.exists() and not force:
             try:
                 with xr.open_dataset(path) as cached:
