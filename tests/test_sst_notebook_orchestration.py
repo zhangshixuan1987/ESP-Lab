@@ -35,9 +35,7 @@ def test_seasonal_plot_coordinates_match_display_lead_ticks():
 
     assert "seasonal_lead_offset = 2" in plotting
     assert "plot_lead = tmp.L - seasonal_lead_offset" in plotting
-    assert "plot_lead_psl = tmp_psl.L - seasonal_lead_offset" in plotting
     assert "plot_lead_smyle = tmp_smyle.L - seasonal_lead_offset" in plotting
-    assert "plot_lead_smyle_psl = tmp_smyle_psl.L - seasonal_lead_offset" in plotting
     assert "plot_lead_nmme = tmp_nmme.L - seasonal_lead_offset" in plotting
     assert (
         "plot_lead_nmme_spread = "
@@ -45,6 +43,15 @@ def test_seasonal_plot_coordinates_match_display_lead_ticks():
     ) in plotting
     assert "ax.plot(tmp.L," not in plotting
     assert "ax2.plot(tmp.L," not in plotting
+
+
+def test_main_skill_figure_has_one_observed_reference():
+    """PSL is a reference choice, not extra dotted lines on the main figure."""
+    plotting = cell_with(SKILL_PLOT)
+    assert "vs PSL\")" not in plotting
+    settings = cell_with('SST_INDEX_REFERENCE = "HadISST2"')
+    assert '"PSL"      - NOAA PSL published index files' in settings
+    assert 'reference=SST_INDEX_REFERENCE' in cell_with("Skill computation (all cases) against the selected observed reference")
 
 
 def test_monthly_plot_starts_at_native_lead_one():
@@ -125,7 +132,7 @@ def test_smyle_cache_rejects_missing_consumed_metrics(tmp_path, missing):
               SST_SKILL_CACHE_VERSION=5, skill_year0=1981, skill_year1=2011, climy0=1981, climy1=2010,
               cfg=SimpleNamespace(region_name='AtlMDR', init_months=[5, 11]),
               smyle_input_identity='test', WORKFLOW_SETTINGS={'skill': {'detrend': True}},
-              psl_sst_index_reference_available=False)
+              psl_sst_index_reference_available=False, SST_INDEX_REFERENCE="HadISST2")
     exec(compile(ast.Module(body=[node], type_ignores=[]), 'smyle_cache_cell', 'exec'), ns)
     assert ns['smyle_skill_cache_exists'] == (missing is None)
 
