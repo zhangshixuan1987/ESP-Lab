@@ -800,6 +800,38 @@ def fixed_basis_projection_field(
     return projection
 
 
+PRESSURE_GAP_MAX_AREA_FRACTION = 0.01
+
+
+def _fill_small_pressure_gaps(
+    prepared: xr.Dataset, reference_mask: xr.DataArray, *, mode: str, lead: int
+) -> xr.Dataset:
+    """Zero-fill a negligible share of missing pressure values inside the EOF mask.
+
+    Some model grids stop short of a pole (CanSIPS-IC4 PSL has no 90N row after
+    regridding), which leaves reference-mask points missing in most samples and
+    breaks the fixed-EOF projection. When the missing values are at most
+    ``PRESSURE_GAP_MAX_AREA_FRACTION`` of the area-weighted reference domain,
+    they get zero anomaly, as SST modes already do; larger gaps still fail.
+    """
+    field = prepared["mode_field"]
+    mask = _as_bool_mask(
+        align_spatial_mask(reference_mask, field, mask_name="valid_mask"), "valid_mask"
+    )
+    missing = field.isnull() & mask
+    if not bool(missing.any().compute()):
+        return prepared
+    weight = np.cos(np.deg2rad(field["lat"])).clip(min=0.0)
+    total = float((mask * weight).sum().compute()) * field.sizes["time"]
+    share = float((missing * weight).sum().compute()) / total if total else 1.0
+    if share > PRESSURE_GAP_MAX_AREA_FRACTION:
+        return prepared  # left to eof_ready_dataset / the projection to reject
+    result = prepared.copy()
+    result["mode_field"] = fixed_basis_projection_field(field, mask, mode=mode, lead=lead)
+    result["mode_field"].attrs["projection_missing_area_fraction"] = share
+    return result
+
+
 def north_eigenvalue_diagnostics(solver, eof_number: int) -> xr.Dataset:
     """Return North et al. eigenvalue errors and target-mode separation."""
     n_modes = eof_number + 1
@@ -1659,6 +1691,7 @@ def pcmdi_mode_model(
                 lead=lead,
             )
         else:
+            prepared = _fill_small_pressure_gaps(prepared, valid_mask, mode=str(settings["mode"]), lead=lead)
             prepared = eof_ready_dataset(prepared, "mode_field")
             projection_field = prepared["mode_field"]
 

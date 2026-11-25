@@ -669,3 +669,29 @@ def test_mode_pcs_of_missing_samples_stay_nan():
     np.testing.assert_array_equal(
         result, [[1.0, np.nan], [2.0, 3.0], [np.nan, 4.0]]
     )
+
+
+def test_pressure_gap_at_pole_is_zero_filled_but_large_gaps_are_not():
+    import xarray as xr
+    from workflows.modes_of_variability.analysis import _fill_small_pressure_gaps
+
+    lat = np.arange(20.0, 91.0, 10.0)
+    lon = np.arange(0.0, 360.0, 30.0)
+    rng = np.random.default_rng(0)
+    field = xr.DataArray(
+        rng.normal(size=(6, lat.size, lon.size)),
+        dims=("time", "lat", "lon"),
+        coords={"time": np.arange(6), "lat": lat, "lon": lon},
+    )
+    mask = xr.ones_like(field.isel(time=0), dtype=bool)
+
+    polar = field.copy()
+    polar.loc[{"lat": 90.0}] = np.nan
+    filled = _fill_small_pressure_gaps(polar.to_dataset(name="mode_field"), mask, mode="NAM", lead=3)
+    assert bool(filled["mode_field"].notnull().all())
+    assert float(filled["mode_field"].sel(lat=90.0).max()) == 0.0
+
+    wide = field.copy()
+    wide.loc[{"lat": 30.0}] = np.nan
+    untouched = _fill_small_pressure_gaps(wide.to_dataset(name="mode_field"), mask, mode="NAM", lead=3)
+    assert bool(untouched["mode_field"].sel(lat=30.0).isnull().all())
