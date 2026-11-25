@@ -291,7 +291,7 @@ def test_nmme_fields_are_materialized_one_model_at_a_time(monkeypatch):
     def fake_nmme_field_dataset(init_month, settings, args):
         model = args.nmme_models[0]
         calls.append(list(args.nmme_models))
-        years = np.array([2000, 2001])
+        years = np.array([2000, 2001]) if model == "model-a" else np.array([2001, 2002])
         values = np.full((2, 1, 1, 2, 2), len(calls), dtype="float32")
         valid_time = xr.DataArray(
             np.array(
@@ -339,9 +339,9 @@ def test_nmme_fields_are_materialized_one_model_at_a_time(monkeypatch):
     }
     args = _args(
         start_year=2000,
-        end_year=2001,
+        end_year=2002,
         clim_start=2000,
-        clim_end=2001,
+        clim_end=2002,
         monthly_nlead=1,
         nmme_models=["model-a", "model-b"],
     )
@@ -354,7 +354,10 @@ def test_nmme_fields_are_materialized_one_model_at_a_time(monkeypatch):
     assert result["SST"].dtype == np.float32
     # Each model is constant (1 and 2), so per-model drift removal leaves zero
     # anomalies; a pooled multi-model climatology would leave -0.5 and +0.5.
-    np.testing.assert_allclose(result["SST_anom"].values, 0.0)
+    np.testing.assert_allclose(result["SST_anom"].fillna(0.0).values, 0.0)
+    # Model B alone has 2002: its target date must survive the merge.
+    assert list(result["valid_time"].Y.values) == [2000, 2001, 2002]
+    assert result["valid_time"].sel(Y=2002).item().year == 2002
     assert list(result["SST_drift_climatology"].model.values) == ["model-a", "model-b"]
     np.testing.assert_allclose(
         result["SST_drift_climatology"].isel(lat=0, lon=0).values.ravel(), [1.0, 2.0]

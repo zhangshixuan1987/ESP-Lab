@@ -1530,3 +1530,86 @@ def nmme_skill(
         if key in index.attrs:
             result.attrs[key] = index.attrs[key]
     return result
+
+
+# ---------------------------------------------------------------------------
+# NMME regional SST indices and ELI, one model at a time.
+# ---------------------------------------------------------------------------
+
+NMME_SST_INDICES = (
+    "Nino3.4", "Nino12", "Nino3", "Nino4", "TNA", "TSA", "PACWRAMPOOL",
+    "AtlNino", "AtlMDR", "IOD", "TNI", "ONI", "RONI",
+)
+NMME_SST_TROPICAL_BAND = (-40.0, 40.0)
+
+
+def nmme_index_variable(index: str) -> str:
+    """NetCDF variable name of an index, e.g. 'Nino3.4' -> 'Nino34'."""
+    return index.replace(".", "")
+
+
+def build_nmme_model_sst_indices(
+    sst: xr.DataArray,
+    valid_time: xr.DataArray,
+    *,
+    model: str,
+    climatology_years: Sequence[int],
+    indices: Sequence[str] = NMME_SST_INDICES,
+) -> xr.Dataset:
+    """Regional SST indices and ELI for one NMME model, drift removed per model.
+
+    ``sst`` is the model's total SST (Y, L, M, lat, lon) with ``MODEL:MEMBER``
+    labels. The lead-dependent drift is removed with this model's own
+    climatology (forecasts verifying in ``climatology_years``); regional indices
+    then follow ``build_regional_sst_index_product`` and ELI follows the shared
+    ``compute_eli_latlon_sst`` on total SST before its own drift removal.
+    """
+    from esp_lab.diagnostics.sst_index import compute_eli_latlon_sst
+
+    year0, year1 = (int(value) for value in climatology_years)
+    labels = sst.M.values.astype(str)
+    if any(not label.startswith(model + ":") for label in labels):
+        raise ValueError(f"Expected only {model}:MEMBER labels.")
+    anomaly, _ = stats.remove_drift(sst, valid_time, year0, year1)
+    method = f"per-model lead-dependent drift removed over {year0}-{year1}"
+    field_cache = xr.Dataset(
+        {"SST_anom": anomaly.assign_attrs(units="degC", nmme_anomaly_method=method), "valid_time": valid_time},
+        attrs={"source": "NMME", **{key: "not_applicable" for key in REFERENCE_ATTRIBUTES}},
+    )
+    variables = {}
+    for index in indices:
+        product = build_regional_sst_index_product(field_cache, index=index)
+        variables[nmme_index_variable(index)] = product["mode_index"].astype("float32").assign_attrs(
+            index=index, index_definition=product.attrs["index_definition"],
+        )
+    eli = compute_eli_latlon_sst(sst, lat_name="lat", lon_name="lon", output_name="ELI")
+    eli_anomaly, _ = stats.remove_drift(eli, valid_time, year0, year1)
+    variables["ELI"] = eli_anomaly.astype("float32").transpose("Y", "L", "M").assign_attrs(
+        eli.attrs, index="ELI", long_name="Equatorial Longitude Index anomaly (drift removed)",
+    )
+    variables["ELI_total"] = eli.astype("float32").transpose("Y", "L", "M")
+    result = xr.Dataset(variables)
+    result["valid_time"] = valid_time
+    result.attrs.update(
+        source="NMME", model=model, nmme_anomaly_method=method,
+        climatology=f"{year0}-{year1}", indices=",".join(indices) + ",ELI",
+        processing="workflows.modes_of_variability.cross_source.build_nmme_model_sst_indices",
+    )
+    return result
+
+
+def load_nmme_sst_indices(paths: Sequence[str | Path], *, index: str) -> tuple[xr.DataArray, xr.DataArray]:
+    """Concatenate one index over per-model files; returns (index, valid_time)."""
+    name = nmme_index_variable(index)
+    indices, times = [], []
+    for path in paths:
+        with xr.open_dataset(path) as dataset:
+            indices.append(dataset[name].load())
+            times.append(dataset["valid_time"].load())
+    if not indices:
+        raise FileNotFoundError(f"No NMME SST-index files for {index}.")
+    combined = xr.concat(indices, dim="M", join="outer", combine_attrs="drop_conflicts")
+    time = times[0]
+    for other in times[1:]:
+        time = time.combine_first(other)
+    return combined, time.sel(Y=combined.Y)

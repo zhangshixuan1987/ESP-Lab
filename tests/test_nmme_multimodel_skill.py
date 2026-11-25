@@ -119,3 +119,33 @@ def test_single_model_line_uses_its_ensemble_mean_and_member_band():
     assert int(skill.member_count.isel(L=0)) == 10
     # The ensemble mean scores at least as well as the weakest member.
     assert bool((skill.corr_min <= skill.corr).all())
+
+
+def test_model_sst_indices_remove_the_models_own_drift_and_include_eli():
+    from cftime import DatetimeNoLeap
+    from workflows.modes_of_variability.cross_source import build_nmme_model_sst_indices
+
+    rng = np.random.default_rng(3)
+    years, leads = np.arange(1981, 1991), np.arange(1, 4)
+    lat, lon = np.arange(-39.5, 40.0, 1.0), np.arange(0.5, 360.0, 1.0)
+    warm_pool = 27.0 + 2.0 * np.cos(np.deg2rad(lon - 150.0))[None, :] * np.exp(-(lat[:, None] / 10.0) ** 2)  # warmest near 150E
+    noise = rng.normal(scale=0.5, size=(years.size, leads.size, 2, lat.size, lon.size))
+    drift = 0.7 * leads[None, :, None, None, None]  # warms with lead
+    sst = xr.DataArray(
+        warm_pool[None, None, None] + drift + noise, dims=("Y", "L", "M", "lat", "lon"),
+        coords={"Y": years, "L": leads, "M": ["X:M001", "X:M002"], "lat": lat, "lon": lon},
+    )
+    valid_time = xr.DataArray(
+        [[DatetimeNoLeap(y + (10 + l) // 12, (10 + l) % 12 + 1, 15) for l in leads] for y in years],
+        dims=("Y", "L"), coords={"Y": years, "L": leads},
+    )
+    # Climatology years cover every target month (the last starts verify in 1991).
+    product = build_nmme_model_sst_indices(sst, valid_time, model="X", climatology_years=(1981, 1991))
+    assert {"Nino34", "IOD", "TNI", "RONI", "ONI", "ELI", "ELI_total"} <= set(product.data_vars)
+    # The lead drift is removed: each lead's mean over years and members is ~0.
+    np.testing.assert_allclose(product["Nino34"].mean(("Y", "M")).values, 0.0, atol=1e-5)
+    np.testing.assert_allclose(product["ELI"].mean(("Y", "M")).values, 0.0, atol=1e-3)
+    assert 120.0 < float(product["ELI_total"].mean()) < 240.0
+    assert product.attrs["nmme_anomaly_method"].startswith("per-model")
+    with pytest.raises(ValueError, match="X:MEMBER"):
+        build_nmme_model_sst_indices(sst.assign_coords(M=["X:1", "Y:1"]), valid_time, model="X", climatology_years=(1981, 1990))
