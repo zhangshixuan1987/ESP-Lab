@@ -1264,30 +1264,30 @@ def _apply_sst_index_transform(anomaly: xr.DataArray, *, index: str, rolling_dim
     return anomaly
 
 
-def _nmme_member_anomaly(raw_index: xr.DataArray) -> xr.DataArray:
-    """Remove each NMME model's member-and-start-year mean at every lead."""
-    labels = raw_index.M.values.astype(str)
+def _require_per_model_nmme_anomaly(field_cache: xr.Dataset) -> str:
+    """Return the NMME anomaly method, rejecting products with a pooled climatology."""
+    labels = field_cache["SST_anom"].M.values.astype(str)
     if any(":" not in label for label in labels):
         raise ValueError("NMME regional SST requires MODEL:MEMBER labels.")
-    pieces = []
-    for model in sorted({label.split(":", 1)[0] for label in labels}):
-        members = [label for label in labels if label.startswith(model + ":")]
-        selected = raw_index.sel(M=members)
-        pieces.append(selected - selected.mean(("Y", "M"), skipna=True))
-    return xr.concat(pieces, dim="M").sel(M=raw_index.M).assign_attrs(
-        **raw_index.attrs,
-        regional_anomaly_method="per-model member-and-initialization-year mean removed at each lead",
-        regional_anomaly_period="source-native full valid record",
+    method = str(
+        field_cache["SST_anom"].attrs.get(
+            "nmme_anomaly_method", field_cache.attrs.get("nmme_anomaly_method", "")
+        )
     )
+    if not method.startswith("per-model"):
+        raise ValueError(
+            "NMME SST_anom must have each model's drift removed separately "
+            "(attribute nmme_anomaly_method starting with 'per-model'); rebuild the "
+            "NMME field product with scripts/run_process_modes_of_variability.py."
+        )
+    return method
 
 
 def _forecast_sst_index(field_cache: xr.Dataset, *, index: str) -> xr.DataArray:
     """Non-derived index (regional, IOD, ONI) for one forecast source."""
+    anomaly = _sst_index_from_field(field_cache["SST_anom"], index=_base_sst_index(index))
     if _is_nmme(field_cache):
-        raw = _sst_index_from_field(field_cache["SST"], index=_base_sst_index(index))
-        anomaly = _nmme_member_anomaly(raw)
-    else:
-        anomaly = _sst_index_from_field(field_cache["SST_anom"], index=_base_sst_index(index))
+        anomaly = anomaly.assign_attrs(regional_anomaly_method=_require_per_model_nmme_anomaly(field_cache))
     return _apply_sst_index_transform(anomaly, index=index, rolling_dim="L")
 
 
@@ -1372,3 +1372,161 @@ def build_regional_sst_index_observation(field_cache: xr.Dataset, *, index: str)
         return _derived_value(_derived_components(field_cache, index, forecast=False), index, "time", ("time",))
     anomaly = _sst_index_from_field(field_cache["SST_anom"], index=_base_sst_index(index))
     return _apply_sst_index_transform(anomaly, index=index, rolling_dim="time")
+
+
+# ---------------------------------------------------------------------------
+# NMME multi-model skill: one cohort, one line, one min-max model band.
+# ---------------------------------------------------------------------------
+
+# Default cohort: the NMME hindcast period. 20 of the 23 archived models cover
+# every May and November start in 1982-2010; (1991, 2009) keeps all 23.
+NMME_DEFAULT_YEARS = (1982, 2010)
+NMME_MIN_MEMBERS = 4
+NMME_LINE_METHOD = (
+    "skill of the equal-weight multi-model forecast: each model's ensemble mean, "
+    "averaged over models with one weight per model"
+)
+NMME_BAND_METHOD = "min-max of the individual models' skill"
+
+
+def nmme_model_members(index: xr.DataArray) -> dict[str, list[str]]:
+    """Group ``MODEL:MEMBER`` labels by model, keeping archive order."""
+    groups: dict[str, list[str]] = {}
+    for label in index.M.values.astype(str):
+        if ":" not in label:
+            raise ValueError("NMME products require MODEL:MEMBER member labels.")
+        groups.setdefault(label.split(":", 1)[0], []).append(label)
+    return groups
+
+
+def select_nmme_cohort(
+    index: xr.DataArray,
+    years: Sequence[int] = NMME_DEFAULT_YEARS,
+    *,
+    models: str | Sequence[str] = "auto",
+    min_members: int = NMME_MIN_MEMBERS,
+) -> tuple[xr.DataArray, dict[str, str]]:
+    """Restrict ``index`` to start years ``years`` and to models that cover them.
+
+    A model qualifies when every start year in ``years`` has at least
+    ``min_members`` finite members at the first lead. ``models="auto"`` keeps all
+    qualifying models; an explicit list must qualify in full. Returns the subset
+    and ``{model: reason}`` for each model left out.
+    """
+    year0, year1 = (int(value) for value in years)
+    if year0 > year1:
+        raise ValueError(f"NMME years must be increasing, got {years!r}.")
+    wanted = np.arange(year0, year1 + 1)
+    present = np.asarray(index.Y.values).astype(int)
+    groups = nmme_model_members(index)
+    if isinstance(models, str):
+        if models != "auto":
+            models = [models]
+    requested = None if isinstance(models, str) else [str(model) for model in models]
+    if requested is not None:
+        unknown = sorted(set(requested) - set(groups))
+        if unknown:
+            raise ValueError(f"NMME models not in the product: {unknown}")
+    first_lead = index.isel(L=0)
+    while set(first_lead.dims) - {"Y", "M"}:
+        first_lead = first_lead.isel({next(iter(set(first_lead.dims) - {"Y", "M"})): 0})
+    dropped: dict[str, str] = {}
+    kept: list[str] = []
+    for model in requested or list(groups):
+        missing = [int(year) for year in wanted if year not in present]
+        if not missing:
+            counts = first_lead.sel(Y=wanted, M=groups[model]).notnull().sum("M")
+            missing = [int(year) for year, count in zip(wanted, counts.values) if count < min_members]
+        if missing:
+            dropped[model] = (
+                f"fewer than {min_members} members for {len(missing)} start year(s) "
+                f"({missing[0]}-{missing[-1]})"
+            )
+        else:
+            kept.append(model)
+    if requested is not None and dropped:
+        raise ValueError(
+            f"Requested NMME models do not cover {year0}-{year1}: "
+            + "; ".join(f"{model}: {reason}" for model, reason in dropped.items())
+        )
+    if not kept:
+        raise ValueError(f"No NMME model covers every start in {year0}-{year1}.")
+    members = [label for model in kept for label in groups[model]]
+    subset = index.sel(Y=wanted, M=members).assign_attrs(
+        index.attrs,
+        nmme_models=",".join(kept),
+        nmme_years=f"{year0}-{year1}",
+        nmme_min_members=str(min_members),
+    )
+    return subset, dropped
+
+
+def nmme_multimodel_mean(index: xr.DataArray) -> xr.DataArray:
+    """Equal-weight multi-model forecast: model ensemble means, then their mean.
+
+    Models with a shorter forecast drop out at the leads they lack, so later
+    leads average fewer models; ``nmme_model_count`` records how many.
+    """
+    groups = nmme_model_members(index)
+    model_means = xr.concat(
+        [index.sel(M=labels).mean("M", skipna=True) for labels in groups.values()],
+        dim=xr.DataArray(list(groups), dims="model", name="model"),
+    )
+    combined = model_means.mean("model", skipna=True).expand_dims(M=["NMME"]).transpose(*index.dims)
+    return combined.assign_attrs(index.attrs, nmme_line_method=NMME_LINE_METHOD)
+
+
+def nmme_skill(
+    index: xr.DataArray,
+    skill_function,
+    *,
+    model: str | None = None,
+) -> xr.Dataset:
+    """Score NMME with the caller's skill function and add a min-max band.
+
+    ``skill_function(index)`` scores one (Y, L, M) forecast and returns a Dataset
+    whose metrics have an ``L`` dimension; it is the same function used for the
+    other sources, so every line is scored identically. With ``model=None`` the
+    line is the equal-weight multi-model forecast and the band spans the
+    individual models. With one ``model`` the line is that model's ensemble mean
+    and the band spans its members.
+    """
+    groups = nmme_model_members(index)
+    if model is None:
+        line = skill_function(nmme_multimodel_mean(index))
+        units = {name: index.sel(M=labels) for name, labels in groups.items()}
+        unit_name, band_method = "model", NMME_BAND_METHOD
+    else:
+        if model not in groups:
+            raise ValueError(f"NMME model {model!r} is not in the product.")
+        line = skill_function(index.sel(M=groups[model]))
+        units = {label: index.sel(M=[label]) for label in groups[model]}
+        unit_name, band_method = "member", f"min-max of {model}'s individual members' skill"
+    unit_skill = xr.concat(
+        [skill_function(member_index) for member_index in units.values()],
+        dim=xr.DataArray(list(units), dims=unit_name, name=unit_name),
+    )
+    result = line.copy()
+    for name, variable in unit_skill.data_vars.items():
+        if unit_name in variable.dims and "L" in variable.dims and np.issubdtype(variable.dtype, np.number):
+            result[f"{name}_min"] = variable.min(unit_name, skipna=True)
+            result[f"{name}_max"] = variable.max(unit_name, skipna=True)
+    reference = next(
+        (name for name in ("corr", "acc", "rmse") if name in unit_skill and unit_name in unit_skill[name].dims),
+        None,
+    )
+    if reference is not None:
+        counted = unit_skill[reference]
+        result[f"{unit_name}_count"] = counted.notnull().sum(unit_name).where(
+            counted.notnull().any(unit_name)
+        )
+    result.attrs.update(
+        nmme_line_method=(NMME_LINE_METHOD if model is None else f"skill of {model}'s ensemble mean"),
+        nmme_band_method=band_method,
+        nmme_models=",".join(groups if model is None else [model]),
+        nmme_unit_count=str(len(units)),
+    )
+    for key in ("nmme_years", "nmme_min_members"):
+        if key in index.attrs:
+            result.attrs[key] = index.attrs[key]
+    return result

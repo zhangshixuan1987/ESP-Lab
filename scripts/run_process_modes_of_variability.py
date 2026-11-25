@@ -136,6 +136,7 @@ def configuration_signature(
                 nmme_models=list(args.nmme_models),
                 nmme_field=str(args.nmme_field),
                 nmme_archive_field=resolved_archive_field,
+                nmme_anomaly_method=modes_analysis.NMME_ANOMALY_METHOD,
             )
             if str(settings["field"]) == "SST":
                 signature["nmme_sst_mask_version"] = (

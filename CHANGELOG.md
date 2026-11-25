@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — November 2026
+- **Production setup**: FOSIRL and Reanalysis hindcasts, May/November starts 1980–2018 (Reanalysis February/August every five years), 1981–2010 climatology; 4DEnVarOcn/Lnd stay switched off in the production notebooks until their runs are complete. CESM-SMYLE benchmarks extend to 2018.
+- **NMME, one method**: Sha Feng's cross-source workflow (`workflows/modes_of_variability/cross_source.py`) is the only NMME implementation. Each model's drift is removed with its own climatology; the NMME line is the skill of the equal-weight multi-model forecast and the band is the min–max of the individual models' skill. Default cohort: May/November starts 1982–2010 with every model covering them (20 of 23); years, model list, or a single model are options. `scripts/slurm/nmme_cross_source_test.slurm` with `scripts/render_nmme_comparison.py` runs the comparison end to end. The old NMME SST-index processor (`scripts/run_process_nmme_sst_index.py`), the old NMME paths in `3a`/`5a`/`5b`, and the two earlier Slurm templates are removed; NMME returns to the `3a`/`4a`/`5a` figures once rebuilt with this method.
+- **Sea ice (`1a_ice`)**: sea-ice concentration ACC against HadISST2 on Northern and Southern Hemisphere polar-cap maps, with FOSIRL–Reanalysis difference maps.
+- **Sample-size notebooks** (`jupyter/sample_size/8a`–`8c`): skill against number of start years, ensemble size, and climatology length; fair-comparison sample figures for 4DEnVarOcn/Lnd under `jupyter/sample_figures/`.
+- **Robustness**: file locks fall back to a lock directory where the file system refuses `flock` (CFS compute nodes); notebook runs have a per-cell timeout; cache names carry the analysis grid; `1c` comparisons skip start months a case lacks; `6a`/`6b` use ERA5 1979–2025 and end PRECT starts with GPCP coverage; CPC soil moisture is read from `CPC_SOM/1x1/monthly`.
+
 ## Version 1.4.0 — September 2026
 Final-pass consolidation of the E3SM S2D diagnostic suite:
 - **Run controls everywhere**: every workflow notebook starts with `derivation_mode` and `recompute_*` flags, and forcing now reaches every cache it should (1b/1c observations, 1c bootstrap, 2a monthly skill, 3a NMME skill, 5a/5b native ELI, 7b ENSO regression).

@@ -113,6 +113,9 @@ def eof_analysis_with_svd_fallback(*args, **kwargs):
         with robust_svd_retry():
             return eof_analysis_get_variance_mode(*args, **kwargs)
 MODEL_SOURCES = ("e3sm", "smyle", "nmme")
+# Recorded in NMME product signatures; products built with a pooled
+# multi-model drift climatology are rebuilt.
+NMME_ANOMALY_METHOD = "per-model lead-dependent drift removed over the climatology years"
 SUPPORTED_MODES = (
     "NAM", "NAO", "SAM", "PSA1", "PSA2", "PNA", "NPO",
     "EA", "SCA", "PDO", "NPGO", "AMO",
@@ -1916,7 +1919,12 @@ def model_field_dataset(
     years = list(range(args.start_year, args.end_year + 1))
     archive_field, field = str(settings["archive_field"]), str(settings["field"])
     if source == "nmme":
+        # Each model's lead-dependent drift is removed with that model's own
+        # climatology, so one multi-model run equals independent per-model runs
+        # and model biases never leak into another model's anomalies.
         model_fields: list[xr.DataArray] = []
+        model_anomalies: list[xr.DataArray] = []
+        model_climatologies: list[xr.DataArray] = []
         model_failures: list[str] = []
         valid_time = None
         models = [
@@ -1974,12 +1982,23 @@ def model_field_dataset(
                         "lon": min(72, model_regridded.sizes.get("lon", 1)),
                     }
                 )
+                model_time = common_year_subset(
+                    processed_for_field["time"],
+                    years,
+                ).load()
                 if valid_time is None:
-                    valid_time = common_year_subset(
-                        processed_for_field["time"],
-                        years,
-                    ).load()
+                    valid_time = model_time
+                model_anomaly, model_climatology = stats.remove_drift(
+                    model_regridded,
+                    model_time,
+                    args.clim_start,
+                    args.clim_end,
+                )
                 model_fields.append(model_regridded)
+                model_anomalies.append(model_anomaly)
+                model_climatologies.append(
+                    model_climatology.expand_dims(model=[model])
+                )
             except Exception as error:
                 model_failures.append(f"{model}: {error}")
                 LOG.warning(
@@ -2004,19 +2023,15 @@ def model_field_dataset(
                 len(model_failures),
                 "; ".join(model_failures),
             )
-        data = xr.concat(
-            model_fields,
-            dim="M",
-            join="outer",
-            combine_attrs="drop_conflicts",
-        )
+        concat_options = {"join": "outer", "combine_attrs": "drop_conflicts"}
+        data = xr.concat(model_fields, dim="M", **concat_options)
         data.attrs.update(model_fields[0].attrs)
-        anomalies, climatology = stats.remove_drift(
-            data,
-            valid_time,
-            args.clim_start,
-            args.clim_end,
+        anomalies = xr.concat(model_anomalies, dim="M", **concat_options)
+        anomalies.attrs.update(
+            model_fields[0].attrs,
+            nmme_anomaly_method=NMME_ANOMALY_METHOD,
         )
+        climatology = xr.concat(model_climatologies, dim="model", **concat_options)
         return xr.Dataset(
             {
                 field: data,

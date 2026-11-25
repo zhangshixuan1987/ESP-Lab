@@ -16,8 +16,20 @@ def source(index):
     return ''.join(line for line in cell['source'] if not line.startswith('%'))
 
 
+def cell_with(marker):
+    """Source of the one code cell containing ``marker`` (robust to cell moves)."""
+    cells = json.loads(NOTEBOOK.read_text())['cells']
+    matches = [i for i, cell in enumerate(cells) if marker in ''.join(cell['source'])]
+    assert len(matches) == 1, (marker, matches)
+    return source(matches[0])
+
+
+SKILL_PLOT = "# 2. Monthly ALL-init average panels"
+TIMESERIES_PLOT = "ax_panel.fill_between(case_datatime_plot,"
+
+
 def test_seasonal_plot_coordinates_match_display_lead_ticks():
-    plotting = source(17).split(
+    plotting = cell_with(SKILL_PLOT).split(
         "# 2. Monthly ALL-init average panels", 1
     )[0]
 
@@ -36,13 +48,13 @@ def test_seasonal_plot_coordinates_match_display_lead_ticks():
 
 
 def test_monthly_plot_starts_at_native_lead_one():
-    plotting = source(17).split(
+    plotting = cell_with(SKILL_PLOT).split(
         "# 2. Monthly ALL-init average panels", 1
     )[1]
 
-    assert "monthly_xticks = np.arange(12) * 2 + 1" in source(17)
-    assert "monthly_xticks_minor = np.arange(2, 25, 2)" in source(17)
-    assert "monthly_xlim = [0.5, 24.5]" in source(17)
+    assert "monthly_xticks = np.arange(12) * 2 + 1" in cell_with(SKILL_PLOT)
+    assert "monthly_xticks_minor = np.arange(2, 25, 2)" in cell_with(SKILL_PLOT)
+    assert "monthly_xlim = [0.5, 24.5]" in cell_with(SKILL_PLOT)
     assert ".L - 1" not in plotting
     assert "ax.plot(tmp.L, tmp.corr" in plotting
     assert "ax2.plot(tmp.L, tmp.rmse" in plotting
@@ -50,7 +62,7 @@ def test_monthly_plot_starts_at_native_lead_one():
 
 
 def test_timeseries_axes_and_lines_use_matching_coordinates():
-    plotting = source(20)
+    plotting = cell_with(TIMESERIES_PLOT)
 
     assert "a.set_yticks(major_yticks)" in plotting
     assert "a.set_yticks(minor_yticks, minor=True)" in plotting
@@ -107,7 +119,7 @@ def test_smyle_cache_rejects_missing_consumed_metrics(tmp_path, missing):
                                input_inventory_identity='test', detrend=1, init_months='5,11'))
     path = tmp_path / 'skill.nc'
     ds.to_netcdf(path)
-    node = next(node for node in ast.parse(source(14)).body
+    node = next(node for node in ast.parse(cell_with("if SMYLE_SKILL_FILE.is_file()")).body
                 if isinstance(node, ast.If) and 'SMYLE_SKILL_FILE.is_file()' in ast.unparse(node.test))
     ns = dict(xr=xr, SMYLE_SKILL_FILE=path, smyle_cfg={}, smyle_skill_cache_exists=False,
               SST_SKILL_CACHE_VERSION=5, skill_year0=1981, skill_year1=2011, climy0=1981, climy1=2010,
