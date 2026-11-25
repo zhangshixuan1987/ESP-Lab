@@ -42,8 +42,12 @@ def test_eli_notebook_uses_explicit_compact_figure_layouts():
         "".join(cell.get("source", [])) for cell in notebook["cells"]
     )
 
-    assert source.count('"fig_width": 16.0') == 2
-    assert '"fig_height": 12.5' in source
+    # Skill figure: fixed height per row, so two- and four-start figures match.
+    assert '"row_height": 2.5' in source
+    assert 'fig_height = nrow * plot_cfg["row_height"]' in source
+    assert '"fig_height": 12.5' not in source
+    # Time-series figure keeps its fixed size.
+    assert '"fig_width": 16.0' in source
     assert '"fig_height": 8.5' in source
     assert 'fig = plt.figure(figsize=(fig_width, fig_height))' in source
     assert 'row_height_scale' not in source
