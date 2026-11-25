@@ -1986,8 +1986,11 @@ def model_field_dataset(
                     processed_for_field["time"],
                     years,
                 ).load()
-                if valid_time is None:
-                    valid_time = model_time
+                # Target dates depend only on start year and lead; merge them so
+                # years or leads that only some models have keep their dates.
+                valid_time = (
+                    model_time if valid_time is None else valid_time.combine_first(model_time)
+                )
                 model_anomaly, model_climatology = stats.remove_drift(
                     model_regridded,
                     model_time,
