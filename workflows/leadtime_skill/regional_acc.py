@@ -105,9 +105,14 @@ def regional_skill_metrics(
         sig_obs = skill["sig_obs"]
         floor = float(min_obs_std_fraction) * float(sig_obs.median(skipna=True))
         fields["rmse"] = fields["rmse"].where(sig_obs > floor)
-    return xr.Dataset({
+    result = xr.Dataset({
         name: regional_acc(data, regions, area=area, land_mask=land_mask)
         for name, data in fields.items()
     })
+    if "sig_obs" in skill.data_vars:
+        # Regional observed variability, used to blank leads where the
+        # observations barely vary (e.g. snow in summer).
+        result["sig_obs"] = regional_acc(skill["sig_obs"], regions, area=area, land_mask=land_mask)
+    return result
 
 
