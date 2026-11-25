@@ -352,6 +352,13 @@ def test_nmme_fields_are_materialized_one_model_at_a_time(monkeypatch):
     assert calls == [["model-a"], ["model-b"]]
     assert list(result.M.values) == ["model-a:M001", "model-b:M001"]
     assert result["SST"].dtype == np.float32
+    # Each model is constant (1 and 2), so per-model drift removal leaves zero
+    # anomalies; a pooled multi-model climatology would leave -0.5 and +0.5.
+    np.testing.assert_allclose(result["SST_anom"].values, 0.0)
+    assert list(result["SST_drift_climatology"].model.values) == ["model-a", "model-b"]
+    np.testing.assert_allclose(
+        result["SST_drift_climatology"].isel(lat=0, lon=0).values.ravel(), [1.0, 2.0]
+    )
 
 
 def test_reference_ocean_mask_accepts_cli_resolution_tokens(monkeypatch):

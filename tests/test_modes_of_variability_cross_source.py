@@ -475,10 +475,18 @@ def _sst_forecast_cache():
     )
 
 
+_NMME_METHOD = "per-model lead-dependent drift removed over the climatology years"
+
+
 def _sst_nmme_cache():
     raw = _sst_field(["A:1", "A:2", "B:1", "B:2"], seed=1) + 20.0
+    raw = raw + xr.DataArray([0.0, 0.0, 3.0, 3.0], dims="M", coords={"M": raw.M})  # model B is 3 K warmer
+    anomaly = xr.concat(
+        [raw.sel(M=members) - raw.sel(M=members).mean(("Y", "M")) for members in (["A:1", "A:2"], ["B:1", "B:2"])],
+        dim="M",
+    ).assign_attrs(units="degC", nmme_anomaly_method=_NMME_METHOD)
     return xr.Dataset(
-        {"SST_anom": raw - raw.mean(("Y", "M")), "SST": raw, "valid_time": _sst_valid_time()},
+        {"SST_anom": anomaly, "SST": raw, "valid_time": _sst_valid_time()},
         attrs={**_SST_REFERENCE, "source": "NMME"},
     )
 
@@ -541,7 +549,7 @@ def test_oni_observation_smooths_along_time():
     np.testing.assert_allclose(oni.values, nino34.rolling(time=3, center=True, min_periods=1).mean().values)
 
 
-def test_nmme_index_removes_each_models_member_and_year_mean_at_each_lead():
+def test_nmme_index_uses_each_models_own_drift_corrected_anomaly():
     product = build_regional_sst_index_product(_sst_nmme_cache(), index="Nino3.4")
     index = product["mode_index"]
     for model in ("A", "B"):
@@ -553,6 +561,13 @@ def test_nmme_index_removes_each_models_member_and_year_mean_at_each_lead():
 def test_nmme_index_requires_model_member_labels():
     cache = _sst_nmme_cache().assign_coords(M=["1", "2", "3", "4"])
     with pytest.raises(ValueError, match="MODEL:MEMBER"):
+        build_regional_sst_index_product(cache, index="Nino3.4")
+
+
+def test_nmme_index_rejects_a_pooled_multi_model_anomaly():
+    cache = _sst_nmme_cache()
+    cache["SST_anom"].attrs.pop("nmme_anomaly_method")
+    with pytest.raises(ValueError, match="drift removed separately"):
         build_regional_sst_index_product(cache, index="Nino3.4")
 
 

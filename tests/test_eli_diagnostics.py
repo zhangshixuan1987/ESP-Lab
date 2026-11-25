@@ -75,23 +75,20 @@ def test_eli_notebook_uses_explicit_compact_figure_layouts():
     assert 'loc=plot_cfg["annotation_loc"]' in source
 
 
-def test_eli_diagnostics_reorganized_nmme_helper_is_complete_and_explicit():
+def test_eli_diagnostics_cache_controls_are_explicit():
     notebook = json.loads(ELI_DIAGNOSTICS_NOTEBOOK.read_text())
     source = "\n".join(
         "".join(cell.get("source", [])) for cell in notebook["cells"]
     )
 
-    assert "def _compute_all_available_skill(init_month, config, obs_lookup, rng):" in source
-    assert "return xr.Dataset(" in source
-    assert "_compute_all_available_skill(month, plot_cfg, obs_lookup, rng)" in source
-    assert 'if not config["detrend"]' in source
     assert 'derivation_mode = "auto"' in source
     assert 'ELI_CACHE_MODE = derivation_mode' in source
     assert '"--year-end", str(END_YEAR)' in source
     assert 'subprocess.run(command, check=True)' in source
     assert '"E3SM-4DEnVarOcn": "4DEnVarOcn"' in source
-    assert 'NMME_ELI_BENCHMARK_AVAILABLE = not missing_nmme_benchmark_files' in source
-    assert 'raise FileNotFoundError(\n        "Missing NMME benchmark inputs:' not in source
+    # NMME comes only from the cross-source method; the old all-available
+    # NMME benchmark section was removed.
+    assert "NMME_ELI_TIMESERIES_FILES" not in source
 
 
 def test_eli_diagnostics_defines_figure_filename_before_first_plot():

@@ -41,9 +41,9 @@ This fork extends ESP-Lab to fully support analysis and verification of **E3SM (
 
 ### NMME source-adapter and cross-source workflows
 
-The modes-of-variability runner accepts NMME archives through `--nmme-root`, `--nmme-models`, and `--nmme-fixed-dir`. It resolves pressure modes to the archive `prmsl` field and temperature modes to `sst`, records that resolution in the cache signature, preserves only archive-populated native leads, and records versioned SST land-mask provenance. The cross-source utilities provide three-line E3SM/CESM-SMYLE/NMME projected-index and regional-SST skill products. They support either a selected NMME model (member-skill spread) or an equal-weight all-model NMME product (spread across model-mean skill), and do not create pairwise-difference panels.
+The modes-of-variability runner accepts NMME archives through `--nmme-root`, `--nmme-models`, and `--nmme-fixed-dir`. It resolves pressure modes to the archive `prmsl` field and temperature modes to `sst`, records that resolution in the cache signature, preserves only archive-populated native leads, and records versioned SST land-mask provenance. Each NMME model's drift is removed with its own climatology. NMME skill has one definition (`workflows/modes_of_variability/cross_source.py`): the line is the skill of the equal-weight multi-model forecast and the band is the min–max of the individual models' skill. The default cohort is May/November starts in 1982–2010 with every model that covers them (20 of 23); the years, the model list, or a single model are user options.
 
-Portable Slurm templates for independent NMME SST mode processing and P6 common-cohort rendering are in [`scripts/slurm/`](scripts/slurm/). Supply site-specific archive, environment, and output paths through the variables documented there; generated diagnostics are intentionally not versioned.
+[`scripts/slurm/nmme_cross_source_test.slurm`](scripts/slurm/nmme_cross_source_test.slurm) runs the NMME comparison end to end (per-model processing, then E3SM vs NMME figures); its options are documented in [`scripts/slurm/README.md`](scripts/slurm/README.md). Generated diagnostics are intentionally not versioned.
 
 ## Analysis & Diagnostic Suite (`jupyter/`)
 The primary evaluation workflows are organized sequentially under the [`jupyter/`](jupyter/) directory:
