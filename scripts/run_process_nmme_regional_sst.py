@@ -18,6 +18,8 @@ import sys
 import uuid
 from pathlib import Path
 
+import xarray as xr
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -38,8 +40,12 @@ def output_path(outdir: Path, model: str, init_month: int) -> Path:
 def process(args: argparse.Namespace, init_month: int) -> Path:
     path = output_path(args.outdir, args.model, init_month)
     if path.is_file() and not args.force:
-        print(f"Reusing {path}")
-        return path
+        with xr.open_dataset(path) as existing:
+            current = "ELI_seas" in existing
+        if current:
+            print(f"Reusing {path}")
+            return path
+        print(f"Rebuilding {path} (no seasonal ELI)")
     loader_args = argparse.Namespace(
         nmme_root=args.nmme_root, nmme_models=[args.model], nmme_field="sst", nmme_chunks="",
         nmme_sst_land_mask=True, nmme_fixed_dir=args.fixed_dir,
