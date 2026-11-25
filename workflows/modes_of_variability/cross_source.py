@@ -1481,6 +1481,7 @@ def nmme_skill(
     skill_function,
     *,
     model: str | None = None,
+    keep_units: bool = False,
 ) -> xr.Dataset:
     """Score NMME with the caller's skill function and add a min-max band.
 
@@ -1489,7 +1490,9 @@ def nmme_skill(
     other sources, so every line is scored identically. With ``model=None`` the
     line is the equal-weight multi-model forecast and the band spans the
     individual models. With one ``model`` the line is that model's ensemble mean
-    and the band spans its members.
+    and the band spans its members. ``keep_units=True`` also returns each
+    model's (or member's) skill as ``{metric}_by_model`` (``_by_member``), so a
+    caller can form the band of an average, e.g. over start months.
     """
     groups = nmme_model_members(index)
     if model is None:
@@ -1511,6 +1514,8 @@ def nmme_skill(
         if unit_name in variable.dims and "L" in variable.dims and np.issubdtype(variable.dtype, np.number):
             result[f"{name}_min"] = variable.min(unit_name, skipna=True)
             result[f"{name}_max"] = variable.max(unit_name, skipna=True)
+            if keep_units:
+                result[f"{name}_by_{unit_name}"] = variable
     reference = next(
         (name for name in ("corr", "acc", "rmse") if name in unit_skill and unit_name in unit_skill[name].dims),
         None,
@@ -1588,6 +1593,15 @@ def build_nmme_model_sst_indices(
         eli.attrs, index="ELI", long_name="Equatorial Longitude Index anomaly (drift removed)",
     )
     variables["ELI_total"] = eli.astype("float32").transpose("Y", "L", "M")
+    # Seasonal ELI from centred three-month-mean SST, as the E3SM and observed
+    # seasonal ELI are made (ELI is nonlinear, so it is not a mean of monthly ELI).
+    seasonal_sst = sst.rolling(L=3, center=True, min_periods=3).mean()
+    eli_seas = compute_eli_latlon_sst(seasonal_sst, lat_name="lat", lon_name="lon", output_name="ELI_seas")
+    eli_seas_anomaly, _ = stats.remove_drift(eli_seas, valid_time, year0, year1)
+    variables["ELI_seas"] = eli_seas_anomaly.astype("float32").transpose("Y", "L", "M").assign_attrs(
+        eli_seas.attrs, index="ELI",
+        long_name="ELI of centred three-month-mean SST, anomaly (drift removed); L is the centre month",
+    )
     result = xr.Dataset(variables)
     result["valid_time"] = valid_time
     result.attrs.update(

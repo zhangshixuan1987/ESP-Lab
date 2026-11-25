@@ -141,7 +141,9 @@ def test_model_sst_indices_remove_the_models_own_drift_and_include_eli():
     )
     # Climatology years cover every target month (the last starts verify in 1991).
     product = build_nmme_model_sst_indices(sst, valid_time, model="X", climatology_years=(1981, 1991))
-    assert {"Nino34", "IOD", "TNI", "RONI", "ONI", "ELI", "ELI_total"} <= set(product.data_vars)
+    assert {"Nino34", "IOD", "TNI", "RONI", "ONI", "ELI", "ELI_total", "ELI_seas"} <= set(product.data_vars)
+    # Centred three-month means: the first and last leads have no full season.
+    assert bool(product["ELI_seas"].isel(L=0).isnull().all()) and bool(product["ELI_seas"].isel(L=1).notnull().any())
     # The lead drift is removed: each lead's mean over years and members is ~0.
     np.testing.assert_allclose(product["Nino34"].mean(("Y", "M")).values, 0.0, atol=1e-5)
     np.testing.assert_allclose(product["ELI"].mean(("Y", "M")).values, 0.0, atol=1e-3)
@@ -149,3 +151,12 @@ def test_model_sst_indices_remove_the_models_own_drift_and_include_eli():
     assert product.attrs["nmme_anomaly_method"].startswith("per-model")
     with pytest.raises(ValueError, match="X:MEMBER"):
         build_nmme_model_sst_indices(sst.assign_coords(M=["X:1", "Y:1"]), valid_time, model="X", climatology_years=(1981, 1990))
+
+
+def test_keep_units_returns_each_models_skill_behind_the_band():
+    index, observation = _index(SPEC)
+    subset, _ = select_nmme_cohort(index, (1982, 2010))
+    skill = nmme_skill(subset, _skill_function(observation), keep_units=True)
+    assert list(skill.corr_by_model.model.values) == ["A", "B", "E"]
+    np.testing.assert_allclose(skill.corr_by_model.min("model").values, skill.corr_min.values)
+    assert "corr_by_model" not in nmme_skill(subset, _skill_function(observation))

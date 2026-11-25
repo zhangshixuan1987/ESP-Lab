@@ -695,3 +695,16 @@ def test_pressure_gap_at_pole_is_zero_filled_but_large_gaps_are_not():
     wide.loc[{"lat": 30.0}] = np.nan
     untouched = _fill_small_pressure_gaps(wide.to_dataset(name="mode_field"), mask, mode="NAM", lead=3)
     assert bool(untouched["mode_field"].sel(lat=30.0).isnull().all())
+
+
+def test_all_zero_nmme_maps_are_treated_as_missing():
+    import xarray as xr
+    from workflows.modes_of_variability.analysis import mask_all_zero_fields
+
+    values = np.full((2, 3, 2, 4, 5), 1010.0)  # Y, L, M, lat, lon
+    values[:, :, 1] = 0.0            # one member stored as zeros
+    values[0, 0, 0, 0, 0] = 0.0      # a single zero point is kept
+    data = xr.Dataset({"psl": (("Y", "L", "M", "lat", "lon"), values)})
+    result = mask_all_zero_fields(data, "PSL", label="test")["psl"]
+    assert bool(result.isel(M=1).isnull().all())
+    assert float(result.isel(Y=0, L=0, M=0, lat=0, lon=0)) == 0.0

@@ -395,6 +395,27 @@ def select_field(dataset: xr.Dataset, field: str) -> xr.DataArray:
     raise KeyError(f"Cannot find {field!r}; variables: {list(dataset.data_vars)}")
 
 
+def mask_all_zero_fields(dataset: xr.Dataset, field: str, *, label: str) -> xr.Dataset:
+    """Treat a monthly map that is exactly zero everywhere as missing.
+
+    Some NMME archive members store missing forecasts as zeros (CanSIPS-IC4
+    prmsl member M015 is zero for every start). A whole map of 0 hPa or 0 degC
+    is not a forecast, and left in it corrupts the drift and the anomalies.
+    """
+    variable = select_field(dataset, field)
+    spatial = [dim for dim in variable.dims if dim not in {"Y", "L", "M", "time"}]
+    if not spatial:
+        return dataset
+    all_zero = ((variable == 0) | variable.isnull()).all(spatial) & (variable == 0).any(spatial)
+    count = int(all_zero.sum().compute())
+    if not count:
+        return dataset
+    LOG.warning("%s: %d all-zero %s maps treated as missing.", label, count, field)
+    result = dataset.copy()
+    result[variable.name] = variable.where(~all_zero)
+    return result
+
+
 def common_year_subset(obj: xr.Dataset | xr.DataArray, years: list[int]):
     requested = set(years)
     selected_labels = [
@@ -1998,6 +2019,7 @@ def model_field_dataset(
             processed = None
             try:
                 processed = nmme_field_dataset(init_month, settings, model_args)
+                processed = mask_all_zero_fields(processed, field, label=f"NMME {model} init {init_month:02d}")
                 if settings["frequency"] == "seasonal":
                     processed_for_field = cal.mon_to_seas_dask(processed)
                 else:
