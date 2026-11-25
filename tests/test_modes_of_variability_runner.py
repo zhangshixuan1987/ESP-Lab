@@ -658,3 +658,14 @@ def test_write_product_rejects_all_nan_mode_index(tmp_path, monkeypatch):
         assert "contains no finite values" in str(error)
     else:
         raise AssertionError("Expected an all-NaN mode index to be rejected.")
+
+
+def test_mode_pcs_of_missing_samples_stay_nan():
+    """A (year, member) with no forecast data is NaN, not a zero PC."""
+    from workflows.modes_of_variability.analysis import _scatter_samples
+
+    present = np.array([True, False, True, True, False, True])
+    result = _scatter_samples([1.0, 2.0, 3.0, 4.0], present, (3, 2))
+    np.testing.assert_array_equal(
+        result, [[1.0, np.nan], [2.0, 3.0], [np.nan, 4.0]]
+    )

@@ -723,6 +723,13 @@ def spatial_mean(dataset: xr.Dataset, variable: str) -> xr.DataArray:
     )
 
 
+def _scatter_samples(values, present: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+    """Put per-sample values back on the full (year, member) grid, NaN where absent."""
+    full = np.full(present.size, np.nan)
+    full[present] = np.asarray(values, dtype=float).reshape(-1)
+    return full.reshape(shape)
+
+
 def eof_ready_dataset(dataset: xr.Dataset, variable: str) -> xr.Dataset:
     """Apply a time-invariant finite spatial mask required by EOF solvers."""
     field = dataset[variable].where(np.isfinite(dataset[variable]))
@@ -1622,6 +1629,14 @@ def pcmdi_mode_model(
         sample = lead_data.stack(sample=("Y", "M")).transpose("sample", "lat", "lon")
         sample = sample.reset_index("sample", drop=True).rename(sample="time")
         sample = sample.assign_coords(time=np.arange(sample.sizes["time"])).load()
+        # A (start year, member) with no data at all (e.g. an NMME model that
+        # has no forecast for that year) is left out of the projection and
+        # returned as NaN, rather than failing the EOF mask or becoming a zero PC.
+        present = sample.notnull().any(("lat", "lon")).values
+        if not present.any():
+            raise ValueError(f"{settings['mode']} lead {lead}: no forecast data.")
+        if not present.all():
+            sample = sample.isel(time=present)
         reference = references[month]
         valid_mask = reference["valid_mask"]
 
@@ -1666,7 +1681,7 @@ def pcmdi_mode_model(
             )
         cbf_pcs.append(
             xr.DataArray(
-                cbf_values.reshape(shape), dims=("Y", "M"), coords=coords
+                _scatter_samples(cbf_values, present, shape), dims=("Y", "M"), coords=coords
             ).expand_dims(L=[lead])
         )
 
@@ -1742,7 +1757,7 @@ def pcmdi_mode_model(
             pattern, pc, _ = enforce_mode_sign(str(settings["mode"]), pattern, pc)
             conventional_pcs.append(
                 xr.DataArray(
-                    pc.values.reshape(shape), dims=("Y", "M"), coords=coords
+                    _scatter_samples(pc.values, present, shape), dims=("Y", "M"), coords=coords
                 ).expand_dims(L=[lead])
             )
             patterns.append(pattern.expand_dims(L=[lead]))
@@ -1751,6 +1766,11 @@ def pcmdi_mode_model(
                 north_eigenvalue_diagnostics(solver, eof_number).expand_dims(L=[lead])
             )
             if args.eof_bootstrap_iterations:
+                if not present.all():
+                    raise ValueError(
+                        f"{settings['mode']} lead {lead}: model EOF bootstrap needs "
+                        "every (year, member) sample; some have no data."
+                    )
                 n_years = lead_data.sizes["Y"]
                 n_members = lead_data.sizes["M"]
                 rng = np.random.default_rng(
