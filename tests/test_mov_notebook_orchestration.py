@@ -123,7 +123,7 @@ def test_notebook_uses_centralized_figure_configuration():
         for cell in json.loads(NOTEBOOK.read_text())["cells"]
     )
 
-    assert "build_figure_setup(selected_mode, include_nmme=include_nmme)" in source
+    assert "build_figure_setup(selected_mode)" in source
     assert "MODE_FIGURE_PROFILES" in source
     assert "STIPPLE_STYLE" in source
     assert "FIGURE_OVERRIDES" in source
