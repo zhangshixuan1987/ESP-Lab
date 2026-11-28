@@ -43,6 +43,8 @@ This fork extends ESP-Lab to fully support analysis and verification of **E3SM (
 
 The modes-of-variability runner accepts NMME archives through `--nmme-root`, `--nmme-models`, and `--nmme-fixed-dir`. It resolves pressure modes to the archive `prmsl` field and temperature modes to `sst`, records that resolution in the cache signature, preserves only archive-populated native leads, and records versioned SST land-mask provenance. Each NMME model's drift is removed with its own climatology. NMME skill has one definition (`workflows/modes_of_variability/cross_source.py`): the line is the skill of the equal-weight multi-model forecast and the band is the min–max of the individual models' skill. The default cohort is May/November starts in 1982–2010 with every model that covers them (20 of 23); the years, the model list, or a single model are user options.
 
+Notebooks `3a`, `4a`, and `5a` draw a second figure per index or mode (`..._nmme1982_2010`) with E3SM and CESM-SMYLE re-scored over the NMME start years; set `include_nmme = False` to skip it. They read per-model NMME products under `s2d_diag/NMME/` (`sst_index_by_model/` from `scripts/run_process_nmme_regional_sst.py`; `modes_variability/` from the modes runner with `--sources obs nmme`) and print the build command when one is missing.
+
 [`scripts/slurm/nmme_cross_source_test.slurm`](scripts/slurm/nmme_cross_source_test.slurm) runs the NMME comparison end to end (per-model processing, then E3SM vs NMME figures); its options are documented in [`scripts/slurm/README.md`](scripts/slurm/README.md). Generated diagnostics are intentionally not versioned.
 
 ## Analysis & Diagnostic Suite (`jupyter/`)
@@ -65,11 +67,11 @@ Fields without a CESM-SMYLE benchmark (ocean `SSS` and `OHC700`, and all land fi
 | [`1c_ocn_leadtime_rmse_compare.ipynb`](jupyter/1c_ocn_leadtime_rmse_compare.ipynb) | Model Comparison | Direct (bias-inclusive) RMSE and significance-tested model differences (ocean: SST, SSS, OHC700) |
 | [`1c_lnd_leadtime_rmse_compare.ipynb`](jupyter/1c_lnd_leadtime_rmse_compare.ipynb) | Model Comparison | Direct-RMSE comparison between E3SM land cases, global and CONUS (absolute-value reference required; skipped for TWS) |
 | [`2a_regional_acc_skill_ts.ipynb`](jupyter/2a_regional_acc_skill_ts.ipynb) | Regional Skill | Global and regional ACC and nRMSE versus lead (seasonal from 1a, plus monthly all-start curves) for all atmosphere, ocean, and land fields |
-| [`3a_sst_skill_ts.ipynb`](jupyter/3a_sst_skill_ts.ipynb) | Ocean Skill | SST index skill time series (E3SM, CESM-SMYLE, NMME) |
+| [`3a_sst_skill_ts.ipynb`](jupyter/3a_sst_skill_ts.ipynb) | Ocean Skill | SST index skill time series (E3SM, CESM-SMYLE), plus an NMME comparison over 1982–2010 |
 | [`3b_sst_telecon.ipynb`](jupyter/3b_sst_telecon.ipynb) | Teleconnections | Sea surface temperature teleconnection diagnostics |
-| [`4a_mov_analysis.ipynb`](jupyter/4a_mov_analysis.ipynb) | Modes of Variability | EOF projection and index calculation (PDO, AMO, NAO) |
+| [`4a_mov_analysis.ipynb`](jupyter/4a_mov_analysis.ipynb) | Modes of Variability | EOF projection, index skill, and patterns for 12 modes, plus an NMME comparison over 1982–2010 |
 | [`4b_mov_telecon.ipynb`](jupyter/4b_mov_telecon.ipynb) | Teleconnections | Modes of variability climate teleconnection patterns |
-| [`5a_eli_skill_ts.ipynb`](jupyter/5a_eli_skill_ts.ipynb) | Tropical Pacific | Equatorial Longitude Index (ELI) skill time series |
+| [`5a_eli_skill_ts.ipynb`](jupyter/5a_eli_skill_ts.ipynb) | Tropical Pacific | Equatorial Longitude Index (ELI) skill time series, plus an NMME comparison over 1982–2010 |
 | [`5b_eli_diagnostics.ipynb`](jupyter/5b_eli_diagnostics.ipynb) | ELI Diagnostics | Native & regridded ELI diagnostics across starts |
 | [`5c_eli_telecon.ipynb`](jupyter/5c_eli_telecon.ipynb) | Teleconnections | ELI precipitation and temperature teleconnections |
 | [`6a_shock_ts.ipynb`](jupyter/6a_shock_ts.ipynb) | Initialization Shock | Lead-dependent drift and initialization shock time series |
@@ -146,13 +148,13 @@ All diagnostic plots are published into a unified web-accessible root (e.g., `/g
 | **Land normalized RMSE** | `1b_lnd` | `fig_lnd_rmse_{field}_rmse[_{conus,case_difference}].png` | `fig_lnd_rmse_h2osoi_rmse.png` |
 | **Direct RMSE comparison** | `1c_*` | `fig_rmse_compare_{field}_rmse_compare_{global,conus}.png`<br>`fig_rmse_compare_{field}_rmse_difference_compare_init{MM}.png` (atm/ocn), `..._rmse_difference_global_init{MM}.png` (land) | `fig_rmse_compare_prect_rmse_compare_global.png`, `fig_rmse_compare_prect_rmse_difference_compare_init05.png` |
 | **Regional ACC / nRMSE** | `2a` | `fig_regional_acc_nrmse_{atm,ocn,lnd}_{field}_{region}.png` | `fig_regional_acc_nrmse_lnd_tws_global.png`, `fig_regional_acc_nrmse_ocn_sst_tropics.png` |
-| **SST Indices** | `3a` | `fig_sst_index_{index}_{acc_skill,time_series}.png` | `fig_sst_index_nino3_4_acc_skill.png`, `fig_sst_index_roni_time_series.png` |
+| **SST Indices** | `3a` | `fig_sst_index_{index}_{acc_skill,acc_skill_nmme1982_2010,time_series}.png` | `fig_sst_index_nino3_4_acc_skill.png`, `fig_sst_index_roni_time_series.png` |
 | **SST / MOV / ELI Teleconnections** | `3b`, `4b`, `5c` | `fig_teleconnection_{index}_{VAR}_{correlation_reference_comparison,summary,taylor_diagram}.png` | `fig_teleconnection_Nino34_TREFHT_summary.png`, `fig_teleconnection_NAO_PRECT_taylor_diagram.png` |
-| **Modes of Var** | `4a` | `fig_mov_{mode}_{skill,pc_time_series,eof_patterns_year{1,2},global_teleconnection_patterns_init{MM}}.png` | `fig_mov_nam_skill.png`, `fig_mov_pdo_pc_time_series.png` |
-| **ELI Diagnostics** | `5a`, `5b` | `fig_eli_{metric}.png` | `fig_eli_multimodel_acc_nrmse_skill.png`, `fig_eli_nmme_lead_time_benchmark.png` |
-| **Initial Shock Evolution** | `6a` | `fig_shock_ts_{field}_{detail}.png` | `fig_shock_ts_prect_init05-init11_1980_2011_seasonal_absolute_normalized_change.png` |
-| **Initial Shock Error** | `6b` | `fig_shock_error_{field}_{detail}.png` | `fig_shock_error_trefht_init1980-2011_clim1981-2010_monthly_normalized_rmse.png` |
-| **Tropical Cyclones** | `7a`, `7b` | `fig_tc_{metric}[_{case}_{start}].png` | `fig_tc_leadtime_track_density_compare.png`, `fig_tc_track_density_enso_regression_enabled_e3sm_1980_2011.png` |
+| **Modes of Var** | `4a` | `fig_mov_{mode}_{skill,skill_nmme1982_2010,pc_time_series,eof_patterns_year{1,2},global_teleconnection_patterns_init{MM}}.png` | `fig_mov_nam_skill.png`, `fig_mov_pdo_pc_time_series.png` |
+| **ELI Diagnostics** | `5a`, `5b` | `fig_eli_{metric}.png` | `fig_eli_multimodel_acc_nrmse_skill.png`, `fig_eli_multimodel_acc_nrmse_skill_nmme1982_2010.png` |
+| **Initial Shock Evolution** | `6a` | `fig_shock_ts_{field}_{detail}.png` | `fig_shock_ts_prect_init05-init11_1980_2015_seasonal_absolute_normalized_change.png` |
+| **Initial Shock Error** | `6b` | `fig_shock_error_{field}_{detail}.png` | `fig_shock_error_trefht_init1980-2018_clim1981-2010_monthly_normalized_rmse.png` |
+| **Tropical Cyclones** | `7a`, `7b` | `fig_tc_{metric}[_{case}_{start}].png` | `fig_tc_leadtime_track_density_compare.png`, `fig_tc_track_density_enso_regression_enabled_e3sm_1980_2018.png` |
 
 These figures are automatically cataloged by [`8_run_viewer_webpage.ipynb`](jupyter/8_run_viewer_webpage.ipynb) into `figures.json` and rendered into the interactive web viewer `index.html`.
 
