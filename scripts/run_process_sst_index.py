@@ -6,9 +6,10 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+import sys
 
 # Fix GDAL/PROJ library paths for regionmask/pyogrio
-conda_prefix = os.environ.get("CONDA_PREFIX", "/global/homes/z/zhan391/.conda/envs/e3sm_analysis")
+conda_prefix = os.environ.get("CONDA_PREFIX", sys.prefix)
 if conda_prefix:
     gdal_path = os.path.join(conda_prefix, "share", "gdal")
     proj_path = os.path.join(conda_prefix, "share", "proj")
