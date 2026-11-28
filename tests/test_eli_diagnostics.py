@@ -68,7 +68,7 @@ def test_eli_notebook_uses_explicit_compact_figure_layouts():
     assert 'nmme_eli_seas_timeseries[month]["values"].sel(L=lead)' in source
     assert 'label="HadISST2"' in source
     assert 'NMME_STYLE = {"label": "NMME"' in source
-    assert '"title": f"{INDEX} Seasonal Skill Scores ({START_YEAR}-{END_YEAR})"' in source
+    assert '"title": f"{INDEX} Seasonal Skill Scores (start years {START_YEAR}-{END_YEAR})"' in source
     assert '"title": f"{INDEX} DJF Anomaly Time Series"' in source
     assert '"legend_ncol": 4' in source
     assert 'def _reorder_legend_row_major(' in source
