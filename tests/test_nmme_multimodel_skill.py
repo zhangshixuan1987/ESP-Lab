@@ -160,3 +160,48 @@ def test_keep_units_returns_each_models_skill_behind_the_band():
     assert list(skill.corr_by_model.model.values) == ["A", "B", "E"]
     np.testing.assert_allclose(skill.corr_by_model.min("model").values, skill.corr_min.values)
     assert "corr_by_model" not in nmme_skill(subset, _skill_function(observation))
+
+
+def test_saved_nmme_skill_is_reused_until_inputs_or_settings_change(tmp_path):
+    import os
+
+    from workflows.modes_of_variability import cross_source
+
+    model_file = tmp_path / "NMME_A_init05_sst_indices.nc"
+    model_file.write_text("v1")
+    paths = {"seas": tmp_path / "skill_seas.nc", "mon": tmp_path / "skill_mon.nc"}
+    calls = []
+
+    def build():
+        calls.append(1)
+        lead = xr.DataArray([1, 2], dims="L", name="L")
+        return {
+            "seas": xr.Dataset({"corr": ("L", [0.5, 0.4])}, coords={"L": lead}),
+            "mon": xr.Dataset({"corr": ("L", [0.9, 0.8])}, coords={"L": lead}),
+        }
+
+    settings = {"years": [1982, 2010], "models": "auto"}
+    first, reused = cross_source.load_or_build_nmme_skill(paths, build, inputs=[model_file], settings=settings)
+    assert not reused and len(calls) == 1
+    again, reused = cross_source.load_or_build_nmme_skill(paths, build, inputs=[model_file], settings=settings)
+    assert reused and len(calls) == 1
+    np.testing.assert_allclose(again["mon"]["corr"].values, [0.9, 0.8])
+
+    # A changed setting, a rewritten input file, or force all rebuild.
+    cross_source.load_or_build_nmme_skill(paths, build, inputs=[model_file], settings={**settings, "models": ["A"]})
+    assert len(calls) == 2
+    stat = model_file.stat()
+    os.utime(model_file, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10_000_000_000))
+    cross_source.load_or_build_nmme_skill(paths, build, inputs=[model_file], settings={**settings, "models": ["A"]})
+    assert len(calls) == 3
+    cross_source.load_or_build_nmme_skill(paths, build, inputs=[model_file], settings={**settings, "models": ["A"]}, force=True)
+    assert len(calls) == 4
+
+
+def test_array_fingerprint_follows_values_and_coordinates():
+    from workflows.modes_of_variability import cross_source
+
+    base = xr.DataArray([1.0, 2.0], dims="time", coords={"time": [2000, 2001]})
+    assert cross_source.array_fingerprint(base) == cross_source.array_fingerprint(base.copy())
+    assert cross_source.array_fingerprint(base) != cross_source.array_fingerprint(base + 1e-6)
+    assert cross_source.array_fingerprint(base) != cross_source.array_fingerprint(base.assign_coords(time=[2001, 2002]))

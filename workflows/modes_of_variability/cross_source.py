@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -1535,6 +1537,74 @@ def nmme_skill(
         if key in index.attrs:
             result.attrs[key] = index.attrs[key]
     return result
+
+
+# ---------------------------------------------------------------------------
+# Saved NMME comparison skill (notebooks 3a, 4a, 5a).
+# ---------------------------------------------------------------------------
+
+NMME_SKILL_CACHE_VERSION = 1
+
+
+def array_fingerprint(data: xr.DataArray) -> str:
+    """Content digest of a small array (values, dims, and coordinate values)."""
+    digest = hashlib.sha256()
+    digest.update(repr(data.dims).encode())
+    for name in data.dims:
+        if name in data.coords:
+            digest.update(np.asarray(data[name].values).astype(str).tobytes())
+    digest.update(np.ascontiguousarray(np.asarray(data.values, dtype=float)).tobytes())
+    return "sha256:" + digest.hexdigest()
+
+
+def load_or_build_nmme_skill(
+    paths: Mapping[str, str | Path],
+    build: Callable[[], Mapping[str, xr.Dataset]],
+    *,
+    inputs: Sequence[str | Path],
+    settings: Mapping[str, object],
+    force: bool = False,
+) -> tuple[dict[str, xr.Dataset], bool]:
+    """Reuse saved NMME skill when its inputs and settings are unchanged.
+
+    ``paths`` maps each result name (e.g. ``"seas"``, ``"mon"``) to a fixed file
+    name. The saved files are reused only if every one exists and records this
+    cache version, the same NMME input files (path, size, modification time),
+    and the same ``settings`` (start years, models, reference fingerprint, ...).
+    Otherwise ``build()`` runs and its results replace the files in place.
+    Returns the results and whether they came from the saved files.
+    """
+    from esp_lab.leadtime_skill_cache import file_inventory_digest
+
+    identity = file_inventory_digest(list(inputs))
+    settings_text = json.dumps(settings, sort_keys=True, default=str)
+    if not force and all(Path(path).is_file() for path in paths.values()):
+        cached: dict[str, xr.Dataset] = {}
+        for name, path in paths.items():
+            try:
+                with xr.open_dataset(path) as saved:
+                    if (
+                        int(saved.attrs.get("nmme_skill_cache_version", -1)) == NMME_SKILL_CACHE_VERSION
+                        and saved.attrs.get("nmme_input_identity") == identity
+                        and saved.attrs.get("nmme_skill_settings") == settings_text
+                    ):
+                        cached[name] = saved.load()
+            except (OSError, ValueError):
+                pass
+        if len(cached) == len(paths):
+            return cached, True
+    built = dict(build())
+    missing = set(paths) - set(built)
+    if missing:
+        raise ValueError(f"NMME skill build returned no {sorted(missing)} result.")
+    for name, path in paths.items():
+        built[name] = built[name].assign_attrs(
+            nmme_skill_cache_version=NMME_SKILL_CACHE_VERSION,
+            nmme_input_identity=identity,
+            nmme_skill_settings=settings_text,
+        )
+        _atomic_to_netcdf(built[name], path)
+    return built, False
 
 
 # ---------------------------------------------------------------------------
