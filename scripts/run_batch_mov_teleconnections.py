@@ -31,10 +31,10 @@ import pandas as pd
 import xarray as xr
 
 # Silence proj/gdal warnings if standard paths are present
-proj_candidate = "/global/homes/z/zhan391/.conda/envs/e3sm_analysis/share/proj"
+proj_candidate = os.path.join(sys.prefix, "share", "proj")
 if os.path.isdir(proj_candidate) and "PROJ_DATA" not in os.environ:
     os.environ["PROJ_DATA"] = proj_candidate
-gdal_candidate = "/global/homes/z/zhan391/.conda/envs/e3sm_analysis/share/gdal"
+gdal_candidate = os.path.join(sys.prefix, "share", "gdal")
 if os.path.isdir(gdal_candidate) and "GDAL_DATA" not in os.environ:
     os.environ["GDAL_DATA"] = gdal_candidate
 
